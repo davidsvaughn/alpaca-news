@@ -1,0 +1,238 @@
+{% extends "base.html" %}
+
+{% block title %}Field Configuration - Alpaca News Labeler{% endblock %}
+
+{% block content %}
+<div class="row">
+    <div class="col-12">
+        <div class="d-flex justify-content-between align-items-center mb-4">
+            <h1><i class="fas fa-cog"></i> Field Configuration</h1>
+            <a href="{{ url_for('index') }}" class="btn btn-outline-secondary">
+                <i class="fas fa-arrow-left"></i> Back to Articles
+            </a>
+        </div>
+
+        <div class="row">
+            <!-- Add New Field -->
+            <div class="col-lg-6">
+                <div class="card">
+                    <div class="card-header">
+                        <h5 class="card-title mb-0">
+                            <i class="fas fa-plus"></i> Add New Field
+                        </h5>
+                    </div>
+                    <div class="card-body">
+                        <form method="POST" action="{{ url_for('add_field') }}">
+                            <div class="row">
+                                <div class="col-md-6">
+                                    <div class="mb-3">
+                                        <label for="name" class="form-label">Field Name *</label>
+                                        <input type="text" class="form-control" id="name" name="name" 
+                                               required pattern="[a-zA-Z_][a-zA-Z0-9_]*" 
+                                               placeholder="e.g., is_important">
+                                        <div class="form-text">Alphanumeric with underscores only</div>
+                                    </div>
+                                </div>
+                                <div class="col-md-6">
+                                    <div class="mb-3">
+                                        <label for="display_name" class="form-label">Display Name *</label>
+                                        <input type="text" class="form-control" id="display_name" name="display_name" 
+                                               required placeholder="e.g., Is Important">
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div class="mb-3">
+                                <label for="field_type" class="form-label">Field Type *</label>
+                                <select class="form-select" id="field_type" name="field_type" required>
+                                    <option value="">Select field type...</option>
+                                    {% for field_type in field_types %}
+                                    <option value="{{ field_type.value }}">{{ field_type.label }}</option>
+                                    {% endfor %}
+                                </select>
+                            </div>
+
+                            <div class="mb-3" id="default_value_group">
+                                <label for="default_value" class="form-label">Default Value</label>
+                                <input type="text" class="form-control" id="default_value" name="default_value" 
+                                       placeholder="Optional default value">
+                            </div>
+
+                            <div class="mb-3" id="boolean_default_group" style="display: none;">
+                                <label for="boolean_default_value" class="form-label">Default Value</label>
+                                <select class="form-select" id="boolean_default_value" name="default_value">
+                                    <option value="">No default value</option>
+                                    <option value="true">True</option>
+                                    <option value="false">False</option>
+                                </select>
+                            </div>
+
+                            <div class="mb-3" id="options_group" style="display: none;">
+                                <label for="options" class="form-label">Options (one per line) *</label>
+                                <textarea class="form-control" id="options" name="options" rows="4" 
+                                          placeholder="Option 1&#10;Option 2&#10;Option 3"></textarea>
+                                <div class="form-text">Required for dropdown fields</div>
+                            </div>
+
+                            <div class="mb-3">
+                                <div class="form-check">
+                                    <input class="form-check-input" type="checkbox" id="required" name="required">
+                                    <label class="form-check-label" for="required">
+                                        Required field
+                                    </label>
+                                </div>
+                                <div class="form-text">
+                                    <i class="fas fa-info-circle"></i> 
+                                    Required fields must have a value when labeling articles. Optional fields can be left blank.
+                                </div>
+                            </div>
+
+                            <div class="d-grid">
+                                <button type="submit" class="btn btn-primary">
+                                    <i class="fas fa-plus"></i> Add Field
+                                </button>
+                            </div>
+                        </form>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Existing Fields -->
+            <div class="col-lg-6">
+                <div class="card">
+                    <div class="card-header">
+                        <h5 class="card-title mb-0">
+                            <i class="fas fa-list"></i> Existing Fields
+                        </h5>
+                    </div>
+                    <div class="card-body">
+                        {% if fields %}
+                        <div class="table-responsive">
+                            <table class="table table-sm">
+                                <thead>
+                                    <tr>
+                                        <th>Field</th>
+                                        <th>Type</th>
+                                        <th>Required</th>
+                                        <th>Actions</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {% for field in fields %}
+                                    <tr>
+                                        <td>
+                                            <strong>{{ field.display_name }}</strong><br>
+                                            <small class="text-muted">{{ field.name }}</small>
+                                        </td>
+                                        <td>
+                                            <span class="badge bg-secondary">{{ field.field_type }}</span>
+                                        </td>
+                                        <td>
+                                            {% if field.required %}
+                                            <span class="badge bg-danger">Required</span>
+                                            {% else %}
+                                            <span class="badge bg-light text-dark">Optional</span>
+                                            {% endif %}
+                                        </td>
+                                        <td>
+                                            <form method="POST" action="{{ url_for('remove_field', name=field.name) }}" 
+                                                  style="display: inline;" 
+                                                  onsubmit="return confirm('Are you sure you want to remove this field? This will also remove all existing labels for this field.')">
+                                                <button type="submit" class="btn btn-sm btn-outline-danger">
+                                                    <i class="fas fa-trash"></i>
+                                                </button>
+                                            </form>
+                                        </td>
+                                    </tr>
+                                    {% endfor %}
+                                </tbody>
+                            </table>
+                        </div>
+                        {% else %}
+                        <div class="text-center py-4">
+                            <i class="fas fa-list fa-2x text-muted mb-2"></i>
+                            <p class="text-muted">No fields configured yet.</p>
+                            <p class="text-muted small">Add your first field using the form on the left.</p>
+                        </div>
+                        {% endif %}
+                    </div>
+                </div>
+
+                <!-- Field Type Help -->
+                <div class="card mt-3">
+                    <div class="card-header">
+                        <h6 class="card-title mb-0">Field Types</h6>
+                    </div>
+                    <div class="card-body">
+                        <dl class="row mb-0">
+                            <dt class="col-sm-4">Text</dt>
+                            <dd class="col-sm-8">Single line text input</dd>
+                            
+                            <dt class="col-sm-4">Boolean</dt>
+                            <dd class="col-sm-8">True/False dropdown</dd>
+                            
+                            <dt class="col-sm-4">Dropdown</dt>
+                            <dd class="col-sm-8">Select from predefined options</dd>
+                            
+                            <dt class="col-sm-4">Number</dt>
+                            <dd class="col-sm-8">Numeric input</dd>
+                            
+                            <dt class="col-sm-4">Date</dt>
+                            <dd class="col-sm-8">Date picker</dd>
+                        </dl>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    const fieldTypeSelect = document.getElementById('field_type');
+    const optionsGroup = document.getElementById('options_group');
+    const optionsTextarea = document.getElementById('options');
+    const defaultValueGroup = document.getElementById('default_value_group');
+    const booleanDefaultGroup = document.getElementById('boolean_default_group');
+    
+    fieldTypeSelect.addEventListener('change', function() {
+        // Hide all special input groups first
+        optionsGroup.style.display = 'none';
+        optionsTextarea.required = false;
+        booleanDefaultGroup.style.display = 'none';
+        defaultValueGroup.style.display = 'block';
+        
+        // Show appropriate input group based on field type
+        if (this.value === 'select') {
+            optionsGroup.style.display = 'block';
+            optionsTextarea.required = true;
+        } else if (this.value === 'boolean') {
+            booleanDefaultGroup.style.display = 'block';
+            defaultValueGroup.style.display = 'none';
+        }
+    });
+    
+    // Form validation
+    const form = document.querySelector('form');
+    form.addEventListener('submit', function(e) {
+        const name = document.getElementById('name').value;
+        const displayName = document.getElementById('display_name').value;
+        const fieldType = document.getElementById('field_type').value;
+        
+        if (!name || !displayName || !fieldType) {
+            e.preventDefault();
+            alert('Please fill in all required fields.');
+            return;
+        }
+        
+        if (fieldType === 'select' && !optionsTextarea.value.trim()) {
+            e.preventDefault();
+            alert('Please provide options for the dropdown field.');
+            return;
+        }
+    });
+});
+</script>
+{% endblock %}

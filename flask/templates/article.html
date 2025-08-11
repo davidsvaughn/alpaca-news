@@ -1,0 +1,230 @@
+{% extends "base.html" %}
+
+{% block title %}{{ article.headline[:50] }}... - Alpaca News Labeler{% endblock %}
+
+{% block content %}
+<div class="row">
+    <div class="col-12">
+        <!-- Navigation -->
+        <div class="d-flex justify-content-between align-items-center mb-4">
+            <div>
+                <a href="{{ url_for('index', per_page=request.args.get('per_page', 20), search=request.args.get('search', ''), source=request.args.get('source', ''), symbols=request.args.get('symbols', ''), sort_by=request.args.get('sort_by', 'created_at'), sort_order=request.args.get('sort_order', 'desc')) }}{% for field in fields %}{% if request.args.get('field_' + field.name) %}&field_{{ field.name }}={{ request.args.get('field_' + field.name) }}{% endif %}{% endfor %}" class="btn btn-outline-secondary">
+                    <i class="fas fa-arrow-left"></i> Back to Articles
+                </a>
+            </div>
+            <div>
+                {% if prev_article %}
+                <a href="{{ url_for('view_article', article_id=prev_article.id, per_page=request.args.get('per_page', 20), search=request.args.get('search', ''), source=request.args.get('source', ''), symbols=request.args.get('symbols', ''), sort_by=request.args.get('sort_by', 'created_at'), sort_order=request.args.get('sort_order', 'desc')) }}{% for field in fields %}{% if request.args.get('field_' + field.name) %}&field_{{ field.name }}={{ request.args.get('field_' + field.name) }}{% endif %}{% endfor %}" class="btn btn-outline-primary">
+                    <i class="fas fa-chevron-left"></i> Previous
+                </a>
+                {% endif %}
+                {% if next_article %}
+                <a href="{{ url_for('view_article', article_id=next_article.id, per_page=request.args.get('per_page', 20), search=request.args.get('search', ''), source=request.args.get('source', ''), symbols=request.args.get('symbols', ''), sort_by=request.args.get('sort_by', 'created_at'), sort_order=request.args.get('sort_order', 'desc')) }}{% for field in fields %}{% if request.args.get('field_' + field.name) %}&field_{{ field.name }}={{ request.args.get('field_' + field.name) }}{% endif %}{% endfor %}" class="btn btn-outline-primary">
+                    Next <i class="fas fa-chevron-right"></i>
+                </a>
+                {% endif %}
+            </div>
+        </div>
+
+        <div class="row">
+            <!-- Article Content -->
+            <div class="col-lg-8">
+                <div class="card">
+                    <div class="card-header">
+                        <div class="d-flex justify-content-between align-items-start">
+                            <div>
+                                <h2 class="card-title mb-2">{{ article.headline }}</h2>
+                                <div class="d-flex align-items-center gap-3">
+                                    <span class="badge bg-secondary">{{ article.source }}</span>
+                                    {% if article.author %}
+                                    <small class="text-muted">By {{ article.author }}</small>
+                                    {% endif %}
+                                    {% if article.created_at %}
+                                    <small class="text-muted">
+                                        {{ article.created_at.strftime('%Y-%m-%d %H:%M') }}
+                                    </small>
+                                    {% endif %}
+                                </div>
+                            </div>
+                            {% if article.url %}
+                            <a href="{{ article.url }}" target="_blank" class="btn btn-sm btn-outline-primary">
+                                <i class="fas fa-external-link-alt"></i> View Original
+                            </a>
+                            {% endif %}
+                        </div>
+                    </div>
+                    <div class="card-body">
+                        {% if article.symbols %}
+                        <div class="mb-3">
+                            <strong>Symbols:</strong>
+                            {% for symbol in article.symbols|from_json %}
+                            <span class="badge bg-info me-1">{{ symbol }}</span>
+                            {% endfor %}
+                        </div>
+                        {% endif %}
+
+                        {% if article.summary %}
+                        <div class="mb-3">
+                            <h6>Summary:</h6>
+                            <p class="text-muted">{{ article.summary }}</p>
+                        </div>
+                        {% endif %}
+
+                        {% if article.content %}
+                        <div>
+                            <h6>Content:</h6>
+                            <div class="content-preview">
+                                {{ article.content|safe }}
+                            </div>
+                        </div>
+                        {% endif %}
+                    </div>
+                </div>
+            </div>
+
+            <!-- Labeling Form -->
+            <div class="col-lg-4">
+                <div class="card">
+                    <div class="card-header">
+                        <h5 class="card-title mb-0">
+                            <i class="fas fa-tags"></i> Labels
+                        </h5>
+                    </div>
+                    <div class="card-body">
+                        <form method="POST" action="{{ url_for('save_article_labels', article_id=article.id) }}">
+                            {% if fields %}
+                                {% for field in fields %}
+                                <div class="field-form-group">
+                                    <label for="field_{{ field.name }}" class="form-label">
+                                        {{ field.display_name }}
+                                        {% if field.required %}
+                                        <span class="text-danger">*</span>
+                                        {% endif %}
+                                    </label>
+                                    
+                                    {% if field.field_type == 'text' %}
+                                    <input type="text" class="form-control" 
+                                           id="field_{{ field.name }}" 
+                                           name="field_{{ field.name }}"
+                                           value="{{ labels.get(field.name, '') }}"
+                                           {% if field.required %}required{% endif %}>
+                                    
+                                    {% elif field.field_type == 'boolean' %}
+                                    <select class="form-select" 
+                                            id="field_{{ field.name }}" 
+                                            name="field_{{ field.name }}"
+                                            {% if field.required %}required{% endif %}>
+                                        <option value="">Select...</option>
+                                        <option value="true" {% if labels.get(field.name) == 'true' %}selected{% endif %}>True</option>
+                                        <option value="false" {% if labels.get(field.name) == 'false' %}selected{% endif %}>False</option>
+                                    </select>
+                                    
+                                    {% elif field.field_type == 'select' %}
+                                    <select class="form-select" 
+                                            id="field_{{ field.name }}" 
+                                            name="field_{{ field.name }}"
+                                            {% if field.required %}required{% endif %}>
+                                        <option value="">Select...</option>
+                                        {% if field.options %}
+                                            {% for option in field.options|from_json %}
+                                            <option value="{{ option }}" {% if labels.get(field.name) == option %}selected{% endif %}>
+                                                {{ option }}
+                                            </option>
+                                            {% endfor %}
+                                        {% endif %}
+                                    </select>
+                                    
+                                    {% elif field.field_type == 'number' %}
+                                    <input type="number" class="form-control" 
+                                           id="field_{{ field.name }}" 
+                                           name="field_{{ field.name }}"
+                                           value="{{ labels.get(field.name, '') }}"
+                                           {% if field.required %}required{% endif %}>
+                                    
+                                    {% elif field.field_type == 'date' %}
+                                    <input type="date" class="form-control" 
+                                           id="field_{{ field.name }}" 
+                                           name="field_{{ field.name }}"
+                                           value="{{ labels.get(field.name, '') }}"
+                                           {% if field.required %}required{% endif %}>
+                                    {% endif %}
+                                    
+                                    {% if field.default_value %}
+                                    <div class="form-text">Default: {{ field.default_value }}</div>
+                                    {% endif %}
+                                </div>
+                                {% endfor %}
+                            {% else %}
+                                <div class="text-center py-3">
+                                    <i class="fas fa-cog fa-2x text-muted mb-2"></i>
+                                    <p class="text-muted">No labeling fields configured yet.</p>
+                                    <a href="{{ url_for('config_page') }}" class="btn btn-sm btn-outline-primary">
+                                        <i class="fas fa-plus"></i> Add Fields
+                                    </a>
+                                </div>
+                            {% endif %}
+
+                            {% if fields %}
+                            <div class="d-grid gap-2">
+                                <button type="submit" class="btn btn-primary">
+                                    <i class="fas fa-save"></i> Save Labels
+                                </button>
+                                
+                                {% if next_article %}
+                                <button type="submit" name="next_article_id" value="{{ next_article.id }}" 
+                                        class="btn btn-success">
+                                    <i class="fas fa-save"></i> Save & Next Article
+                                </button>
+                                {% endif %}
+                            </div>
+                            {% endif %}
+                        </form>
+                    </div>
+                </div>
+
+                <!-- Article Info -->
+                <div class="card mt-3">
+                    <div class="card-header">
+                        <h6 class="card-title mb-0">Article Info</h6>
+                    </div>
+                    <div class="card-body">
+                        <dl class="row mb-0">
+                            <dt class="col-sm-4">ID:</dt>
+                            <dd class="col-sm-8">{{ article.article_id }}</dd>
+                            
+                            <dt class="col-sm-4">Loaded:</dt>
+                            <dd class="col-sm-8">{{ article.loaded_at.strftime('%Y-%m-%d %H:%M') }}</dd>
+                            
+                            {% if article.updated_at %}
+                            <dt class="col-sm-4">Updated:</dt>
+                            <dd class="col-sm-8">{{ article.updated_at.strftime('%Y-%m-%d %H:%M') }}</dd>
+                            {% endif %}
+                            
+                            <dt class="col-sm-4">File:</dt>
+                            <dd class="col-sm-8"><small class="text-muted">{{ article.filename }}</small></dd>
+                        </dl>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<style>
+.content-preview {
+    max-height: 70vh;
+    overflow-y: auto;
+    border: 1px solid #dee2e6;
+    border-radius: 0.375rem;
+    padding: 1rem;
+    background-color: #f8f9fa;
+}
+
+.content-preview img {
+    max-width: 100%;
+    height: auto;
+}
+</style>
+{% endblock %}
