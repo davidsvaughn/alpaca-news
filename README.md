@@ -3,8 +3,8 @@ tools for processing financial text (i.e. news)
 
 # setup
 ```
-git clone https://github.com/davidsvaughn/fin-text.git
-cd fin-text
+git clone https://github.com/davidsvaughn/alpaca-news.git
+cd alpaca-news
 virtualenv -p python3.10 .venv && source .venv/bin/activate
 pip install -U pip alpaca-py python-dotenv
 ```
