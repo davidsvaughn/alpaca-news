@@ -159,20 +159,27 @@
                             {% endif %}
                         </td>
                         {% for field in fields %}
-                        <td>
-                            {% if article_field_values and article_field_values[article.id] and article_field_values[article.id][field.name] %}
-                                {% if field.field_type == 'boolean' %}
-                                    {% if article_field_values[article.id][field.name] == True or article_field_values[article.id][field.name] == 'true' %}
-                                        <span class="badge bg-success">Yes</span>
+                        <td class="editable-cell" data-article-id="{{ article.id }}" data-field-name="{{ field.name }}" data-field-type="{{ field.field_type }}" data-field-options="{{ field.options or '' }}">
+                            <div class="field-value-container">
+                                {% if article_field_values and article_field_values[article.id] and article_field_values[article.id][field.name] and article_field_values[article.id][field.name] != '' %}
+                                    {% if field.field_type == 'boolean' %}
+                                        {% if article_field_values[article.id][field.name] == True or article_field_values[article.id][field.name] == 'true' %}
+                                            <span class="badge bg-success editable-field" data-value="true">Yes</span>
+                                        {% else %}
+                                            <span class="badge bg-secondary editable-field" data-value="false">No</span>
+                                        {% endif %}
+                                    {% elif field.field_type == 'select' %}
+                                        <span class="badge bg-primary editable-field" data-value="{{ article_field_values[article.id][field.name] }}">{{ article_field_values[article.id][field.name] }}</span>
                                     {% else %}
-                                        <span class="badge bg-secondary">No</span>
+                                        <span class="badge bg-primary editable-field" data-value="{{ article_field_values[article.id][field.name] }}">{{ article_field_values[article.id][field.name] }}</span>
                                     {% endif %}
                                 {% else %}
-                                    <span class="badge bg-primary">{{ article_field_values[article.id][field.name] }}</span>
+                                    <div class="empty-field editable-field" data-value="">
+                                        <i class="fas fa-plus"></i>
+                                        <span>Add</span>
+                                    </div>
                                 {% endif %}
-                            {% else %}
-                                <span class="text-muted">-</span>
-                            {% endif %}
+                            </div>
                         </td>
                         {% endfor %}
                         <td>
@@ -299,6 +306,158 @@ document.addEventListener('DOMContentLoaded', function() {
             
             // Navigate to the sorted URL
             window.location.href = url.toString();
+        });
+    });
+    
+    // Inline field editing functionality
+    const editableCells = document.querySelectorAll('.editable-cell');
+    editableCells.forEach(cell => {
+        cell.addEventListener('click', function(e) {
+            e.preventDefault();
+            e.stopPropagation();
+            
+            const articleId = this.dataset.articleId;
+            const fieldName = this.dataset.fieldName;
+            const fieldType = this.dataset.fieldType;
+            const fieldOptions = this.dataset.fieldOptions;
+            
+            // Find the current field element and value
+            const fieldElement = this.querySelector('.editable-field');
+            const currentValue = fieldElement ? fieldElement.dataset.value : '';
+            const container = this.querySelector('.field-value-container');
+            
+            // Create edit input based on field type
+            let editElement;
+            
+            if (fieldType === 'boolean') {
+                editElement = document.createElement('select');
+                editElement.className = 'form-select form-select-sm';
+                editElement.innerHTML = `
+                    <option value="" ${currentValue === '' ? 'selected' : ''}>-- Not set --</option>
+                    <option value="true" ${currentValue === 'true' ? 'selected' : ''}>Yes</option>
+                    <option value="false" ${currentValue === 'false' ? 'selected' : ''}>No</option>
+                `;
+            } else if (fieldType === 'select') {
+                editElement = document.createElement('select');
+                editElement.className = 'form-select form-select-sm';
+                
+                // Add empty option
+                const emptyOption = document.createElement('option');
+                emptyOption.value = '';
+                emptyOption.textContent = '-- Select --';
+                editElement.appendChild(emptyOption);
+                
+                // Add options from field configuration
+                if (fieldOptions) {
+                    try {
+                        const options = JSON.parse(fieldOptions);
+                        options.forEach(option => {
+                            const optionElement = document.createElement('option');
+                            optionElement.value = option;
+                            optionElement.textContent = option;
+                            if (option === currentValue) {
+                                optionElement.selected = true;
+                            }
+                            editElement.appendChild(optionElement);
+                        });
+                    } catch (e) {
+                        console.error('Error parsing field options:', e);
+                    }
+                }
+            } else {
+                editElement = document.createElement('input');
+                editElement.type = 'text';
+                editElement.className = 'form-control form-control-sm';
+                editElement.value = currentValue;
+            }
+            
+            // Replace the field with the edit element
+            if (fieldElement) {
+                fieldElement.style.display = 'none';
+            }
+            container.appendChild(editElement);
+            editElement.focus();
+            
+            // Handle save on enter or blur
+            const saveValue = () => {
+                const newValue = editElement.value;
+                
+                // Send AJAX request to update the field
+                fetch(`/api/articles/${articleId}/field/${fieldName}`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({ value: newValue })
+                })
+                .then(response => response.json())
+                .then(data => {
+                    if (data.success) {
+                        // Update the display
+                        if (data.value) {
+                            // Create or update the field element
+                            if (fieldElement) {
+                                fieldElement.dataset.value = data.value;
+                                if (fieldType === 'boolean') {
+                                    fieldElement.textContent = data.display_value;
+                                    fieldElement.className = data.value === 'true' ? 'badge bg-success editable-field' : 'badge bg-secondary editable-field';
+                                } else {
+                                    fieldElement.textContent = data.display_value;
+                                    fieldElement.className = 'badge bg-primary editable-field';
+                                }
+                                fieldElement.style.display = '';
+                            } else {
+                                // Create new field element
+                                const newFieldElement = document.createElement('span');
+                                newFieldElement.dataset.value = data.value;
+                                newFieldElement.className = fieldType === 'boolean' 
+                                    ? (data.value === 'true' ? 'badge bg-success editable-field' : 'badge bg-secondary editable-field')
+                                    : 'badge bg-primary editable-field';
+                                newFieldElement.textContent = data.display_value;
+                                container.appendChild(newFieldElement);
+                            }
+                        } else {
+                            // Value was cleared, show empty field
+                            if (fieldElement) {
+                                fieldElement.remove();
+                            }
+                            const emptyField = document.createElement('div');
+                            emptyField.className = 'empty-field editable-field';
+                            emptyField.dataset.value = '';
+                            emptyField.innerHTML = '<i class="fas fa-plus"></i><span>Add</span>';
+                            container.appendChild(emptyField);
+                        }
+                    } else {
+                        // Show error
+                        alert('Error updating field: ' + (data.error || 'Unknown error'));
+                    }
+                })
+                .catch(error => {
+                    console.error('Error:', error);
+                    alert('Error updating field');
+                })
+                .finally(() => {
+                    // Remove edit element and show field again
+                    editElement.remove();
+                    if (fieldElement) {
+                        fieldElement.style.display = '';
+                    }
+                });
+            };
+            
+            editElement.addEventListener('blur', saveValue);
+            editElement.addEventListener('keydown', function(e) {
+                if (e.key === 'Enter') {
+                    e.preventDefault();
+                    saveValue();
+                } else if (e.key === 'Escape') {
+                    e.preventDefault();
+                    editElement.remove();
+                    if (fieldElement) {
+                        fieldElement.style.display = '';
+                    }
+                }
+            });
         });
     });
 });

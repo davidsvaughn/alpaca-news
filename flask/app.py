@@ -397,6 +397,57 @@ def create_app():
         
         return redirect(url_for('config_page'))
     
+    @app.route('/api/articles/<int:article_id>/field/<field_name>', methods=['POST'])
+    def update_article_field(article_id, field_name):
+        """Update a single field value for an article via AJAX"""
+        try:
+            article = Article.query.get_or_404(article_id)
+            field = FieldConfig.query.filter_by(name=field_name).first()
+            
+            if not field:
+                return jsonify({'error': 'Field not found'}), 404
+            
+            value = request.json.get('value', '')
+            
+            # Find existing label or create new one
+            label = ArticleLabel.query.filter_by(
+                article_id=article.id, 
+                field_name=field_name
+            ).first()
+            
+            if label:
+                label.value = value
+            else:
+                label = ArticleLabel(
+                    article_id=article.id,
+                    field_name=field_name,
+                    value=value
+                )
+                db.session.add(label)
+            
+            db.session.commit()
+            
+            # Return the updated value for display
+            if field.field_type == 'boolean':
+                if value == 'true' or value == True:
+                    display_value = 'Yes'
+                elif value == 'false' or value == False:
+                    display_value = 'No'
+                else:
+                    display_value = ''  # Empty value
+            else:
+                display_value = value
+            
+            return jsonify({
+                'success': True,
+                'value': value,
+                'display_value': display_value
+            })
+            
+        except Exception as e:
+            db.session.rollback()
+            return jsonify({'error': str(e)}), 500
+    
     @app.route('/api/articles')
     def api_articles():
         """API endpoint for articles (for AJAX)"""
