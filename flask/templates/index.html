@@ -174,10 +174,7 @@
                                         <span class="badge bg-primary editable-field" data-value="{{ article_field_values[article.id][field.name] }}">{{ article_field_values[article.id][field.name] }}</span>
                                     {% endif %}
                                 {% else %}
-                                    <div class="empty-field editable-field" data-value="">
-                                        <i class="fas fa-plus"></i>
-                                        <span>Add</span>
-                                    </div>
+                                    <span class="badge bg-light text-muted editable-field" data-value="">-</span>
                                 {% endif %}
                             </div>
                         </td>
@@ -333,7 +330,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 editElement = document.createElement('select');
                 editElement.className = 'form-select form-select-sm';
                 editElement.innerHTML = `
-                    <option value="" ${currentValue === '' ? 'selected' : ''}>-- Not set --</option>
+                    <option value="" ${currentValue === '' ? 'selected' : ''}>-</option>
                     <option value="true" ${currentValue === 'true' ? 'selected' : ''}>Yes</option>
                     <option value="false" ${currentValue === 'false' ? 'selected' : ''}>No</option>
                 `;
@@ -379,8 +376,15 @@ document.addEventListener('DOMContentLoaded', function() {
             editElement.focus();
             
             // Handle save on enter or blur
+            let isSaving = false;
             const saveValue = () => {
+                if (isSaving) return;
+                isSaving = true;
+                
                 const newValue = editElement.value;
+                
+                // Remove the edit element immediately
+                editElement.remove();
                 
                 // Send AJAX request to update the field
                 fetch(`/api/articles/${articleId}/field/${fieldName}`, {
@@ -421,10 +425,10 @@ document.addEventListener('DOMContentLoaded', function() {
                             if (fieldElement) {
                                 fieldElement.remove();
                             }
-                            const emptyField = document.createElement('div');
-                            emptyField.className = 'empty-field editable-field';
+                            const emptyField = document.createElement('span');
+                            emptyField.className = 'badge bg-light text-muted editable-field';
                             emptyField.dataset.value = '';
-                            emptyField.innerHTML = '<i class="fas fa-plus"></i><span>Add</span>';
+                            emptyField.textContent = '-';
                             container.appendChild(emptyField);
                         }
                     } else {
@@ -437,15 +441,21 @@ document.addEventListener('DOMContentLoaded', function() {
                     alert('Error updating field');
                 })
                 .finally(() => {
-                    // Remove edit element and show field again
-                    editElement.remove();
+                    // Show field again if it exists
                     if (fieldElement) {
                         fieldElement.style.display = '';
                     }
+                    isSaving = false;
                 });
             };
             
-            editElement.addEventListener('blur', saveValue);
+            // For select elements, use change event instead of blur
+            if (fieldType === 'boolean' || fieldType === 'select') {
+                editElement.addEventListener('change', saveValue);
+            } else {
+                editElement.addEventListener('blur', saveValue);
+            }
+            
             editElement.addEventListener('keydown', function(e) {
                 if (e.key === 'Enter') {
                     e.preventDefault();

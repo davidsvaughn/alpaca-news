@@ -227,4 +227,109 @@
     height: auto;
 }
 </style>
+
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    const form = document.querySelector('form');
+    const formData = new FormData(form);
+    let hasChanges = false;
+    let isSubmitting = false;
+    
+    // Track form changes
+    const formInputs = form.querySelectorAll('input, select, textarea');
+    formInputs.forEach(input => {
+        const originalValue = input.value;
+        
+        input.addEventListener('change', function() {
+            hasChanges = true;
+        });
+        
+        input.addEventListener('input', function() {
+            hasChanges = true;
+        });
+    });
+    
+    // Auto-save function
+    function autoSave() {
+        if (hasChanges && !isSubmitting) {
+            isSubmitting = true;
+            
+            // Create a hidden form and submit it
+            const autoSaveForm = document.createElement('form');
+            autoSaveForm.method = 'POST';
+            autoSaveForm.action = form.action;
+            autoSaveForm.style.display = 'none';
+            
+            // Copy all form data
+            const currentFormData = new FormData(form);
+            for (let [key, value] of currentFormData.entries()) {
+                const input = document.createElement('input');
+                input.type = 'hidden';
+                input.name = key;
+                input.value = value;
+                autoSaveForm.appendChild(input);
+            }
+            
+            // Submit the form
+            fetch(form.action, {
+                method: 'POST',
+                body: currentFormData
+            })
+            .then(response => {
+                if (response.ok) {
+                    hasChanges = false;
+                    console.log('Auto-saved successfully');
+                } else {
+                    console.error('Auto-save failed');
+                }
+            })
+            .catch(error => {
+                console.error('Auto-save error:', error);
+            })
+            .finally(() => {
+                isSubmitting = false;
+            });
+        }
+    }
+    
+    // Auto-save on page unload
+    window.addEventListener('beforeunload', function(e) {
+        if (hasChanges) {
+            autoSave();
+            // No warning needed since we're auto-saving
+        }
+    });
+    
+    // Auto-save on navigation links (before they navigate)
+    const navigationLinks = document.querySelectorAll('a[href]');
+    navigationLinks.forEach(link => {
+        link.addEventListener('click', function(e) {
+            if (hasChanges) {
+                e.preventDefault();
+                autoSave();
+                
+                // Wait a moment for the save to complete, then navigate
+                setTimeout(() => {
+                    window.location.href = this.href;
+                }, 100);
+            }
+        });
+    });
+    
+    // Auto-save periodically (every 30 seconds if there are changes)
+    setInterval(() => {
+        if (hasChanges) {
+            autoSave();
+        }
+    }, 30000);
+    
+    // Prevent form submission if auto-saving
+    form.addEventListener('submit', function(e) {
+        if (isSubmitting) {
+            e.preventDefault();
+            alert('Please wait for auto-save to complete.');
+        }
+    });
+});
+</script>
 {% endblock %}

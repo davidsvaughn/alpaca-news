@@ -24,7 +24,7 @@ The Articles page now supports inline editing of custom field values directly in
 ### Visual Indicators
 - Hover over any field cell to see a subtle blue background highlight
 - Fields with values show as colored badges with hover effects
-- Empty fields show as small dashed border boxes with "Add" text and plus icon
+- Empty fields show as light gray badges with "-" symbol
 - Boolean fields show green (Yes) or gray (No) badges
 - The entire cell area is clickable for better usability
 
