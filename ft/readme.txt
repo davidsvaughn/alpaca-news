@@ -27,6 +27,8 @@ hf upload davidsvaughn/finscore /home/azureuser/alpaca-news/ft/output/unsloth_Ll
 hf upload davidsvaughn/finscore-W4A16 /home/azureuser/alpaca-news/ft/output/unsloth_Llama-3.2-1B-Instruct/finscore-W4A16 --private
 hf download davidsvaughn/finscore-W4A16
 
+#--------------------------------------------------------------------------------------
+# vllm
 
 sudo docker run --gpus all \
     -e "HUGGING_FACE_HUB_TOKEN=$HUG_READ_TOKEN" \
@@ -35,10 +37,10 @@ sudo docker run --gpus all \
     --ipc=host \
     vllm/vllm-openai:latest \
     --model davidsvaughn/finscore-W4A16 \
-    --gpu-memory-utilization 0.04 \
+    --max-num-seqs 1 \
     --max-model-len 2048 \
-    --max-num-batched-tokens 2048
-
+    --max-num-batched-tokens 32 \
+    --gpu-memory-utilization 0.03
 
 # minimal curl test
 curl http://localhost:8080/v1/chat/completions \
@@ -47,3 +49,31 @@ curl http://localhost:8080/v1/chat/completions \
     "messages": [{"role": "user", "content": "Hello, how are you?"}],
     "max_tokens": 50
   }'
+
+
+#--------------------------------------------------------------------------------------
+# aphrodite
+
+sudo docker run --gpus all \
+  -e "HUGGING_FACE_HUB_TOKEN=$HUG_READ_TOKEN" \
+  -v ~/.cache/huggingface:/root/.cache/huggingface \
+  -p 8080:7860 \
+  --ipc=host \
+  alpindale/aphrodite-engine:latest \
+  serve \
+  --model davidsvaughn/finscore-W4A16 \
+  --port 8080 \
+  --max-seq-len 2048 \
+  --api openai \
+  --dtype auto \
+  --threads 8
+
+sudo docker run --gpus all \
+  -e HUGGING_FACE_HUB_TOKEN="$HUG_READ_TOKEN" \
+  -v ~/.cache/huggingface:/root/.cache/huggingface \
+  -p 8080:2242 \
+  --ipc=host \
+  alpindale/aphrodite-openai:latest \
+  --model davidsvaughn/finscore-W4A16 \
+  --single-user-mode \
+  --gpu-memory-utilization 0.1

@@ -10,10 +10,107 @@ import requests
 import random
 import math
 from pathlib import Path
+from transformers import AutoTokenizer
 
 FT_PATH = Path(__file__).parent.resolve()
 PROMPT_PATH = FT_PATH / "prompts" / "signal_prompt.md"
 DATA_PATH = FT_PATH / "data" / "train_data" / "json"
+
+
+MAX_INPUT_TOKENS = 2048
+
+# Initialize tokenizer for token counting (using Llama 3 tokenizer)
+_tokenizer = None
+
+def get_tokenizer():
+    """Lazy load and cache the tokenizer."""
+    global _tokenizer
+    if _tokenizer is None:
+        _tokenizer = AutoTokenizer.from_pretrained("meta-llama/Llama-3.2-1B-Instruct")
+    return _tokenizer
+
+
+def count_tokens(text):
+    """Count the number of tokens in a text string."""
+    tokenizer = get_tokenizer()
+    return len(tokenizer.encode(text, add_special_tokens=False))
+
+
+def truncate_article_content(article, template, max_tokens=MAX_INPUT_TOKENS):
+    """
+    Truncate the article content field to ensure the full prompt fits within max_tokens.
+    
+    Args:
+        article: The article dictionary to truncate
+        template: The prompt template string
+        max_tokens: Maximum number of tokens allowed for the full prompt
+        
+    Returns:
+        A tuple of (truncated_article_copy, was_truncated, original_tokens, final_tokens)
+    """
+    # Make a copy to avoid modifying the original
+    article_copy = article.copy()
+    
+    # Format the full prompt with the original article
+    full_prompt = format_prompt(template, article)
+    original_tokens = count_tokens(full_prompt)
+    
+    # If already under limit, return original
+    if original_tokens <= max_tokens:
+        return article_copy, False, original_tokens, original_tokens
+    
+    # Calculate how many tokens we need to remove
+    tokens_to_remove = original_tokens - max_tokens
+    
+    # Get the original content
+    original_content = article.get("content", "")
+    if not original_content:
+        # If no content field, we can't truncate further
+        return article_copy, False, original_tokens, original_tokens
+    
+    # Count tokens in the article JSON without content
+    article_without_content = article.copy()
+    article_without_content["content"] = ""
+    prompt_without_content = format_prompt(template, article_without_content)
+    base_tokens = count_tokens(prompt_without_content)
+    
+    # Calculate how many tokens we have available for content
+    content_token_budget = max_tokens - base_tokens
+    
+    if content_token_budget <= 0:
+        # Even without content, we exceed the limit - just empty the content
+        article_copy["content"] = ""
+        final_prompt = format_prompt(template, article_copy)
+        final_tokens = count_tokens(final_prompt)
+        return article_copy, True, original_tokens, final_tokens
+    
+    # Binary search to find the right content length
+    # Start by estimating characters per token (roughly 4 chars per token for English)
+    estimated_chars = content_token_budget * 4
+    
+    # Iteratively truncate until we fit within the budget
+    low, high = 0, len(original_content)
+    best_length = 0
+    
+    while low <= high:
+        mid = (low + high) // 2
+        article_copy["content"] = original_content[:mid]
+        test_prompt = format_prompt(template, article_copy)
+        test_tokens = count_tokens(test_prompt)
+        
+        if test_tokens <= max_tokens:
+            best_length = mid
+            low = mid + 1
+        else:
+            high = mid - 1
+    
+    # Apply the best truncation
+    article_copy["content"] = original_content[:best_length]
+    final_prompt = format_prompt(template, article_copy)
+    final_tokens = count_tokens(final_prompt)
+    
+    return article_copy, True, original_tokens, final_tokens
+
 
 # SEED = -1
 # # SEED = 4374
@@ -186,8 +283,11 @@ def main():
     #--------------------------------------------------------------------------
     # Set random seed for reproducibility
     #--------------------------------------------------------------------------
+    # MAX_INPUT_TOKENS = 1800
+    MAX_INPUT_TOKENS = 2000
+    
     SEED = -1
-    # SEED = 3223
+    # SEED = 3607
     if SEED < 0:
         SEED = random.randint(0, 10000)
         print(f"Using random seed: {SEED}")
@@ -216,9 +316,28 @@ def main():
     print(f"Symbol(s): {', '.join(article['symbols'])}")
     print()
     
-    # Format prompt
+    # Truncate article content if necessary to fit within token limit
+    print("Checking token count and truncating if necessary...")
+    article_truncated, was_truncated, original_tokens, final_tokens = truncate_article_content(
+        article, template, MAX_INPUT_TOKENS
+    )
+    
+    if was_truncated:
+        original_content_len = len(article.get("content", ""))
+        truncated_content_len = len(article_truncated.get("content", ""))
+        print(f"⚠️  Article content was TRUNCATED:")
+        print(f"   Original tokens: {original_tokens}")
+        print(f"   Final tokens: {final_tokens}")
+        print(f"   Tokens saved: {original_tokens - final_tokens}")
+        print(f"   Content length: {original_content_len} -> {truncated_content_len} chars")
+        print(f"   Reduction: {100 * (1 - truncated_content_len / original_content_len):.1f}%")
+    else:
+        print(f"✓ Token count OK: {original_tokens} tokens (limit: {MAX_INPUT_TOKENS})")
+    print()
+    
+    # Format prompt with potentially truncated article
     print("Formatting prompt...")
-    prompt = format_prompt(template, article)
+    prompt = format_prompt(template, article_truncated)
     
     # Call endpoint
     print(f"Calling vLLM endpoint: {args.endpoint}")
@@ -268,28 +387,20 @@ def main():
 
 def test_token_ten():
     from transformers import AutoTokenizer
-
     # Load the tokenizer for a Llama 3 model
     tokenizer = AutoTokenizer.from_pretrained("meta-llama/Llama-3.2-1B-Instruct")
-
-    # Tokenize the number "10"
-    
     for i in range(11):
         encoded = tokenizer.encode(str(i), add_special_tokens=False)
         decoded_tokens = [tokenizer.decode([token], skip_special_tokens=True) for token in encoded]
-
         print(f"Token ID for {i}: {encoded}")
         print(f"Decoded tokens for {i}: {decoded_tokens}")
 
-        # Output will be similar to this, demonstrating separate tokens for '1' and '0'
-        # Token IDs for '10': [29896, 29897]
-        # Decoded tokens for '10': ['1', '0']
 
 
 if __name__ == "__main__":
     # test_token_ten()
     
-    exit(main())
+    main()
     
     # while True:
     #     if main() != 0:
