@@ -6,9 +6,8 @@ services:
     image: vllm/vllm-openai:v0.8.2
     command:
       - --model
-      - davidsvaughn/finscore-W4A16
-      # For local model, comment out the line above and uncomment the line below:
-      # - /models/finscore-W4A16
+      - /models/finscore-W4A16
+      # - davidsvaughn/finscore-W4A16
       - --max-num-seqs
       - "1"
       - --max-model-len
@@ -26,14 +25,15 @@ services:
         reservations:
           devices:
             - capabilities: ["gpu"]
-    environment:
-      # Optional; speeds downloads the first time from HuggingFace
-      HUGGING_FACE_HUB_TOKEN: ${HUG_READ_TOKEN}
+    # environment:
+    #   # Optional; speeds downloads the first time from HuggingFace
+    #   HUGGING_FACE_HUB_TOKEN: ${HUG_READ_TOKEN}
     volumes:
-      # For HuggingFace cache (default):
-      - ~/.cache/huggingface:/root/.cache/huggingface
-      # For local model storage, comment out the line above and uncomment below:
-      # - /home/david/models:/models
+      # For local model storage, uncomment below:
+      # - ~/models:/models
+      - /home/david/models:/models
+      # For HuggingFace cache, uncomment below:
+      # - ~/.cache/huggingface:/root/.cache/huggingface
     ipc: host
 
   api:
@@ -51,6 +51,8 @@ services:
       VLLM_URL: http://vllm:8000/v1/chat/completions
       # Make sure PROMPT_FILE points to the file *inside the image*
       PROMPT_FILE: /app/signal_prompt.md
+      # Path to the model inside the container (matches vLLM model)
+      MODEL_PATH: /models/finscore-W4A16
       HOST: 0.0.0.0
       PORT: "8001"
       MAX_TOKENS: "2"
@@ -58,4 +60,8 @@ services:
       TOP_LOGPROBS: "20"
       TIMEOUT: "30"
       MAX_INPUT_TOKENS: "2000"
+    volumes:
+      # Mount the same models directory as vLLM to access tokenizer
+      - /home/david/models:/models
+      # - ~/models:/models
     restart: unless-stopped

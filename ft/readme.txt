@@ -26,6 +26,7 @@ python ft/quant_llama3.py
 hf upload davidsvaughn/finscore /home/azureuser/alpaca-news/ft/output/unsloth_Llama-3.2-1B-Instruct/finscore --private
 hf upload davidsvaughn/finscore-W4A16 /home/azureuser/alpaca-news/ft/output/unsloth_Llama-3.2-1B-Instruct/finscore-W4A16 --private
 hf download davidsvaughn/finscore-W4A16
+hf download davidsvaughn/finscore-W4A16 --local-dir ~/models/finscore-W4A16
 
 #--------------------------------------------------------------------------------------
 # vllm

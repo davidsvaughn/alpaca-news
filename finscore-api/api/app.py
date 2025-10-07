@@ -20,6 +20,7 @@ from transformers import AutoTokenizer
 # ============================================================================
 VLLM_URL = os.getenv("VLLM_URL", "http://vllm:8000/v1/chat/completions")
 PROMPT_FILE = os.getenv("PROMPT_FILE", "/app/signal_prompt.md")
+MODEL_PATH = os.getenv("MODEL_PATH", None)
 HOST = os.getenv("HOST", "0.0.0.0")
 PORT = int(os.getenv("PORT", "8001"))
 MAX_TOKENS = int(os.getenv("MAX_TOKENS", "2"))
@@ -71,7 +72,7 @@ class ScoreRequest(BaseModel):
     summary: str = Field(..., description="Article summary")
     content: str = Field(..., description="Article content")
     url: Optional[str] = Field(None, description="Article URL")
-    images: list = Field(default_factory=list, description="Article images")
+    images: Optional[list] = Field(None, description="Article images")
     symbols: list = Field(default_factory=list, description="Related stock symbols")
     source: Optional[str] = Field(None, description="Article source")
 
@@ -95,7 +96,7 @@ def get_tokenizer():
     """Lazy load and cache the tokenizer."""
     global _tokenizer
     if _tokenizer is None:
-        _tokenizer = AutoTokenizer.from_pretrained("meta-llama/Llama-3.2-1B-Instruct")
+        _tokenizer = AutoTokenizer.from_pretrained(MODEL_PATH)
     return _tokenizer
 
 

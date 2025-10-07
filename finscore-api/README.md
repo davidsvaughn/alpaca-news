@@ -10,18 +10,23 @@ This Docker Compose setup provides:
 
 ## Quick Start
 
-1. **Start the services:**
+1. **Download the model:**
+    ```bash
+    hf download davidsvaughn/finscore-W4A16 --local-dir ~/models/finscore-W4A16
+    ```
+
+2. **Start the services:**
    ```bash
    cd finscore-api
    docker compose up -d
    ```
 
-2. **Check service health:**
+3. **Check service health:**
    ```bash
    curl http://localhost:8001/health
    ```
 
-3. **Score an article:**
+4. **Score an article:**
    ```bash
    curl -X POST http://localhost:8001/score \
      -H "Content-Type: application/json" \
