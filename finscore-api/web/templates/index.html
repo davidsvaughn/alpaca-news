@@ -182,6 +182,27 @@
             overflow-y: auto;
         }
 
+        .json-textarea {
+            width: 100%;
+            min-height: 400px;
+            padding: 15px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-family: 'Courier New', monospace;
+            font-size: 13px;
+            line-height: 1.4;
+            background: #2c3e50;
+            color: #ecf0f1;
+            resize: vertical;
+            overflow-y: auto;
+        }
+
+        .json-textarea:focus {
+            outline: none;
+            border-color: #3498db;
+            box-shadow: 0 0 0 2px rgba(52, 152, 219, 0.2);
+        }
+
         .grid {
             display: grid;
             grid-template-columns: 1fr 1fr;
@@ -527,7 +548,7 @@
         function displayArticle(article) {
             const display = document.getElementById('articleDisplay');
             const json = JSON.stringify(article, null, 2);
-            display.innerHTML = `<div class="code-block">${escapeHtml(json)}</div>`;
+            display.innerHTML = `<textarea class="json-textarea" readonly>${escapeHtml(json)}</textarea>`;
         }
 
         async function submitToAPI() {
