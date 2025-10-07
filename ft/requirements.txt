@@ -1,0 +1,11 @@
+datasets
+scikit-learn
+pandas
+wandb
+tqdm
+unsloth
+unsloth_zoo
+bitsandbytes
+accelerate
+transformers
+llmcompressor

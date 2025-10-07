@@ -1,8 +1,11 @@
 # custom
 output/
-
 classify/*/*.tsv
 classify/*/labels/
+ft/data/
+
+unsloth_compiled_cache/
+wandb/
 
 
 # Byte-compiled / optimized / DLL files
