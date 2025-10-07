@@ -1,0 +1,61 @@
+services:
+  vllm:
+    # Use the latest image from Docker Hub:
+    # image: vllm/vllm-openai:latest
+    # for CUDA 12.6
+    image: vllm/vllm-openai:v0.8.2
+    command:
+      - --model
+      - davidsvaughn/finscore-W4A16
+      # For local model, comment out the line above and uncomment the line below:
+      # - /models/finscore-W4A16
+      - --max-num-seqs
+      - "1"
+      - --max-model-len
+      - "2048"
+      - --max-num-batched-tokens
+      - "32"
+      - --gpu-memory-utilization
+      - "0.2"
+    # ports:
+      # vLLM serves on 8000 in the container; keep it internal by not publishing,
+      # OR publish if you want to hit it directly. Uncomment to expose:
+      # - "8080:8000"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - capabilities: ["gpu"]
+    environment:
+      # Optional; speeds downloads the first time from HuggingFace
+      HUGGING_FACE_HUB_TOKEN: ${HUG_READ_TOKEN}
+    volumes:
+      # For HuggingFace cache (default):
+      - ~/.cache/huggingface:/root/.cache/huggingface
+      # For local model storage, comment out the line above and uncomment below:
+      # - /home/david/models:/models
+    ipc: host
+
+  api:
+    build:
+      context: ./api
+      dockerfile: Dockerfile
+    depends_on:
+      - vllm
+    ports:
+      - "8001:8001"  # expose only the API
+    environment:
+      # Optional API key for authentication (commented out by default)
+      # API_KEY: change-me
+      # Ensure the API calls the *service name* on the Docker network
+      VLLM_URL: http://vllm:8000/v1/chat/completions
+      # Make sure PROMPT_FILE points to the file *inside the image*
+      PROMPT_FILE: /app/signal_prompt.md
+      HOST: 0.0.0.0
+      PORT: "8001"
+      MAX_TOKENS: "2"
+      TEMPERATURE: "0"
+      TOP_LOGPROBS: "20"
+      TIMEOUT: "30"
+      MAX_INPUT_TOKENS: "2000"
+    restart: unless-stopped

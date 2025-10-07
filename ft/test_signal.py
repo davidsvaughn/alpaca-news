@@ -15,9 +15,15 @@ from transformers import AutoTokenizer
 FT_PATH = Path(__file__).parent.resolve()
 PROMPT_PATH = FT_PATH / "prompts" / "signal_prompt.md"
 DATA_PATH = FT_PATH / "data" / "train_data" / "json"
+# if DATA_PATH does not exist, try: output/train_data/json
+if not DATA_PATH.exists():
+    # DATA_PATH = Path("output") / "train_data" / "json"
+    DATA_PATH = Path("output") / "alpaca"
 
+# ENDPOINT = "http://localhost:8080/v1/chat/completions"
+ENDPOINT = "http://localhost:8081/v1/chat/completions"
 
-MAX_INPUT_TOKENS = 2048
+MAX_INPUT_TOKENS = 2000
 
 # Initialize tokenizer for token counting (using Llama 3 tokenizer)
 _tokenizer = None
@@ -257,7 +263,7 @@ def main():
     )
     parser.add_argument(
         "--endpoint",
-        default="http://localhost:8080/v1/chat/completions",
+        default=ENDPOINT,
         help="vLLM endpoint URL"
     )
     parser.add_argument(
@@ -284,7 +290,7 @@ def main():
     # Set random seed for reproducibility
     #--------------------------------------------------------------------------
     # MAX_INPUT_TOKENS = 1800
-    MAX_INPUT_TOKENS = 2000
+    # MAX_INPUT_TOKENS = 2000
     
     SEED = -1
     # SEED = 3607
