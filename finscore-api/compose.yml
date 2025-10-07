@@ -65,3 +65,24 @@ services:
       - /home/david/models:/models
       # - ~/models:/models
     restart: unless-stopped
+
+  web:
+    # Optional Flask web interface for testing the API
+    # Start with: docker compose --profile web up
+    profiles: ["web"]
+    build:
+      context: ./web
+      dockerfile: Dockerfile
+    depends_on:
+      - api
+    ports:
+      - "5000:5000"  # Flask web interface
+    environment:
+      # URL to call the FastAPI scoring endpoint
+      API_URL: http://api:8001/score
+      # Default folder for loading articles (relative to mounted volume)
+      DEFAULT_FOLDER: /project/output/train_data/json
+    volumes:
+      # Mount the parent directory to access article files
+      - ..:/project
+    restart: unless-stopped

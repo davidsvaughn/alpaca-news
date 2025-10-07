@@ -7,6 +7,7 @@ FastAPI service for scoring financial news articles using a fine-tuned vLLM mode
 This Docker Compose setup provides:
 - **vLLM service**: Serves the fine-tuned model with GPU acceleration
 - **FastAPI service**: Provides REST API endpoints for scoring articles
+- **Web interface (optional)**: Flask-based UI for testing the API with a browser
 
 ## Quick Start
 
@@ -21,12 +22,26 @@ This Docker Compose setup provides:
    docker compose up -d
    ```
 
+   **Or start with the web interface:**
+   ```bash
+   docker compose --profile web up -d
+   ```
+
 3. **Check service health:**
    ```bash
    curl http://localhost:8001/health
    ```
 
 4. **Score an article:**
+
+   **Option A: Using the web interface** (if started with `--profile web`):
+   - Open your browser to http://localhost:5000
+   - Enter the article folder path (default: `output/train_data/json`)
+   - Click "Scan Folder" to load available JSON files
+   - Select an article from the list
+   - Click "Submit to API" to see the score
+
+   **Option B: Using curl:**
    ```bash
    curl -X POST http://localhost:8001/score \
      -H "Content-Type: application/json" \
@@ -79,6 +94,69 @@ Health check endpoint.
   "status": "healthy"
 }
 ```
+
+## Web Interface (Optional)
+
+The web interface provides an easy way to test the API without writing code or using curl. It's especially useful for:
+- Testing the API with your own article files
+- Viewing formatted API responses
+- Exploring article collections with pagination and search
+
+### Starting with Web Interface
+
+To include the web interface, use the `--profile web` flag:
+
+```bash
+# Start all services including web interface
+docker compose --profile web up -d
+
+# Or without web interface (default)
+docker compose up -d
+```
+
+The web interface will be available at: http://localhost:5000
+
+### Features
+
+1. **Smart Folder Loading**: 
+   - Handles folders with 20,000+ JSON files efficiently
+   - Loads files in batches of 100 with pagination
+   - Includes search/filter capability
+   - Shows warnings for large directories
+
+2. **Article Display**:
+   - View full JSON content of selected articles
+   - Syntax-highlighted display
+   - Easy file selection from list
+
+3. **API Testing**:
+   - Submit articles to the FastAPI endpoint
+   - View formatted responses with signal scores
+   - See token truncation information
+   - Display error messages clearly
+
+4. **Configuration**:
+   - Default folder: `output/train_data/json`
+   - Easily change folder path via UI
+   - Search files by name
+   - Load more files on demand
+
+### Web Interface Environment Variables
+
+Configure the web service in `compose.yml`:
+
+- `API_URL`: FastAPI endpoint (default: `http://api:8001/score`)
+- `DEFAULT_FOLDER`: Default article folder path (default: `output/train_data/json`)
+
+### Accessing Article Files
+
+The web interface mounts the parent directory to `/project` inside the container. You can specify any folder path starting with `/project/`:
+
+- `/project/output/train_data/json` (default)
+- `/project/cline/ex/articles`
+- `/project/any/other/path/with/json/files`
+
+Or use relative paths within the web UI (they will be resolved relative to `/project`).
 
 ## Configuration
 
@@ -189,7 +267,7 @@ docker compose down
 
 ## Development & Rebuilding
 
-When you make changes to the API container (code in `api/` directory), use these commands to rebuild:
+When you make changes to containers (code in `api/` or `web/` directories), use these commands to rebuild:
 
 ### Quick Rebuild Commands
 
@@ -199,25 +277,42 @@ docker compose up -d --build api
 ```
 This rebuilds the API image and restarts only that container, leaving vLLM running.
 
-**Just rebuild the API image (without restarting):**
+**Rebuild and restart the web interface:**
+```bash
+docker compose --profile web up -d --build web
+```
+
+**Just rebuild an image (without restarting):**
 ```bash
 docker compose build api
+# or
+docker compose build web
 ```
 Then separately restart it:
 ```bash
 docker compose up -d api
+# or
+docker compose --profile web up -d web
 ```
 
 **Force a complete rebuild (no cache):**
 ```bash
 docker compose build --no-cache api
 docker compose up -d api
+# or for web
+docker compose build --no-cache web
+docker compose --profile web up -d web
 ```
 
 ### What Changes Require Rebuilding?
 
+**API Service:**
 - **Requires rebuild:** Changes to `api/Dockerfile`, `api/app.py`, `api/signal_prompt.md`, or any files in the `api/` directory
 - **No rebuild needed:** Changes to environment variables in `compose.yml` (just restart: `docker compose restart api`)
+
+**Web Service:**
+- **Requires rebuild:** Changes to `web/Dockerfile`, `web/app.py`, `web/templates/`, or any files in the `web/` directory
+- **No rebuild needed:** Changes to environment variables in `compose.yml` (just restart: `docker compose restart web`)
 
 ### Additional Development Commands
 
@@ -225,6 +320,7 @@ docker compose up -d api
 ```bash
 docker compose logs -f api
 docker compose logs -f vllm
+docker compose logs -f web  # if using web interface
 ```
 
 **Check service status:**
@@ -267,6 +363,7 @@ python ft/test_signal.py --endpoint http://localhost:8001/score
 
 ## Architecture
 
+### Without Web Interface (default)
 ```
 ┌─────────────┐      ┌──────────────┐      ┌─────────────┐
 │   Client    │─────▶│  FastAPI     │─────▶│    vLLM     │
@@ -277,6 +374,20 @@ python ft/test_signal.py --endpoint http://localhost:8001/score
                            ├─ Token truncation
                            ├─ Prompt formatting
                            └─ Logprobs calculation
+```
+
+### With Web Interface (`--profile web`)
+```
+┌─────────────┐      ┌──────────────┐      ┌──────────────┐      ┌─────────────┐
+│   Browser   │─────▶│    Flask     │─────▶│  FastAPI     │─────▶│    vLLM     │
+│ (port 5000) │      │    (web)     │      │  (port 8001) │      │ (internal)  │
+│             │◀─────│              │◀─────│              │◀─────│             │
+└─────────────┘      └──────────────┘      └──────────────┘      └─────────────┘
+                           │                      │
+                           │                      ├─ Token truncation
+                           ├─ Load JSON files     ├─ Prompt formatting
+                           ├─ Pagination          └─ Logprobs calculation
+                           └─ Search/filter
 ```
 
 ## Troubleshooting
