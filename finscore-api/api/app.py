@@ -20,6 +20,7 @@ from transformers import AutoTokenizer
 # ============================================================================
 VLLM_URL = os.getenv("VLLM_URL", "http://vllm:8000/v1/chat/completions")
 PROMPT_FILE = os.getenv("PROMPT_FILE", "/app/signal_prompt.md")
+TYPE_PROMPT_FILE = os.getenv("TYPE_PROMPT_FILE", "/app/type_prompt.md")
 MODEL_PATH = os.getenv("MODEL_PATH", None)
 HOST = os.getenv("HOST", "0.0.0.0")
 PORT = int(os.getenv("PORT", "8001"))
@@ -35,6 +36,7 @@ API_KEY = os.getenv("API_KEY", None)  # Optional API key
 # ============================================================================
 _tokenizer = None
 _prompt_template = None
+_type_prompt_template = None
 
 # ============================================================================
 # FastAPI app setup
@@ -84,6 +86,13 @@ class ScoreResponse(BaseModel):
     truncated: int = Field(..., description="Number of tokens truncated (0 if none)")
 
 
+class TypeResponse(BaseModel):
+    """Response model for article type classification."""
+    article_id: int = Field(..., description="Article ID")
+    type: int = Field(..., description="Article type classification (0-7)")
+    truncated: int = Field(..., description="Number of tokens truncated (0 if none)")
+
+
 class HealthResponse(BaseModel):
     """Health check response."""
     status: str = Field(..., description="Service status")
@@ -113,6 +122,15 @@ def load_prompt_template() -> str:
         with open(PROMPT_FILE, 'r') as f:
             _prompt_template = f.read()
     return _prompt_template
+
+
+def load_type_prompt_template() -> str:
+    """Load the type classification prompt template from file."""
+    global _type_prompt_template
+    if _type_prompt_template is None:
+        with open(TYPE_PROMPT_FILE, 'r') as f:
+            _type_prompt_template = f.read()
+    return _type_prompt_template
 
 
 def format_prompt(template: str, article: Dict[str, Any]) -> str:
@@ -249,6 +267,35 @@ def parse_signal_response(response: Dict[str, Any]) -> Optional[int]:
     return None
 
 
+def parse_type_response(response: Dict[str, Any]) -> Optional[int]:
+    """Parse the article type classification from the model response."""
+    try:
+        content = response['choices'][0]['message']['content'].strip()
+        
+        # Parse as integer
+        type_value = int(content)
+        
+        # Validate range [0-7]
+        if 0 <= type_value <= 7:
+            return type_value
+        else:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Type value {type_value} out of valid range [0-7]"
+            )
+            
+    except (KeyError, IndexError) as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error parsing model response: {str(e)}"
+        )
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Could not parse type value as integer: {str(e)}"
+        )
+
+
 def calculate_expected_signal(top_logprobs_data: list) -> Optional[float]:
     """
     Calculate expected signal value from top logprobs.
@@ -350,6 +397,60 @@ async def score_article(request: ScoreRequest):
     return ScoreResponse(
         article_id=article["id"],
         signal=signal_value,
+        truncated=tokens_truncated
+    )
+
+
+@app.post("/type", response_model=TypeResponse, dependencies=[Security(verify_api_key)] if API_KEY else [])
+async def classify_article_type(request: ScoreRequest):
+    """
+    Classify a financial news article into one of 8 types (0-7).
+    
+    Type classifications:
+    - 0: Background / Informational ("Fluff")
+    - 1: Analyst Action
+    - 2: Corporate Event / Announcement
+    - 3: Financial / Earnings Report
+    - 4: Market Activity / Sentiment Data
+    - 5: Stock Movement Explanation (WIIM)
+    - 6: Macro / Market Recap
+    - 7: Technical / Chart Analysis
+    
+    Args:
+        request: Article data to classify
+        
+    Returns:
+        TypeResponse with article type and truncation info
+    """
+    # Convert request to dict
+    article = request.model_dump()
+    
+    # Load type prompt template
+    template = load_type_prompt_template()
+    
+    # Truncate article content if necessary
+    article_truncated, tokens_truncated = truncate_article_content(
+        article, template, MAX_INPUT_TOKENS
+    )
+    
+    # Format prompt
+    prompt = format_prompt(template, article_truncated)
+    
+    # Call vLLM endpoint
+    response = call_vllm_endpoint(prompt)
+    
+    # Parse article type
+    article_type = parse_type_response(response)
+    
+    if article_type is None:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Could not extract type value from response"
+        )
+    
+    return TypeResponse(
+        article_id=article["id"],
+        type=article_type,
         truncated=tokens_truncated
     )
 

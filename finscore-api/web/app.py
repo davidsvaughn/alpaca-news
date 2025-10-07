@@ -16,11 +16,26 @@ app = Flask(__name__)
 app.secret_key = os.urandom(24)  # For session management
 
 # Configuration
-API_URL = os.getenv("API_URL", "http://api:8001/score")
+API_SCORE_URL = os.getenv("API_SCORE_URL", "http://api:8001/score")
+API_TYPE_URL = os.getenv("API_TYPE_URL", "http://api:8001/type")
+# Backward compatibility
+API_URL = os.getenv("API_URL", API_SCORE_URL)
 DEFAULT_FOLDER = os.getenv("DEFAULT_FOLDER", "/project/output/train_data/json")
 MAX_FILES_PER_PAGE = 100
 MAX_FILES_WARNING = 1000
 PROJECT_ROOT = "/project"
+
+# Article type labels for display
+ARTICLE_TYPES = {
+    0: "Background / Informational",
+    1: "Analyst Action",
+    2: "Corporate Event / Announcement",
+    3: "Financial / Earnings Report",
+    4: "Market Activity / Sentiment Data",
+    5: "Stock Movement Explanation (WIIM)",
+    6: "Macro / Market Recap",
+    7: "Technical / Chart Analysis"
+}
 
 
 def normalize_path(folder_path: str) -> str:
@@ -91,16 +106,26 @@ def load_article_json(folder_path: str, filename: str) -> Optional[Dict[str, Any
         return {"error": f"Failed to load article: {str(e)}"}
 
 
-def submit_to_api(article: Dict[str, Any]) -> Dict[str, Any]:
+def submit_to_api(article: Dict[str, Any], endpoint_url: str = None) -> Dict[str, Any]:
     """Submit an article to the FastAPI endpoint."""
+    if endpoint_url is None:
+        endpoint_url = API_URL
+    
     try:
-        response = requests.post(API_URL, json=article, timeout=60)
+        response = requests.post(endpoint_url, json=article, timeout=60)
         response.raise_for_status()
-        return {
+        result = {
             "success": True,
             "response": response.json(),
             "status_code": response.status_code
         }
+        
+        # Add type label if this is a type classification response
+        if 'type' in result['response']:
+            type_id = result['response']['type']
+            result['response']['type_label'] = ARTICLE_TYPES.get(type_id, f"Unknown ({type_id})")
+        
+        return result
     except requests.exceptions.Timeout:
         return {
             "success": False,
@@ -181,7 +206,20 @@ def submit_article():
     if not article:
         return jsonify({"success": False, "error": "No article provided"}), 400
     
-    result = submit_to_api(article)
+    result = submit_to_api(article, API_SCORE_URL)
+    return jsonify(result)
+
+
+@app.route('/api/submit-type', methods=['POST'])
+def submit_article_type():
+    """API endpoint to submit an article for type classification."""
+    data = request.get_json()
+    article = data.get('article')
+    
+    if not article:
+        return jsonify({"success": False, "error": "No article provided"}), 400
+    
+    result = submit_to_api(article, API_TYPE_URL)
     return jsonify(result)
 
 

@@ -84,6 +84,48 @@ Where:
 - `signal`: Expected signal score (0-10) calculated from logprobs, or integer if logprobs unavailable
 - `truncated`: Number of tokens truncated from content (0 if none)
 
+### POST /type
+
+Classify a financial news article into one of 8 types (0-7).
+
+**Request Body:** (Same format as `/score`)
+```json
+{
+  "id": 48046348,
+  "headline": "Company announces major partnership",
+  "author": "Jane Doe",
+  "created_at": "2025-01-07T10:00:00Z",
+  "updated_at": "2025-01-07T10:00:00Z",
+  "summary": "Brief summary of the article",
+  "content": "Full article content...",
+  "url": "https://example.com/article",
+  "images": [],
+  "symbols": ["AAPL", "MSFT"],
+  "source": "Reuters"
+}
+```
+
+**Response:**
+```json
+{
+  "article_id": 48046348,
+  "type": 2,
+  "truncated": 0
+}
+```
+
+Where:
+- `type`: Article classification (0-7):
+  - **0**: Background / Informational ("Fluff") - evergreen/retrospective/educational content
+  - **1**: Analyst Action - brokerage ratings, price targets, coverage changes
+  - **2**: Corporate Event / Announcement - M&A, partnerships, product launches, leadership changes
+  - **3**: Financial / Earnings Report - revenue, EPS, guidance, results
+  - **4**: Market Activity / Sentiment Data - options activity, short interest, insider trades
+  - **5**: Stock Movement Explanation (WIIM) - "why is it moving" post-hoc explanations
+  - **6**: Macro / Market Recap - index/sector roundups, market-wide commentary
+  - **7**: Technical / Chart Analysis - chart patterns, technical indicators
+- `truncated`: Number of tokens truncated from content (0 if none)
+
 ### GET /health
 
 Health check endpoint.

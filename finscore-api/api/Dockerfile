@@ -7,9 +7,10 @@ WORKDIR /app
 # RUN apt-get update && apt-get install -y --no-install-recommends \
 #     build-essential && rm -rf /var/lib/apt/lists/*
 
-# Copy your app code and prompt into the image
+# Copy your app code and prompts into the image
 COPY app.py /app/app.py
 COPY signal_prompt.md /app/signal_prompt.md
+COPY type_prompt.md /app/type_prompt.md
 
 # Install dependencies
 # fastapi: Web framework

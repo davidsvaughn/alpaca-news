@@ -330,9 +330,12 @@
 
             <div class="section">
                 <div class="section-title">4. API Response</div>
-                <div style="margin-bottom: 15px;">
+                <div style="margin-bottom: 15px; display: flex; gap: 10px;">
                     <button id="submitBtn" onclick="submitToAPI()" class="success" disabled>
-                        Submit to API
+                        Get Signal Score
+                    </button>
+                    <button id="submitTypeBtn" onclick="submitType()" class="success" disabled>
+                        Classify Type
                     </button>
                 </div>
                 <div id="responseDisplay">
@@ -535,6 +538,7 @@
                     currentArticle = data.article;
                     displayArticle(data.article);
                     document.getElementById('submitBtn').disabled = false;
+                    document.getElementById('submitTypeBtn').disabled = false;
                 } else {
                     showAlert('scanAlert', data.error || 'Failed to load article', 'error');
                 }
@@ -581,12 +585,59 @@
             }
         }
 
+        async function submitType() {
+            if (!currentArticle) {
+                alert('No article selected');
+                return;
+            }
+
+            showLoading();
+            document.getElementById('responseDisplay').innerHTML = '<div class="empty-state"><p>⏳ Classifying article type...</p></div>';
+
+            try {
+                const response = await fetch('/api/submit-type', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({article: currentArticle})
+                });
+
+                const data = await response.json();
+
+                if (data.success) {
+                    displayTypeResponse(data.response, data.status_code);
+                } else {
+                    displayError(data.error, data.status_code);
+                }
+            } catch (error) {
+                displayError(`Request failed: ${error.message}`, 500);
+            } finally {
+                hideLoading();
+            }
+        }
+
         function displayResponse(response, statusCode) {
             const display = document.getElementById('responseDisplay');
             const html = `
                 <div class="response-highlight">
                     <h3>✅ Success (Status: ${statusCode})</h3>
                     <div class="score-display">Signal: ${response.signal}</div>
+                    <p><strong>Article ID:</strong> ${response.article_id}</p>
+                    <p><strong>Tokens Truncated:</strong> ${response.truncated}</p>
+                </div>
+                <div class="section-title" style="margin-top: 20px;">Full Response</div>
+                <div class="code-block">${escapeHtml(JSON.stringify(response, null, 2))}</div>
+            `;
+            display.innerHTML = html;
+        }
+
+        function displayTypeResponse(response, statusCode) {
+            const display = document.getElementById('responseDisplay');
+            const typeLabel = response.type_label || `Type ${response.type}`;
+            const html = `
+                <div class="response-highlight">
+                    <h3>✅ Success (Status: ${statusCode})</h3>
+                    <div class="score-display">Type: ${response.type}</div>
+                    <p style="font-size: 18px; margin-top: 10px;"><strong>${typeLabel}</strong></p>
                     <p><strong>Article ID:</strong> ${response.article_id}</p>
                     <p><strong>Tokens Truncated:</strong> ${response.truncated}</p>
                 </div>
