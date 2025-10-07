@@ -187,6 +187,68 @@ Stop services:
 docker compose down
 ```
 
+## Development & Rebuilding
+
+When you make changes to the API container (code in `api/` directory), use these commands to rebuild:
+
+### Quick Rebuild Commands
+
+**Rebuild and restart just the API service:**
+```bash
+docker compose up -d --build api
+```
+This rebuilds the API image and restarts only that container, leaving vLLM running.
+
+**Just rebuild the API image (without restarting):**
+```bash
+docker compose build api
+```
+Then separately restart it:
+```bash
+docker compose up -d api
+```
+
+**Force a complete rebuild (no cache):**
+```bash
+docker compose build --no-cache api
+docker compose up -d api
+```
+
+### What Changes Require Rebuilding?
+
+- **Requires rebuild:** Changes to `api/Dockerfile`, `api/app.py`, `api/signal_prompt.md`, or any files in the `api/` directory
+- **No rebuild needed:** Changes to environment variables in `compose.yml` (just restart: `docker compose restart api`)
+
+### Additional Development Commands
+
+**View real-time logs:**
+```bash
+docker compose logs -f api
+docker compose logs -f vllm
+```
+
+**Check service status:**
+```bash
+docker compose ps
+```
+
+**Restart a service:**
+```bash
+docker compose restart api
+```
+
+**Stop all services:**
+```bash
+docker compose down
+```
+
+**Start all services:**
+```bash
+docker compose up -d
+```
+
+The API service is configured with `restart: unless-stopped`, so it will automatically restart if it crashes.
+
 ## Testing
 
 Test with an example article from the project:
