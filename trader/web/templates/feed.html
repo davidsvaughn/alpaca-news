@@ -1,0 +1,40 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>alpaca-news feed</title>
+    <style>
+      body { font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial; margin: 2rem; }
+      #log { white-space: pre-wrap; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas; background: #111; color: #ddd; padding: 1rem; border-radius: 8px; }
+      .row { margin-bottom: 0.5rem; }
+    </style>
+  </head>
+  <body>
+    <h1>Live Pipeline Feed</h1>
+    <p>Streaming events from the orchestrator via SSE.</p>
+
+    <div id="log"></div>
+
+    <script>
+      const log = document.getElementById('log');
+      function append(line) {
+        const div = document.createElement('div');
+        div.className = 'row';
+        div.textContent = line;
+        log.prepend(div);
+      }
+
+      const es = new EventSource('/events');
+      es.addEventListener('hello', (e) => append(`[hello] ${e.data}`));
+      es.addEventListener('ping', (e) => {});
+
+      const eventNames = ['watching','news_received','triage_decision','snapshot_sealed'];
+      for (const name of eventNames) {
+        es.addEventListener(name, (e) => append(`[${name}] ${e.data}`));
+      }
+
+      es.onerror = (e) => append(`[error] SSE connection error`);
+    </script>
+  </body>
+</html>

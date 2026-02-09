@@ -1,1 +1,1 @@
-"""LLM provider utilities (pricing, clients, etc.)."""
+"""LLM provider wrappers + unified client."""

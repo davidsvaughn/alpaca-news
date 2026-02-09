@@ -7,10 +7,20 @@ requires-python = ">=3.12"
 
 # Core dependencies for the Alpaca websocket workflow
 dependencies = [
+  "aiosqlite>=0.22.1",
   "alpaca-py",
+  "fastapi>=0.128.6",
+  "google-genai>=1.62.0",
+  "httpx>=0.28.1",
+  "jinja2>=3.1.6",
+  "openai>=2.17.0",
   "python-dotenv>=1.0.0",
+  "python-multipart>=0.0.22",
   "pytz>=2025.2",
   "schwabdev>=3.0.1",
+  "sqlalchemy>=2.0.46",
+  "uvicorn[standard]>=0.40.0",
+  "watchdog>=6.0.0",
 ]
 
 # Optional dependency groups for uv
