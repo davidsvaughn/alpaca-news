@@ -1,35 +1,66 @@
-# Design Plan: LLM-Based Day-Trading Research Assistant
+# Design Plan: LLM-Based Day-Trading Research Assistant (Snapshot + Policy Learning)
 
 ## Executive Summary
 
-This is a **news-triggered, multi-LLM research pipeline** that watches for Alpaca news, filters signal from noise, investigates promising leads across multiple data sources (Schwab market data, web search, X/Twitter), and learns from experience.
+This system is a **news-triggered, multi-LLM research pipeline** whose core objective is to **learn an information acquisition policy** (what to search, where, and when to stop) that improves short-horizon price-move predictions under strict cost constraints.
+
+The key design upgrade (from `cline/chat1.md`) is making a **time-aligned “Snapshot”** the **atomic learning artifact**:
+
+- Online (real-time): explore + capture evidence → seal Snapshot
+- Offline (async): label outcomes from market data → learn/update search policy
+
+Everything else (triage, search tools, streams, dashboard) exists to produce and learn from these Snapshots.
 
 ---
 
-## 1. Architecture Overview
+## 1. Architecture Overview (Two Loops)
+
+### Online loop: Explore + Capture (per event)
+
+**Goal:** maximize *information capture quality per dollar*.
+
+**Output:** one immutable **Snapshot** containing tool traces (multi-hop chain), market context, and (optional) a prediction.
+
+### Offline loop: Backtest + Learn Policies (periodic)
+
+**Goal:** attach outcomes to Snapshots (future returns) and learn which actions/hops were worth the cost.
+
+**Output:** versioned policy updates (action weights, stop thresholds, source allow/deny lists) + reports.
+
+---
+
+### Architecture diagram
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
-│                        PIPELINE ORCHESTRATOR                        │
-│              (async Python - watchdog + asyncio event loop)          │
-└───────────┬──────────────┬──────────────┬──────────────┬────────────┘
-            │              │              │              │
-      ┌─────▼─────┐ ┌─────▼─────┐ ┌─────▼─────┐ ┌─────▼──────┐
-      │  STAGE 1   │ │  STAGE 2   │ │  STAGE 3   │ │  STAGE 4    │
-      │  News      │ │  Deep      │ │  Sentiment │ │  Decision   │
-      │  Triage    │ │  Research  │ │  + Price   │ │  + Monitor  │
-      │  Filter    │ │  & Search  │ │  Analysis  │ │  Engine     │
-      └─────┬──────┘ └─────┬──────┘ └─────┬──────┘ └─────┬───────┘
-            │              │              │              │
-      ┌─────▼──────────────▼──────────────▼──────────────▼────────┐
-      │                    KNOWLEDGE STORE                         │
-      │              (SQLite + JSON knowledge files)               │
-      └───────────────────────────┬───────────────────────────────┘
-                                  │
-      ┌───────────────────────────▼───────────────────────────────┐
-      │              WEB DASHBOARD (FastAPI + HTMX)               │
-      │         monitoring, config, knowledge viewer               │
-      └───────────────────────────────────────────────────────────┘
+│                        ONLINE ORCHESTRATOR                           │
+│             (watch output/alpaca + asyncio event loop)                │
+└───────────────┬───────────────────────────┬──────────────────────────┘
+                │                           │
+        ┌───────▼────────┐          ┌───────▼─────────┐
+        │ TRIAGE FILTER   │          │ EXPLORER        │
+        │ (skip vs invest)│          │ (multi-hop)     │
+        └───────┬────────┘          └───────┬─────────┘
+                │                           │
+                │                    ┌──────▼──────────┐
+                │                    │ SCHWAB CONTEXT   │
+                │                    │ (history+stream) │
+                │                    └──────┬──────────┘
+                │                           │
+                └───────────────┬───────────▼───────────┬───────────┐
+                                │   SNAPSHOT (sealed)   │           │
+                                │ (tool traces + ctx)    │           │
+                                └───────────┬────────────┘           │
+                                            │                        │
+                                    ┌───────▼────────┐       ┌───────▼────────┐
+                                    │ OFFLINE LABELER │       │ DASHBOARD       │
+                                    │ (+15m/+60m/...) │       │ (monitor/edit)  │
+                                    └───────┬────────┘       └────────────────┘
+                                            │
+                                    ┌───────▼────────┐
+                                    │ POLICY LEARNER  │
+                                    │ (weights/stops) │
+                                    └─────────────────┘
 ```
 
 ---
@@ -46,7 +77,7 @@ This is a **news-triggered, multi-LLM research pipeline** that watches for Alpac
 
 ### What to do instead:
 Build a **lightweight pipeline orchestrator** with:
-- **Explicit stages** (Triage → Research → Analysis → Decision)
+- **Explicit loop structure** (Online: triage + explore + capture; Offline: label + learn + propose)
 - A **unified LLM client wrapper** that lets you call OpenAI, Gemini, or Grok with the same interface
 - **Cost tracking** baked into every call
 - **Per-stage model config** in `.env` / config
@@ -127,60 +158,187 @@ REASONING_LEVEL=medium               # low/medium/high (controls token budget)
 
 ---
 
-### Stage 2: Deep Research & Web Search
+### Stage 2: Exploration (Multi-hop, Two-phase)
 
-**Purpose:** For articles that pass triage, gather comprehensive real-time context.
+This replaces the naive “parallel fan-out” design. Searches are **multi-hop** and explicitly recorded as an **action trace** so we can learn “which hop was worth it?” offline.
 
-**Process (parallel fan-out):**
+#### The correct mental model
 
-#### 2a. Web Search (OpenAI or Gemini):
-```python
-# Using OpenAI Responses API with web search
-response = openai_client.responses.create(
-    model="gpt-4o",
-    tools=[{"type": "web_search"}],
-    input=f"Find the latest real-time news and analysis about {symbols} "
-          f"related to: {headline}. Focus on information from the last "
-          f"1-12 hours. Evaluate source freshness and reliability."
-)
-```
+We want **asymmetric exploration**:
 
-#### 2b. Google Search Grounding (Gemini):
-```python
-# Using Gemini with Google Search grounding
-response = gemini_client.models.generate_content(
-    model='gemini-2.5-flash',
-    contents=f'What is the current market sentiment and latest developments for {symbols}?',
-    config=types.GenerateContentConfig(
-        tools=[types.Tool(google_search=types.GoogleSearch())]
-    )
-)
-# Extract grounding metadata for source evaluation
-sources = response.candidates[0].grounding_metadata.grounding_chunks
-```
+- **Phase 1:** wide, cheap, shallow → generate hypotheses
+- **Phase 2:** narrow, selective, deeper → confirm/deny top-K hypotheses
 
-#### 2c. X/Twitter Search (Grok):
-```python
-# Using Grok with x_search via OpenAI-compatible API
-grok_client = OpenAI(api_key=XAI_API_KEY, base_url="https://api.x.ai/v1")
-response = grok_client.responses.create(
-    model="grok-4-1-fast",
-    tools=[{"type": "x_search"}],
-    input=f"Search X/Twitter for real-time discussion, breaking news, "
-          f"and sentiment about ${symbols}. Focus on posts from the last "
-          f"few hours. Look for: insider information hints, unusual volume "
-          f"mentions, analyst reactions, institutional activity signals."
-)
-```
+The key rule is: **explore to create disagreement (competing narratives), not to accumulate volume.**
 
-#### 2d. Source evaluation:
-Cross-reference findings, check source domains against the learned "reliable sources" list, evaluate recency.
+#### Phase 1: Broad hypothesis generation (1 hop)
+
+Goal: enumerate plausible explanations and quickly assess recency.
+
+Typical actions (budgeted):
+- 1–2 `web_search` / `google_search` (high recall)
+- 1 `x_search` (broad, low filter)
+- 0–1 market anomaly checks (price/volume)
+
+Output: a small set of hypotheses like:
+- “rumor → confirmation pending”
+- “analyst reaction”
+- “macro spillover”
+- “recycled/false headline”
+
+#### Phase 2: Selective deepening (beam-like but gated)
+
+Keep only **top K hypotheses** (K=2–3). Each surviving hypothesis gets **one dedicated follow-up** using different tools/templates (enforce orthogonality).
+
+Stop early if marginal value < marginal cost.
 
 ---
 
-### Stage 3: Sentiment + Price Analysis
+## 5. Action Menu (Finite, Learnable)
 
-**Purpose:** Combine research findings with actual market data from Schwab.
+To make learning tractable, the explorer should choose from a **finite menu** of actions instead of inventing arbitrary queries each time.
+
+An action is:
+
+> (tool × query_template × constraints)
+
+The explorer’s job is to select the next action, given the current state summary.
+
+### Web search actions (OpenAI web_search / Gemini google_search)
+
+| Action ID | Template | Purpose |
+|---|---|---|
+| `news_confirmation` | `"latest confirmation of {headline} {symbol}"` | rumor → confirmation |
+| `breaking_followup` | `"breaking {symbol} today"` | freshness check |
+| `filing_check` | `"site:sec.gov {company} 8-K"` | regulatory catalyst |
+| `analyst_reaction` | `"analyst reaction {symbol}"` | secondary effects |
+
+### X search actions (Grok x_search)
+
+| Action ID | Template |
+|---|---|
+| `x_realtime_rumor` | `"{symbol} rumor OR hearing OR channel checks"` |
+| `x_volume_alerts` | `"{symbol} unusual volume"` |
+| `x_insider_accounts` | `"{symbol}" from:{trusted_handles}` |
+
+### Market-data-only actions (non-LLM)
+
+| Action ID | Purpose |
+|---|---|
+| `price_spike_check` | confirm move vs noise |
+| `volume_regime_shift` | detect abnormal activity |
+
+### Stop actions (also learnable)
+
+Stopping is a first-class decision.
+
+| Stop ID | Meaning |
+|---|---|
+| `STOP_CONFIRMED` | sufficient confirmation |
+| `STOP_LOW_SIGNAL` | evidence quality too weak |
+| `STOP_BUDGET` | marginal value < cost |
+| `STOP_REDUNDANT` | no new info vs prior hops |
+
+---
+
+## 6. Snapshot + ToolTrace (Atomic Learning Unit)
+
+Instead of treating “logs” as separate tables, we store a **single Snapshot artifact per event** that is replayable enough for offline learning.
+
+### Snapshot (v1) — suggested schema
+
+```json
+{
+  "snapshot_id": "uuid",
+  "version": "v1",
+  "created_at": "2026-02-09T14:32:11Z",
+  "trigger": {
+    "type": "alpaca_news",
+    "alpaca_timestamp": "2026-02-09T14:31:58Z",
+    "headline": "...",
+    "summary": "...",
+    "source": "reuters",
+    "symbols": ["NVDA", "AMD"]
+  },
+  "market_context": {
+    "session": "market_open | premarket | afterhours",
+    "spy_return_15m": -0.12,
+    "vix_level": 19.4
+  },
+  "price_context": {
+    "per_symbol": {
+      "NVDA": {
+        "last_price": 612.30,
+        "recent_candles_1m": [
+          {"t": "...", "o": 611.8, "h": 612.4, "l": 611.7, "c": 612.3, "v": 18234}
+        ]
+      }
+    }
+  },
+  "exploration_budget": {"max_hops": 3, "max_cost_usd": 0.35},
+  "tool_traces": [],
+  "prediction": {"direction": "up | down | none", "confidence": 0.71, "horizon": "60m"},
+  "cost_summary": {"total_usd": 0.21, "by_tool": {"web_search": 0.12, "x_search": 0.09}}
+}
+```
+
+### ToolTrace (one per hop)
+
+Each hop records: **state → action → observation → stop**.
+
+```json
+{
+  "trace_id": "trace_2",
+  "hop_index": 2,
+  "parent_trace_id": "trace_1",
+  "decision_context": {
+    "state_summary": "Rumor of NVDA supply constraint; no confirmation yet",
+    "reason_for_action": "seek confirmation from social / insiders"
+  },
+  "action": {
+    "tool": "x_search",
+    "provider": "grok",
+    "query_template": "x_realtime_rumor",
+    "query": "NVDA supply constraint OR shortage",
+    "filters": {"recency_hours": 6}
+  },
+  "execution": {
+    "model": "grok-4-1-fast",
+    "start_time": "2026-02-09T14:32:20Z",
+    "end_time": "2026-02-09T14:32:24Z",
+    "cost_usd": 0.045
+  },
+  "results": [
+    {
+      "rank": 1,
+      "source_type": "x_post",
+      "author": "@semianalyst",
+      "timestamp": "2026-02-09T14:20:11Z",
+      "text": "Hearing from channel checks that NVDA shipments delayed...",
+      "content_hash": "sha256:..."
+    }
+  ],
+  "extracted_signals": {"sentiment": "bullish", "novelty": "high", "confirmation_strength": "weak"},
+  "stop_signal": {"should_stop": false, "reason": "confirmation incomplete"}
+}
+```
+
+### Hard constraint
+
+**Never store “the internet” — store “the evidence”.**
+
+- store top K results per tool call (K=5–10)
+- store raw result fields + citations/grounding metadata
+- store a structured “takeaways” summary per hop
+- dedupe via content hash
+
+---
+
+## 7. Market Data: Price Context + Streaming (Schwab)
+
+We still use Schwab for:
+- historical candles for labeling + features
+- real-time streams for live context and monitoring
 
 **Process:**
 
@@ -203,26 +361,27 @@ Cross-reference findings, check source domains against the learned "reliable sou
    ))
    ```
 
-3. **Synthesis prompt** — feed everything to a strong reasoning model:
+3. **Synthesis prompt (optional)**
+
+   In capture-first mode, we can store an optional prediction, but the primary goal is still to seal a high-quality Snapshot.
+
    ```
    Given:
-   - News item: {headline + summary}
-   - Web research findings: {stage2a results}
-   - Google search findings: {stage2b results}  
-   - X/Twitter sentiment: {stage2c results}
-   - Price history: {recent candles, key levels, volume}
-   - Current price: {from stream}
-   - Knowledge store context: {relevant learned patterns}
-   
-   Evaluate: Is there a high-probability short-term trade opportunity?
-   Return: {opportunity: bool, direction: "long"|"short", confidence: 0-1,
-            entry_price: float, target_price: float, stop_loss: float,
-            time_horizon: "minutes"|"hours", reasoning: "..."}
+   - Trigger news: {headline + summary}
+   - Tool traces (multi-hop): {tool_traces with citations/grounding}
+   - Price context: {recent candles + stream last price + volume stats}
+   - Known policies/patterns: {skip patterns, reliable sources, current policy version}
+
+   Produce (optional):
+   - direction: up|down|none
+   - confidence: 0-1
+   - horizon: 15m|60m|1d
+   - short rationale referencing trace_ids
    ```
 
 ---
 
-### Stage 4: Decision + Position Monitoring
+## 8. Decision + Monitoring (Paper-first)
 
 **Purpose:** If Stage 3 identifies an opportunity, monitor and manage it.
 
@@ -238,19 +397,50 @@ Cross-reference findings, check source domains against the learned "reliable sou
 
 ---
 
-## 5. Knowledge Store (The Learning System)
+## 9. Offline Loop: Labeling + Learning + Proposals
+
+### 9a. Outcome labeling (define targets early)
+
+For each Snapshot, compute labels from market data (Schwab historical candles):
+
+- direction/return over horizons: **+15m**, **+60m**, **+1d** (start with 2–3 horizons)
+- optional magnitude buckets (e.g., >0.5%, >1%)
+- optional MFE/MAE (max favorable/adverse excursion)
+
+These labels let us backtest:
+- overall prediction accuracy
+- marginal value of each hop/tool/template ("was hop #2 worth $0.04?")
+
+### 9b. Policy learning (v1)
+
+Start simple:
+- weighted action selection over the Action Menu
+- heuristic stopping thresholds
+
+As data accumulates, upgrade to:
+- contextual bandit for action selection
+- learned stopping policy
+
+### 9c. Reflection (constrained)
+
+Reflection should generate **versioned proposals**, not mutate production logic.
+
+---
+
+## 10. Knowledge Store + Policies (What “Learning” Means)
 
 This is the most important long-term differentiator. A **hybrid storage** approach:
 
-### 5a. SQLite Database (`data/knowledge.db`)
+### 10a. SQLite Database
 
-Tables:
-- **`trade_log`** — every hypothetical/real trade with entry, exit, P&L, reasoning
-- **`news_log`** — every news item processed, triage decision, outcome
-- **`api_costs`** — every LLM/API call with provider, model, tokens, cost
-- **`search_log`** — every web/X search query, results quality rating
+Tables (initial):
+- **`snapshots`** — one row per Snapshot (JSON blob + metadata)
+- **`outcome_labels`** — computed returns per snapshot and horizon
+- **`policy_versions`** — active policy + historical versions
+- **`policy_proposals`** — offline-generated proposals + validation status
+- **`api_costs`** — per tool/model call costs (can also be embedded in Snapshot)
 
-### 5b. JSON Knowledge Files (`data/knowledge/`)
+### 10b. JSON Knowledge Files (`data/knowledge/`)
 
 Editable, human-readable files that the system reads and updates:
 
@@ -277,7 +467,7 @@ Example `skip_patterns.json`:
 }
 ```
 
-### 5c. Learning Loop
+### 10c. Offline learning loop (proposal-only)
 
 After each trade outcome (or periodical batch review):
 ```python
@@ -295,11 +485,25 @@ signal_patterns, anti_patterns.
 """
 ```
 
-The LLM proposes updates → stored as pending → auto-applied or human-reviewed (configurable).
+The offline loop produces **proposals** that are validated before becoming active policy.
+
+Example proposal:
+
+```json
+{
+  "proposal_id": "2026-02-09-R1",
+  "change_type": "adjust_action_weight",
+  "target": "x_realtime_rumor",
+  "delta": 0.12,
+  "evidence": ["snapshot_123", "snapshot_141"],
+  "expected_effect": "improves 60m direction accuracy by ~3%",
+  "rollback_condition": "accuracy < baseline after 50 samples"
+}
+```
 
 ---
 
-## 6. Learning Mode
+## 11. Learning Mode (Exploration Controls)
 
 A special operating mode where the system:
 
@@ -314,12 +518,15 @@ A special operating mode where the system:
 LEARNING_MODE=true
 LEARNING_TRIAGE_THRESHOLD=0.3    # lower = investigate more (vs 0.6 in production)
 LEARNING_REFLECTION_INTERVAL=50  # reflect every N news items
-LEARNING_EXPLORE_RATE=0.3        # 30% of time, try alternative strategies
+LEARNING_EXPLORE_RATE=0.3        # 30% of events allow extra breadth
+MAX_PHASE1_ACTIONS=4
+MAX_PHASE2_BRANCHES=2
+MAX_TOTAL_HOPS=3
 ```
 
 ---
 
-## 7. Cost Control & Monitoring
+## 12. Cost Control & Monitoring
 
 ### Per-call tracking:
 ```python
@@ -349,7 +556,7 @@ COST_ALERT_THRESHOLD=0.80  # alert at 80% of daily budget
 
 ---
 
-## 8. Web Dashboard (FastAPI + HTMX)
+## 13. Web Dashboard (FastAPI + HTMX)
 
 A lightweight dashboard for monitoring and control:
 
@@ -369,7 +576,7 @@ A lightweight dashboard for monitoring and control:
 
 ---
 
-## 9. Project Structure
+## 14. Project Structure (Revised)
 
 ```
 alpaca-news/
@@ -377,24 +584,35 @@ alpaca-news/
 │   └── news_websocket.py          # existing - news ingestion
 ├── schwab/
 │   └── main.py                    # existing - schwab client example
-├── trader/                        # NEW - main application
+├── trader/                        # main application
 │   ├── __init__.py
 │   ├── main.py                    # entry point - starts pipeline + dashboard
 │   ├── config.py                  # loads .env, runtime config management
-│   ├── pipeline/
+│   ├── online/
 │   │   ├── __init__.py
-│   │   ├── orchestrator.py        # watches output/alpaca, dispatches stages
-│   │   ├── triage.py              # Stage 1: news filtering
-│   │   ├── research.py            # Stage 2: web/X search
-│   │   ├── analysis.py            # Stage 3: sentiment + price analysis
-│   │   ├── monitor.py             # Stage 4: position monitoring
-│   │   └── prompts/               # all LLM prompts as .md files
+│   │   ├── orchestrator.py        # watches output/alpaca, seals snapshots
+│   │   ├── triage.py              # Stage 1
+│   │   ├── explorer.py            # Stage 2 (two-phase multi-hop)
+│   │   ├── price_capture.py       # Schwab context capture
+│   │   └── monitor.py             # monitoring loop (paper-first)
+│   ├── offline/
+│   │   ├── __init__.py
+│   │   ├── labeler.py             # attach outcomes (+15m/+60m/+1d)
+│   │   ├── scorer.py              # estimate hop/tool value
+│   │   ├── policy.py              # propose updates
+│   │   └── validator.py           # validate before activation
+│   ├── models/
+│   │   ├── __init__.py
+│   │   ├── snapshot.py            # Snapshot schema + helpers
+│   │   ├── tool_trace.py          # ToolTrace schema + helpers
+│   │   └── actions.py             # finite action menu + stopping actions
+│   ├── prompts/                   # all LLM prompts as .md files
 │   │       ├── triage.md
-│   │       ├── research_web.md
-│   │       ├── research_x.md
-│   │       ├── analysis.md
+│   │       ├── explore_phase1.md
+│   │       ├── explore_phase2.md
+│   │       ├── hypothesis_rank.md
 │   │       ├── decision.md
-│   │       └── reflection.md
+│   │       └── reflection_offline.md
 │   ├── llm/
 │   │   ├── __init__.py
 │   │   ├── client.py              # unified LLM client (OpenAI/Gemini/Grok)
@@ -441,26 +659,25 @@ alpaca-news/
 
 ---
 
-## 10. Implementation Phases
+## 15. Implementation Phases (Revised)
 
-### Phase 1: Foundation (Start here)
-- Unified LLM client with OpenAI, Gemini, Grok support
-- Cost tracker
-- Config system (.env loading)
-- Basic pipeline orchestrator (watchdog on output/alpaca/)
-- Stage 1: News triage filter (working end-to-end)
+### Phase 1: Capture-first (Start here)
+- Snapshot + ToolTrace schema + persistence (SQLite + JSON)
+- Online orchestrator watches `output/alpaca/` and **seals Snapshots**
+- Stage 1 triage filter
+- Minimal Phase 1 exploration actions (1 web + 1 X) recorded as traces
+- Cost tracker integrated into Snapshot
 
-### Phase 2: Research Pipeline
-- Stage 2: Web search (OpenAI + Gemini + Grok x_search)
-- Schwab client wrapper (price history + streaming)
-- Stage 3: Sentiment + price analysis
-- SQLite logging (news_log, api_costs)
+### Phase 2: Explorer v1 (Action Menu + Two-phase)
+- Implement finite action menu + stopping actions
+- Two-phase exploration with top-K hypothesis selection
+- Orthogonality enforcement / redundancy detection
+- Schwab context capture (history + stream) included in Snapshot
 
-### Phase 3: Knowledge & Learning
-- Knowledge store (JSON files)
-- Learning loop / reflection engine
-- Trade logging with hypothetical P&L
-- Learning mode
+### Phase 3: Offline labeling + policy proposals
+- Outcome labeler (+15m/+60m/+1d returns)
+- Policy proposal generator (weights, stop thresholds, source lists)
+- Validator to prevent bad updates
 
 ### Phase 4: Dashboard & Monitoring
 - FastAPI web dashboard
