@@ -9,6 +9,7 @@ requires-python = ">=3.12"
 dependencies = [
   "alpaca-py",
   "python-dotenv>=1.0.0",
+  "pytz>=2025.2",
   "schwabdev>=3.0.1",
 ]
 

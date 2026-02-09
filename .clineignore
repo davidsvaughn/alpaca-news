@@ -1,0 +1,27 @@
+classify/
+finscore-api/
+flask/
+ft/
+
+output/tmp/
+output/train_data/
+
+schwab/archive/
+
+*.zip
+
+# Ignore everything
+# *
+
+# # don't ignore
+# !alpaca/
+# !alpaca/**
+
+# !cline/
+# !cline/**
+
+# !output/
+# !output/**
+
+# !schwab/
+# !schwab/**
