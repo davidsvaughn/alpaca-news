@@ -1,0 +1,77 @@
+{
+  "snapshot_id": "e943f215-9fb7-450e-b525-bfee7165b789",
+  "version": "v1",
+  "created_at": "2026-02-09T22:33:30.225100+00:00",
+  "trigger": {
+    "type": "alpaca_news",
+    "alpaca_timestamp": "2026-02-09T22:33:28+00:00",
+    "headline": "Mediobanca Q2 Adj. EPS $0.45 Up From $0.43 YoY, Sales $1.069B Up From $1.049B YoY",
+    "summary": "Mediobanca (OTC:MDIBY) reported quarterly earnings of $0.45 per share. This is a 4.65 percent increase over earnings of $0.43 per share from the same period last year.  The company reported $1.069 billion in sales this",
+    "source": "benzinga",
+    "symbols": [
+      "MDIBY"
+    ],
+    "raw": {
+      "id": 50498514,
+      "headline": "Mediobanca Q2 Adj. EPS $0.45 Up From $0.43 YoY, Sales $1.069B Up From $1.049B YoY",
+      "source": "benzinga",
+      "url": "https://www.benzinga.com/news/earnings/26/02/50498514/mediobanca-q2-adj-eps-0-45-up-from-0-43-yoy-sales-1-069b-up-from-1-049b-yoy",
+      "summary": "Mediobanca (OTC:MDIBY) reported quarterly earnings of $0.45 per share. This is a 4.65 percent increase over earnings of $0.43 per share from the same period last year.  The company reported $1.069 billion in sales this",
+      "created_at": "2026-02-09T22:33:28+00:00",
+      "updated_at": "2026-02-09T22:33:29+00:00",
+      "symbols": [
+        "MDIBY"
+      ],
+      "author": "Benzinga Newsdesk",
+      "content": "Mediobanca (OTC:<a class=\"ticker\" href=\"https://www.benzinga.com/quote/MDIBY\">MDIBY</a>) reported quarterly earnings of $0.45 per share. This is a 4.65 percent increase over earnings of $0.43 per share from the same period last year.  The company reported $1.069 billion in sales this quarter. This is a 1.91 percent increase over sales of $1.049 billion the same period last year.",
+      "images": null
+    }
+  },
+  "market_context": {},
+  "price_context": {},
+  "exploration_budget": {
+    "max_hops": 3,
+    "max_cost_usd": 0.35
+  },
+  "tool_traces": [
+    {
+      "trace_id": "trace_1",
+      "hop_index": 1,
+      "parent_trace_id": null,
+      "decision_context": {
+        "state_summary": "MOCK_LLM enabled; no external evidence gathered.",
+        "reason_for_action": "Phase1: broad evidence gathering"
+      },
+      "action": {
+        "tool": "web_search",
+        "provider": "openai",
+        "query_template": "phase1_evidence",
+        "query": "(implicit by model)",
+        "filters": {
+          "max_items": 8
+        }
+      },
+      "execution": {
+        "model": "gpt-5-mini",
+        "start_time": "2026-02-09T22:33:30.225384+00:00",
+        "end_time": "2026-02-09T22:33:30.225394+00:00",
+        "cost_usd": 0.0
+      },
+      "results": [],
+      "extracted_signals": {
+        "takeaways": [
+          "MOCK_LLM: run with real keys to gather evidence"
+        ]
+      },
+      "stop_signal": {
+        "should_stop": true,
+        "reason": "Phase 1 complete"
+      }
+    }
+  ],
+  "prediction": {},
+  "cost_summary": {
+    "total_usd": 0.0,
+    "by_tool": {}
+  }
+}

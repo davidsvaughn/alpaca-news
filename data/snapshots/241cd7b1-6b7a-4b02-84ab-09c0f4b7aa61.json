@@ -1,0 +1,77 @@
+{
+  "snapshot_id": "241cd7b1-6b7a-4b02-84ab-09c0f4b7aa61",
+  "version": "v1",
+  "created_at": "2026-02-09T22:32:35.895067+00:00",
+  "trigger": {
+    "type": "alpaca_news",
+    "alpaca_timestamp": "2026-02-09T22:27:07+00:00",
+    "headline": "Momentus May Offer And Sell Through Sales Agent Pursuant To ATM  Agreement Up To $50M Shares Of Common Stock-",
+    "summary": "-SEC Filing",
+    "source": "benzinga",
+    "symbols": [
+      "MNTS"
+    ],
+    "raw": {
+      "id": 50498429,
+      "headline": "Momentus May Offer And Sell Through Sales Agent Pursuant To ATM  Agreement Up To $50M Shares Of Common Stock-",
+      "source": "benzinga",
+      "url": "https://www.benzinga.com/news/26/02/50498429/momentus-may-offer-and-sell-through-sales-agent-pursuant-to-atm-agreement-up-to-50m-shares-of-common",
+      "summary": "-SEC Filing",
+      "created_at": "2026-02-09T22:27:07+00:00",
+      "updated_at": "2026-02-09T22:27:07+00:00",
+      "symbols": [
+        "MNTS"
+      ],
+      "author": "Benzinga Newsdesk",
+      "content": "<p>-SEC Filing</p>",
+      "images": null
+    }
+  },
+  "market_context": {},
+  "price_context": {},
+  "exploration_budget": {
+    "max_hops": 3,
+    "max_cost_usd": 0.35
+  },
+  "tool_traces": [
+    {
+      "trace_id": "trace_1",
+      "hop_index": 1,
+      "parent_trace_id": null,
+      "decision_context": {
+        "state_summary": "MOCK_LLM enabled; no external evidence gathered.",
+        "reason_for_action": "Phase1: broad evidence gathering"
+      },
+      "action": {
+        "tool": "web_search",
+        "provider": "openai",
+        "query_template": "phase1_evidence",
+        "query": "(implicit by model)",
+        "filters": {
+          "max_items": 8
+        }
+      },
+      "execution": {
+        "model": "gpt-5-mini",
+        "start_time": "2026-02-09T22:32:35.895307+00:00",
+        "end_time": "2026-02-09T22:32:35.895318+00:00",
+        "cost_usd": 0.0
+      },
+      "results": [],
+      "extracted_signals": {
+        "takeaways": [
+          "MOCK_LLM: run with real keys to gather evidence"
+        ]
+      },
+      "stop_signal": {
+        "should_stop": true,
+        "reason": "Phase 1 complete"
+      }
+    }
+  ],
+  "prediction": {},
+  "cost_summary": {
+    "total_usd": 0.0,
+    "by_tool": {}
+  }
+}

@@ -86,6 +86,11 @@ class Settings:
     # SSE
     sse_ping_interval_s: float
 
+    # Dev/testing
+    mock_llm: bool
+    backfill_on_start: bool
+    backfill_limit: int
+
 
 def load_settings(*, dotenv_path: str | None = None) -> Settings:
     """Load settings from environment.
@@ -132,6 +137,10 @@ def load_settings(*, dotenv_path: str | None = None) -> Settings:
 
     sse_ping_interval_s = _env_float("SSE_PING_INTERVAL_S", 10.0)
 
+    mock_llm = _env_bool("MOCK_LLM", False)
+    backfill_on_start = _env_bool("BACKFILL_ON_START", False)
+    backfill_limit = _env_int("BACKFILL_LIMIT", 50)
+
     return Settings(
         learning_mode=learning_mode,
         trading_mode=trading_mode,  # type: ignore[arg-type]
@@ -154,4 +163,7 @@ def load_settings(*, dotenv_path: str | None = None) -> Settings:
         max_web_searches_per_item=max_web_searches_per_item,
         max_x_searches_per_item=max_x_searches_per_item,
         sse_ping_interval_s=sse_ping_interval_s,
+        mock_llm=mock_llm,
+        backfill_on_start=backfill_on_start,
+        backfill_limit=backfill_limit,
     )

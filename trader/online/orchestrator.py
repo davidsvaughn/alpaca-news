@@ -24,6 +24,7 @@ from trader.db.database import Database, insert_snapshot
 from trader.knowledge.store import KnowledgeStore
 from trader.llm.client import LLMClient
 from trader.llm.cost_tracker import CostTracker
+from trader.llm.mock import MockLLMClient
 from trader.models.snapshot import Snapshot, Trigger
 from trader.online.explorer import explore_phase1
 from trader.online.triage import run_triage
@@ -90,11 +91,14 @@ def process_news_file(
         max_cost_per_item=settings.max_cost_per_news_item,
         debug=settings.debug,
     )
-    llm = LLMClient(cost_tracker=cost_tracker)
+    if settings.mock_llm:
+        llm: object = MockLLMClient()
+    else:
+        llm = LLMClient(cost_tracker=cost_tracker)
 
     # Stage 1
     triage = run_triage(
-        llm=llm,
+        llm=llm,  # type: ignore[arg-type]
         provider=settings.triage_provider,
         model=settings.triage_model,
         knowledge=knowledge,
@@ -119,7 +123,7 @@ def process_news_file(
     if triage.action == "investigate":
         # Stage 2 (Phase 1 minimal)
         explore = explore_phase1(
-            llm=llm,
+            llm=llm,  # type: ignore[arg-type]
             provider=settings.research_provider,
             model=settings.research_model,
             news=news,
@@ -132,7 +136,7 @@ def process_news_file(
     snap_dict = snapshot.to_dict()
     snap_dict["tool_traces"] = tool_traces
     snap_dict["cost_summary"] = {
-        "total_usd": cost_tracker.daily_spent,
+        "total_usd": getattr(cost_tracker, "daily_spent", 0.0),
         "by_tool": {},
     }
 
