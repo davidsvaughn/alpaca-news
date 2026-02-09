@@ -3,12 +3,13 @@ name = "alpaca-news"
 version = "0.1.0"
 description = "tools for processing financial text (i.e. news)"
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.12"
 
 # Core dependencies for the Alpaca websocket workflow
 dependencies = [
   "alpaca-py",
   "python-dotenv>=1.0.0",
+  "schwabdev>=3.0.1",
 ]
 
 # Optional dependency groups for uv

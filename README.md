@@ -7,7 +7,8 @@ git clone https://github.com/davidsvaughn/alpaca-news.git
 cd alpaca-news
 
 # create a virtualenv + install dependencies from pyproject.toml
-uv venv --python 3.10
+uv venv --python /usr/bin/python3.12
+source .venv/bin/activate
 uv sync
 ```
 
@@ -25,6 +26,12 @@ Run scripts inside the env:
 
 ```bash
 uv run python alpaca/news_websocket.py
+```
+
+Add a dependency (example):
+
+```bash
+uv add schwabdev
 ```
 
 # alpaca
