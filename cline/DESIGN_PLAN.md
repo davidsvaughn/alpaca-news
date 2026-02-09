@@ -431,7 +431,7 @@ Reflection should generate **versioned proposals**, not mutate production logic.
 
 This is the most important long-term differentiator. A **hybrid storage** approach:
 
-### 10a. SQLite Database
+### 10a. Database (Postgres)
 
 Tables (initial):
 - **`snapshots`** — one row per Snapshot (JSON blob + metadata)
@@ -528,6 +528,18 @@ MAX_TOTAL_HOPS=3
 
 ## 12. Cost Control & Monitoring
 
+### Pricing source of truth
+
+Maintain a single pricing table for all providers/tools in:
+
+`trader/llm/pricing.py`
+
+This should include:
+- per-1M-token rates (input/output)
+- per-call tool fees (e.g. OpenAI `web_search`, Grok `x_search`)
+
+**Note:** tool pricing, especially Google Search grounding, may change and should be treated as configurable/estimated until confirmed.
+
 ### Per-call tracking:
 ```python
 class CostTracker:
@@ -556,7 +568,33 @@ COST_ALERT_THRESHOLD=0.80  # alert at 80% of daily budget
 
 ---
 
-## 13. Web Dashboard (FastAPI + HTMX)
+## 13. Storage & Deployment (Postgres / Supabase)
+
+### Recommendation
+
+- **Default datastore: Postgres** (local Docker for dev; managed Postgres/Supabase for prod if desired)
+- SQLite can still be useful for **unit tests / quick prototypes**, but the system’s “native” persistence should be Postgres.
+
+### Why Postgres fits this system
+
+This system stores lots of **Snapshots** (JSON) + derived labels + policy versions, and will have concurrent writers (online capture, offline labeler, dashboard edits). Postgres supports:
+
+- **JSONB** for Snapshot/ToolTrace storage (queryable + indexable)
+- strong concurrency & integrity guarantees
+- future extensions (e.g., `pgvector` for similarity search over past snapshots)
+
+### Supabase (optional)
+
+Supabase is helpful as *infra convenience* (managed Postgres, auth, dashboards), especially if you want remote access to the UI.
+
+If using Supabase, I’d still keep the core design:
+
+- store **evidence, not the internet** (cap tool results, dedupe, avoid unbounded page dumps)
+- store immutable Snapshots and append-only audit logs
+
+---
+
+## 14. Web Dashboard (FastAPI + HTMX)
 
 A lightweight dashboard for monitoring and control:
 
@@ -572,11 +610,53 @@ A lightweight dashboard for monitoring and control:
 - **FastAPI** backend (async, fast)
 - **HTMX** for dynamic updates without heavy JS framework
 - **SSE (Server-Sent Events)** for real-time streaming of pipeline activity
-- **SQLite** for all persistent data (zero infrastructure)
+- **Postgres** for persistence (local Docker for dev; Supabase optional)
+
+### Streamlit (optional “offline workbench”)
+
+Streamlit can be useful later as a **research/analysis UI** (offline loop), e.g.:
+
+- browsing Snapshots + outcome labels
+- quick plotting (PnL curves, confusion matrices)
+- manual inspection/triage of policy proposals
+
+But I would not replace the operational FastAPI dashboard with Streamlit.
 
 ---
 
-## 14. Project Structure (Revised)
+## 15. Real Trading Readiness (Design Now, Enable Later)
+
+Since you eventually want live trades, we should design the execution layer up front with hard safety boundaries.
+
+### Mode flags
+
+Use a hard guard:
+
+```env
+TRADING_MODE=paper   # paper|live
+```
+
+### Risk controls (enforced outside the LLM)
+
+- max daily loss
+- max position size / max notional exposure
+- max concurrent positions
+- kill switch
+
+### Audit log
+
+Store immutable records for:
+
+- every recommendation (with snapshot_id)
+- every order request (payload)
+- every broker response
+- every fill/cancel/replace
+
+This pairs naturally with the Snapshot: you can always answer “why did we trade?”
+
+---
+
+## 16. Project Structure (Revised)
 
 ```
 alpaca-news/
@@ -637,7 +717,7 @@ alpaca-news/
 │   ├── db/
 │   │   ├── __init__.py
 │   │   ├── models.py              # SQLAlchemy models
-│   │   └── database.py            # SQLite connection management
+│   │   └── database.py            # database connection management (Postgres)
 │   └── web/
 │       ├── __init__.py
 │       ├── app.py                 # FastAPI app
@@ -650,8 +730,7 @@ alpaca-news/
 │           ├── costs.html
 │           ├── knowledge.html
 │           └── config.html
-├── data/                          # runtime data
-│   └── knowledge.db               # SQLite database
+├── data/                          # runtime files (knowledge JSON, exports, reports)
 ├── output/
 │   └── alpaca/                    # news articles (existing)
 └── .env
@@ -659,10 +738,10 @@ alpaca-news/
 
 ---
 
-## 15. Implementation Phases (Revised)
+## 17. Implementation Phases (Revised)
 
 ### Phase 1: Capture-first (Start here)
-- Snapshot + ToolTrace schema + persistence (SQLite + JSON)
+- Snapshot + ToolTrace schema + persistence (**Postgres JSONB** + JSON knowledge files)
 - Online orchestrator watches `output/alpaca/` and **seals Snapshots**
 - Stage 1 triage filter
 - Minimal Phase 1 exploration actions (1 web + 1 X) recorded as traces
@@ -693,14 +772,17 @@ alpaca-news/
 
 ---
 
-## Open Questions
+## Decisions + Remaining Questions
 
-1. **Database choice:** SQLite proposed for zero-infrastructure simplicity. Postgres is also available (psycopg2 in requirements.txt). Which do you prefer?
+### Decisions captured
 
-2. **Dashboard framework:** FastAPI + HTMX proposed (lightweight, async). Flask is already in the project. Preference?
+- **Database:** Postgres (Supabase optional); SQLite only for tests/prototyping.
+- **Dashboard:** FastAPI + HTMX for operational control.
+- **Trading:** design for eventual live execution; default to paper mode.
+- **Schwab OAuth:** already completed.
 
-3. **Real trades vs. paper only:** Should the system ever execute real trades through Schwab, or is this purely a research/recommendation tool?
+### Remaining questions
 
-4. **Schwab auth flow:** schwabdev requires OAuth — has the token setup flow been completed, or does the system need to handle that?
-
-5. **Starting phase:** Ready to begin with Phase 1?
+1. **Postgres hosting path (now):** do you want to start with local Docker Postgres, or immediately use Supabase?
+2. **Live-trading safety workflow:** when `TRADING_MODE=live`, should we require manual confirmation in the UI for every order, or allow fully automated orders after a “session unlock”?
+3. **Streamlit workbench:** do you want a Streamlit app in Phase 4/5 for offline analysis, or keep everything in the FastAPI dashboard?
