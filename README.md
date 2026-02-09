@@ -5,8 +5,26 @@ tools for processing financial text (i.e. news)
 ```
 git clone https://github.com/davidsvaughn/alpaca-news.git
 cd alpaca-news
-virtualenv -p python3.10 .venv && source .venv/bin/activate
-pip install -U pip alpaca-py python-dotenv
+
+# create a virtualenv + install dependencies from pyproject.toml
+uv venv --python 3.10
+uv sync
+```
+
+Optional dependency groups:
+
+```bash
+# deps for classify/ workflows
+uv sync --group classify
+
+# deps for ft/ fine-tuning workflows
+uv sync --group ft
+```
+
+Run scripts inside the env:
+
+```bash
+uv run python alpaca/news_websocket.py
 ```
 
 # alpaca

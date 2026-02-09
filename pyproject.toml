@@ -1,0 +1,41 @@
+[project]
+name = "alpaca-news"
+version = "0.1.0"
+description = "tools for processing financial text (i.e. news)"
+readme = "README.md"
+requires-python = ">=3.10"
+
+# Core dependencies for the Alpaca websocket workflow
+dependencies = [
+  "alpaca-py",
+  "python-dotenv>=1.0.0",
+]
+
+# Optional dependency groups for uv
+[dependency-groups]
+
+# Dependencies for the classify/ workflows
+classify = [
+  "langchain>=0.3.0",
+  "langchain-openai>=0.2.0",
+  "langchain-core>=0.3.0",
+  "aiofiles>=23.0.0",
+  "python-dotenv>=1.0.0",
+  "tqdm>=4.66.0",
+  "pydantic>=2.0.0",
+]
+
+# Dependencies for the ft/ fine-tuning workflows
+ft = [
+  "datasets",
+  "scikit-learn",
+  "pandas",
+  "wandb",
+  "tqdm",
+  "unsloth",
+  "unsloth_zoo",
+  "bitsandbytes",
+  "accelerate",
+  "transformers",
+  "llmcompressor",
+]
