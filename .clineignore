@@ -6,6 +6,7 @@ ft/
 output/tmp/
 output/train_data/
 
+archive/
 schwab/archive/
 
 *.zip
