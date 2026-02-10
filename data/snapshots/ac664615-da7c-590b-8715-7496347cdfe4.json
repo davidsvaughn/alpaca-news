@@ -1,0 +1,2088 @@
+{
+  "snapshot_id": "ac664615-da7c-590b-8715-7496347cdfe4",
+  "version": "v1",
+  "created_at": "2026-02-10T03:54:41.599375+00:00",
+  "trigger": {
+    "type": "alpaca_news",
+    "alpaca_timestamp": "2026-02-10T03:28:57+00:00",
+    "headline": "Trump Weighs Broad Chip Tariffs But Plans To Shield Big Tech Companies Like Amazon, Microsoft And Google Through TSMC-Linked Exemptions: Report",
+    "summary": "The Trump administration is weighing broad semiconductor tariffs while planning TSMC-linked exemptions to shield Amazon, Microsoft and Google from higher chip costs as they scale AI data centers, according to a report.",
+    "source": "benzinga",
+    "symbols": [
+      "AMD",
+      "AMZN",
+      "GOOG",
+      "GOOGL",
+      "MSFT",
+      "NVDA",
+      "TSM"
+    ],
+    "raw": {
+      "id": 50500182,
+      "headline": "Trump Weighs Broad Chip Tariffs But Plans To Shield Big Tech Companies Like Amazon, Microsoft And Google Through TSMC-Linked Exemptions: Report",
+      "source": "benzinga",
+      "url": "https://www.benzinga.com/markets/tech/26/02/50500182/trump-weighs-broad-chip-tariffs-but-plans-to-shield-big-tech-companies-like-amazon-microsoft-and-google-through-tsmc-linked-exemptions-report",
+      "summary": "The Trump administration is weighing broad semiconductor tariffs while planning TSMC-linked exemptions to shield Amazon, Microsoft and Google from higher chip costs as they scale AI data centers, according to a report.",
+      "created_at": "2026-02-10T03:28:57+00:00",
+      "updated_at": "2026-02-10T03:28:58+00:00",
+      "symbols": [
+        "AMD",
+        "AMZN",
+        "GOOG",
+        "GOOGL",
+        "MSFT",
+        "NVDA",
+        "TSM"
+      ],
+      "author": "Ananya Gairola",
+      "content": "<p>The <strong>Donald Trump</strong> administration is reportedly considering sweeping <a href=\"https://www.benzinga.com/markets/tech/26/01/49867629/how-taiwan-semiconductor-is-buying-its-way-out-of-tariffs\">new tariffs on imported semiconductors</a> while simultaneously crafting exemptions designed to protect big tech's AI expansion.</p>\n\n\n\n<h2 class=\"wp-block-heading\"><strong>Tariffs With Targeted Relief For AI Giants</strong></h2>\n\n\n\n<p>The Commerce Department is planning a system of tariff carve-outs that would spare U.S. hyperscalers such as <strong>Amazon.com, Inc.</strong> <a href=\"https://www.benzinga.com/quote/AMZN\" target=\"_blank\" class=\"ticker-link\" data-ticker=\"AMZN\" data-exchange=\"NASDAQ\" rel=\"noopener\">(NASDAQ:<a class=\"ticker\" href=\"https://www.benzinga.com/quote/AMZN\">AMZN</a>)</a>, <strong>Microsoft Corp </strong><a href=\"https://www.benzinga.com/quote/MSFT\" target=\"_blank\" class=\"ticker-link\" data-ticker=\"MSFT\" data-exchange=\"NASDAQ\" rel=\"noopener\">(NASDAQ:<a class=\"ticker\" href=\"https://www.benzinga.com/quote/MSFT\">MSFT</a>)</a> and <strong>Alphabet Inc.'s</strong> <a href=\"https://www.benzinga.com/quote/GOOG\" target=\"_blank\" class=\"ticker-link\" data-ticker=\"GOOG\" data-exchange=\"NASDAQ\" rel=\"noopener\">(NASDAQ:<a class=\"ticker\" href=\"https://www.benzinga.com/quote/GOOG\">GOOG</a>)</a> <a href=\"https://www.benzinga.com/quote/GOOGL\" target=\"_blank\" class=\"ticker-link\" data-ticker=\"GOOGL\" data-exchange=\"NASDAQ\" rel=\"noopener\">(NASDAQ:<a class=\"ticker\" href=\"https://www.benzinga.com/quote/GOOGL\">GOOGL</a>)</a> <strong>Google</strong> from higher chip costs, <a href=\"https://www.ft.com/content/e6f7f69a-2552-45f5-ae4c-6f1135e5cde1\">reported</a> the Financial Times on Monday, citing people familiar with the matter.</p>\n\n\n\n<p>The move comes as companies race to build data centers that power the artificial intelligence boom.</p>\n\n\n\n<h2 class=\"wp-block-heading\"><strong>TSMC Investment Tied To Exemptions</strong></h2>\n\n\n\n<p>At the center of the plan is <strong>Taiwan Semiconductor Manufacturing Company</strong> <a href=\"https://www.benzinga.com/quote/TSM\" target=\"_blank\" class=\"ticker-link\" data-ticker=\"TSM\" data-exchange=\"NYSE\" rel=\"noopener\">(NYSE:<a class=\"ticker\" href=\"https://www.benzinga.com/quote/TSM\">TSM</a>)</a>, the world's leading contract chipmaker and a key supplier to U.S. technology companies.</p>\n\n\n\n<p>The exemption framework would link tariff relief to the scale of TSMC's investments in American manufacturing, the report said.</p>\n\n\n\n<p>TSMC has <a href=\"https://www.benzinga.com/markets/25/03/44486436/tsmcs-165-billion-bet-on-us-chip-manufacturing-raises-alarms-in-taiwan-amid-china-threat-experts-warn-taipei-must-plan-beyond-its-silicon-shield\">pledged to invest $165 billion</a> to expand its U.S. footprint, part of Washington's broader effort to reduce reliance on foreign chip production.</p>\n\n\n\n<p>Under a U.S.-Taiwan trade agreement, Taiwanese firms building semiconductor plants in the U.S. would be allowed to import chips tariff-free in proportion to their planned domestic capacity.</p>\n\n\n\n<p>TSMC would then be able to pass those exemptions on to its U.S. customers.</p>\n\n\n\n<h2 class=\"wp-block-heading\"><strong>White House Keeps Pressure On</strong></h2>\n\n\n\n<p>While the carve-outs offer relief, administration officials stressed the plan is still evolving.</p>\n\n\n\n<p>One official told the publication that policymakers will closely scrutinize the program to ensure it does not become \"a giveaway to TSMC\" and that it aligns with the administration's broader tariff goals.</p>\n\n\n\n<p>TSMC, the Commerce Department and White House did not immediately respond to Benzinga’s request for comments.</p>\n\n\n\n<h2 class=\"wp-block-heading\"><strong>Limited Tariffs Already In Place</strong></h2>\n\n\n\n<p>In January, the Trump administration <a href=\"https://www.benzinga.com/markets/tech/26/01/49925163/trump-targets-taiwan-china-supply-chains-president-slaps-25-tariffs-on-nvidia-amd-ai-chips-under-national-security-order\">imposed 25% tariffs on a narrow</a> group of chips re-exported by <strong>Advanced Micro Devices, Inc.</strong> <a href=\"https://www.benzinga.com/quote/AMD\" target=\"_blank\" class=\"ticker-link\" data-ticker=\"AMD\" data-exchange=\"NASDAQ\" rel=\"noopener\">(NASDAQ:<a class=\"ticker\" href=\"https://www.benzinga.com/quote/AMD\">AMD</a>)</a> and <strong>Nvidia Corp </strong><a href=\"https://www.benzinga.com/quote/NVDA\" target=\"_blank\" class=\"ticker-link\" data-ticker=\"NVDA\" data-exchange=\"NASDAQ\" rel=\"noopener\">(NASDAQ:<a class=\"ticker\" href=\"https://www.benzinga.com/quote/NVDA\">NVDA</a>)</a>.</p>\n\n\n\n<p>The move enforced a White House deal <a href=\"https://www.benzinga.com/markets/tech/26/01/49895512/trump-administration-clears-nvidias-h200-ai-chip-sales-to-china-but-beijing-reportedly-limits-purchases-to-special-cases\">allowing Nvidia to ship its H200 chips</a> to China in exchange for a 25% government cut of sales.</p>\n\n\n\n<p>Currently, only a narrow set of chips imported into the U.S. and then re-exported to China are subject to tariffs. Chips used for domestic AI infrastructure have so far been excluded.</p>\n\n\n\n<p><strong>Price Action:</strong> In after-hours trading, Amazon shares rose 0.077%, Microsoft gained 0.49%, while Alphabet's Class A shares slipped 0.018% and Class C shares fell 0.083%, according to Benzinga Pro.</p>\n\n\n\n<p>Amazon <a href=\"https://www.benzinga.com/quote/AMZN/analyst-ratings\">shares score highly</a> on <strong>Benzinga's Edge Stock Rankings</strong> for quality, but show a negative price trend across short, medium and long-term time frames.</p>\n\n\n\n<figure class=\"wp-block-image size-full\"><img decoding=\"async\" src=\"https://editorial-assets.benzinga.com/wp-content/uploads/2026/02/09221717/Screenshot-2026-02-10-at-8.43.44%E2%80%AFAM.png\" alt=\"\" class=\"wp-image-1301059\"/></figure>\n\n\n\n<p><em><strong>Disclaimer:</strong> This content was partially produced with the help of AI tools and was reviewed and published by Benzinga editors.</em></p>\n\n\n\n<p><em>Image via Shutterstock/ Pla2na</em></p>",
+      "images": null
+    }
+  },
+  "market_context": {
+    "session": "afterhours",
+    "spy_last": 693.7,
+    "spy_net_change": 3.08,
+    "spy_net_pct_change": 0.44597608,
+    "vix_level": 17.36
+  },
+  "price_context": {
+    "per_symbol": {
+      "AMD": {
+        "last_price": 215.1399,
+        "bid": 215.12,
+        "ask": 215.14,
+        "total_volume": 38810841,
+        "net_change": 6.6999,
+        "net_pct_change": 3.21430628,
+        "mark": 215.14,
+        "recent_candles_1m": [
+          {
+            "t": "2026-02-07T00:26:00+00:00",
+            "o": 208.88,
+            "h": 208.9,
+            "l": 208.8,
+            "c": 208.9,
+            "v": 1465
+          },
+          {
+            "t": "2026-02-07T00:27:00+00:00",
+            "o": 208.95,
+            "h": 208.97,
+            "l": 208.95,
+            "c": 208.97,
+            "v": 1050
+          },
+          {
+            "t": "2026-02-07T00:28:00+00:00",
+            "o": 208.95,
+            "h": 208.97,
+            "l": 208.9,
+            "c": 208.9001,
+            "v": 2893
+          },
+          {
+            "t": "2026-02-07T00:29:00+00:00",
+            "o": 208.89,
+            "h": 208.89,
+            "l": 208.84,
+            "c": 208.84,
+            "v": 1069
+          },
+          {
+            "t": "2026-02-07T00:31:00+00:00",
+            "o": 208.8509,
+            "h": 208.8509,
+            "l": 208.8,
+            "c": 208.85,
+            "v": 2000
+          },
+          {
+            "t": "2026-02-07T00:32:00+00:00",
+            "o": 208.84,
+            "h": 208.85,
+            "l": 208.8,
+            "c": 208.85,
+            "v": 3456
+          },
+          {
+            "t": "2026-02-07T00:33:00+00:00",
+            "o": 208.75,
+            "h": 208.75,
+            "l": 208.7,
+            "c": 208.7,
+            "v": 906
+          },
+          {
+            "t": "2026-02-07T00:34:00+00:00",
+            "o": 208.75,
+            "h": 208.8828,
+            "l": 208.75,
+            "c": 208.8828,
+            "v": 451
+          },
+          {
+            "t": "2026-02-07T00:35:00+00:00",
+            "o": 208.75,
+            "h": 208.8795,
+            "l": 208.75,
+            "c": 208.8795,
+            "v": 600
+          },
+          {
+            "t": "2026-02-07T00:37:00+00:00",
+            "o": 208.7911,
+            "h": 208.8,
+            "l": 208.791,
+            "c": 208.7975,
+            "v": 1697
+          },
+          {
+            "t": "2026-02-07T00:38:00+00:00",
+            "o": 208.78,
+            "h": 208.78,
+            "l": 208.78,
+            "c": 208.78,
+            "v": 188
+          },
+          {
+            "t": "2026-02-07T00:39:00+00:00",
+            "o": 208.89,
+            "h": 208.89,
+            "l": 208.8768,
+            "c": 208.8768,
+            "v": 306
+          },
+          {
+            "t": "2026-02-07T00:41:00+00:00",
+            "o": 208.8,
+            "h": 208.89,
+            "l": 208.7975,
+            "c": 208.88,
+            "v": 1680
+          },
+          {
+            "t": "2026-02-07T00:42:00+00:00",
+            "o": 208.75,
+            "h": 208.889,
+            "l": 208.75,
+            "c": 208.889,
+            "v": 1252
+          },
+          {
+            "t": "2026-02-07T00:44:00+00:00",
+            "o": 208.88,
+            "h": 208.88,
+            "l": 208.75,
+            "c": 208.75,
+            "v": 1019
+          },
+          {
+            "t": "2026-02-07T00:45:00+00:00",
+            "o": 208.8873,
+            "h": 208.8893,
+            "l": 208.8873,
+            "c": 208.8893,
+            "v": 350
+          },
+          {
+            "t": "2026-02-07T00:46:00+00:00",
+            "o": 208.85,
+            "h": 208.89,
+            "l": 208.84,
+            "c": 208.88,
+            "v": 2800
+          },
+          {
+            "t": "2026-02-07T00:47:00+00:00",
+            "o": 208.89,
+            "h": 208.89,
+            "l": 208.8899,
+            "c": 208.89,
+            "v": 942
+          },
+          {
+            "t": "2026-02-07T00:48:00+00:00",
+            "o": 208.88,
+            "h": 208.88,
+            "l": 208.85,
+            "c": 208.85,
+            "v": 624
+          },
+          {
+            "t": "2026-02-07T00:49:00+00:00",
+            "o": 208.88,
+            "h": 208.89,
+            "l": 208.84,
+            "c": 208.87,
+            "v": 1400
+          },
+          {
+            "t": "2026-02-07T00:50:00+00:00",
+            "o": 208.88,
+            "h": 208.88,
+            "l": 208.88,
+            "c": 208.88,
+            "v": 1192
+          },
+          {
+            "t": "2026-02-07T00:51:00+00:00",
+            "o": 208.888,
+            "h": 208.89,
+            "l": 208.85,
+            "c": 208.85,
+            "v": 2952
+          },
+          {
+            "t": "2026-02-07T00:52:00+00:00",
+            "o": 208.89,
+            "h": 208.89,
+            "l": 208.85,
+            "c": 208.85,
+            "v": 1580
+          },
+          {
+            "t": "2026-02-07T00:53:00+00:00",
+            "o": 208.87,
+            "h": 208.87,
+            "l": 208.87,
+            "c": 208.87,
+            "v": 130
+          },
+          {
+            "t": "2026-02-07T00:54:00+00:00",
+            "o": 208.8515,
+            "h": 208.9,
+            "l": 208.85,
+            "c": 208.8899,
+            "v": 2905
+          },
+          {
+            "t": "2026-02-07T00:55:00+00:00",
+            "o": 208.9794,
+            "h": 208.9794,
+            "l": 208.88,
+            "c": 208.88,
+            "v": 2699
+          },
+          {
+            "t": "2026-02-07T00:56:00+00:00",
+            "o": 208.851,
+            "h": 208.8518,
+            "l": 208.8,
+            "c": 208.8,
+            "v": 1503
+          },
+          {
+            "t": "2026-02-07T00:57:00+00:00",
+            "o": 208.8,
+            "h": 208.8001,
+            "l": 208.761,
+            "c": 208.8,
+            "v": 1509
+          },
+          {
+            "t": "2026-02-07T00:58:00+00:00",
+            "o": 208.7748,
+            "h": 208.8,
+            "l": 208.77,
+            "c": 208.8,
+            "v": 1900
+          },
+          {
+            "t": "2026-02-07T00:59:00+00:00",
+            "o": 208.75,
+            "h": 208.8,
+            "l": 208.63,
+            "c": 208.63,
+            "v": 5995
+          }
+        ]
+      },
+      "AMZN": {
+        "last_price": 208.87,
+        "bid": 208.86,
+        "ask": 208.87,
+        "total_volume": 91178443,
+        "net_change": -1.45,
+        "net_pct_change": -0.68942564,
+        "mark": 208.86,
+        "recent_candles_1m": [
+          {
+            "t": "2026-02-07T00:28:00+00:00",
+            "o": 210.01,
+            "h": 210.01,
+            "l": 209.98,
+            "c": 209.98,
+            "v": 1102
+          },
+          {
+            "t": "2026-02-07T00:29:00+00:00",
+            "o": 209.98,
+            "h": 209.98,
+            "l": 209.97,
+            "c": 209.98,
+            "v": 499
+          },
+          {
+            "t": "2026-02-07T00:30:00+00:00",
+            "o": 209.98,
+            "h": 209.98,
+            "l": 209.98,
+            "c": 209.98,
+            "v": 358
+          },
+          {
+            "t": "2026-02-07T00:31:00+00:00",
+            "o": 210.0,
+            "h": 210.0,
+            "l": 209.96,
+            "c": 209.96,
+            "v": 220
+          },
+          {
+            "t": "2026-02-07T00:32:00+00:00",
+            "o": 209.9985,
+            "h": 209.9985,
+            "l": 209.94,
+            "c": 209.95,
+            "v": 672
+          },
+          {
+            "t": "2026-02-07T00:33:00+00:00",
+            "o": 209.91,
+            "h": 209.91,
+            "l": 209.9,
+            "c": 209.9,
+            "v": 7307
+          },
+          {
+            "t": "2026-02-07T00:34:00+00:00",
+            "o": 209.88,
+            "h": 209.88,
+            "l": 209.81,
+            "c": 209.81,
+            "v": 542
+          },
+          {
+            "t": "2026-02-07T00:35:00+00:00",
+            "o": 209.85,
+            "h": 209.9,
+            "l": 209.85,
+            "c": 209.8555,
+            "v": 1055
+          },
+          {
+            "t": "2026-02-07T00:36:00+00:00",
+            "o": 209.94,
+            "h": 209.94,
+            "l": 209.9,
+            "c": 209.91,
+            "v": 625
+          },
+          {
+            "t": "2026-02-07T00:37:00+00:00",
+            "o": 209.8977,
+            "h": 209.8977,
+            "l": 209.8977,
+            "c": 209.8977,
+            "v": 100
+          },
+          {
+            "t": "2026-02-07T00:38:00+00:00",
+            "o": 209.9392,
+            "h": 209.9392,
+            "l": 209.9,
+            "c": 209.9,
+            "v": 902
+          },
+          {
+            "t": "2026-02-07T00:39:00+00:00",
+            "o": 209.94,
+            "h": 209.94,
+            "l": 209.94,
+            "c": 209.94,
+            "v": 100
+          },
+          {
+            "t": "2026-02-07T00:40:00+00:00",
+            "o": 209.8893,
+            "h": 209.9,
+            "l": 209.8893,
+            "c": 209.9,
+            "v": 470
+          },
+          {
+            "t": "2026-02-07T00:42:00+00:00",
+            "o": 209.93,
+            "h": 209.9307,
+            "l": 209.93,
+            "c": 209.9307,
+            "v": 327
+          },
+          {
+            "t": "2026-02-07T00:43:00+00:00",
+            "o": 209.94,
+            "h": 209.94,
+            "l": 209.9,
+            "c": 209.9,
+            "v": 679
+          },
+          {
+            "t": "2026-02-07T00:44:00+00:00",
+            "o": 209.9,
+            "h": 209.94,
+            "l": 209.88,
+            "c": 209.88,
+            "v": 900
+          },
+          {
+            "t": "2026-02-07T00:45:00+00:00",
+            "o": 209.8901,
+            "h": 209.8901,
+            "l": 209.8901,
+            "c": 209.8901,
+            "v": 100
+          },
+          {
+            "t": "2026-02-07T00:46:00+00:00",
+            "o": 209.94,
+            "h": 209.94,
+            "l": 209.89,
+            "c": 209.8918,
+            "v": 721
+          },
+          {
+            "t": "2026-02-07T00:48:00+00:00",
+            "o": 209.93,
+            "h": 209.97,
+            "l": 209.93,
+            "c": 209.97,
+            "v": 1753
+          },
+          {
+            "t": "2026-02-07T00:49:00+00:00",
+            "o": 209.97,
+            "h": 209.97,
+            "l": 209.96,
+            "c": 209.97,
+            "v": 1530
+          },
+          {
+            "t": "2026-02-07T00:50:00+00:00",
+            "o": 209.9799,
+            "h": 209.9799,
+            "l": 209.9799,
+            "c": 209.9799,
+            "v": 100
+          },
+          {
+            "t": "2026-02-07T00:51:00+00:00",
+            "o": 209.9769,
+            "h": 210.0294,
+            "l": 209.9769,
+            "c": 210.0294,
+            "v": 4358
+          },
+          {
+            "t": "2026-02-07T00:52:00+00:00",
+            "o": 210.0374,
+            "h": 210.04,
+            "l": 210.02,
+            "c": 210.04,
+            "v": 1700
+          },
+          {
+            "t": "2026-02-07T00:53:00+00:00",
+            "o": 210.04,
+            "h": 210.1,
+            "l": 210.04,
+            "c": 210.0823,
+            "v": 1167
+          },
+          {
+            "t": "2026-02-07T00:54:00+00:00",
+            "o": 210.04,
+            "h": 210.09,
+            "l": 210.02,
+            "c": 210.02,
+            "v": 1125
+          },
+          {
+            "t": "2026-02-07T00:55:00+00:00",
+            "o": 210.09,
+            "h": 210.0985,
+            "l": 210.09,
+            "c": 210.09,
+            "v": 2902
+          },
+          {
+            "t": "2026-02-07T00:56:00+00:00",
+            "o": 210.0902,
+            "h": 210.0902,
+            "l": 210.0502,
+            "c": 210.08,
+            "v": 2039
+          },
+          {
+            "t": "2026-02-07T00:57:00+00:00",
+            "o": 210.05,
+            "h": 210.05,
+            "l": 209.96,
+            "c": 210.0,
+            "v": 4706
+          },
+          {
+            "t": "2026-02-07T00:58:00+00:00",
+            "o": 210.05,
+            "h": 210.05,
+            "l": 209.9155,
+            "c": 209.9155,
+            "v": 2475
+          },
+          {
+            "t": "2026-02-07T00:59:00+00:00",
+            "o": 209.9445,
+            "h": 210.05,
+            "l": 209.93,
+            "c": 210.0499,
+            "v": 4404
+          }
+        ]
+      },
+      "GOOG": {
+        "last_price": 324.39,
+        "bid": 324.08,
+        "ask": 324.4,
+        "total_volume": 26103255,
+        "net_change": 1.29,
+        "net_pct_change": 0.3992572,
+        "mark": 324.4,
+        "recent_candles_1m": [
+          {
+            "t": "2026-02-06T23:58:00+00:00",
+            "o": 323.87,
+            "h": 323.87,
+            "l": 323.87,
+            "c": 323.87,
+            "v": 309
+          },
+          {
+            "t": "2026-02-07T00:00:00+00:00",
+            "o": 323.85,
+            "h": 323.85,
+            "l": 323.85,
+            "c": 323.85,
+            "v": 100
+          },
+          {
+            "t": "2026-02-07T00:03:00+00:00",
+            "o": 323.85,
+            "h": 323.85,
+            "l": 323.85,
+            "c": 323.85,
+            "v": 200
+          },
+          {
+            "t": "2026-02-07T00:07:00+00:00",
+            "o": 323.87,
+            "h": 323.87,
+            "l": 323.87,
+            "c": 323.87,
+            "v": 100
+          },
+          {
+            "t": "2026-02-07T00:10:00+00:00",
+            "o": 323.9,
+            "h": 323.9,
+            "l": 323.9,
+            "c": 323.9,
+            "v": 481
+          },
+          {
+            "t": "2026-02-07T00:11:00+00:00",
+            "o": 323.6689,
+            "h": 323.6689,
+            "l": 323.6689,
+            "c": 323.6689,
+            "v": 400
+          },
+          {
+            "t": "2026-02-07T00:12:00+00:00",
+            "o": 323.99,
+            "h": 323.99,
+            "l": 323.99,
+            "c": 323.99,
+            "v": 150
+          },
+          {
+            "t": "2026-02-07T00:13:00+00:00",
+            "o": 323.99,
+            "h": 323.99,
+            "l": 323.99,
+            "c": 323.99,
+            "v": 105
+          },
+          {
+            "t": "2026-02-07T00:14:00+00:00",
+            "o": 323.9,
+            "h": 323.9,
+            "l": 323.9,
+            "c": 323.9,
+            "v": 100
+          },
+          {
+            "t": "2026-02-07T00:15:00+00:00",
+            "o": 323.99,
+            "h": 323.99,
+            "l": 323.73,
+            "c": 323.73,
+            "v": 279
+          },
+          {
+            "t": "2026-02-07T00:17:00+00:00",
+            "o": 323.95,
+            "h": 323.95,
+            "l": 323.95,
+            "c": 323.95,
+            "v": 100
+          },
+          {
+            "t": "2026-02-07T00:23:00+00:00",
+            "o": 323.8,
+            "h": 323.8,
+            "l": 323.8,
+            "c": 323.8,
+            "v": 240
+          },
+          {
+            "t": "2026-02-07T00:24:00+00:00",
+            "o": 323.78,
+            "h": 323.8,
+            "l": 323.72,
+            "c": 323.72,
+            "v": 1323
+          },
+          {
+            "t": "2026-02-07T00:26:00+00:00",
+            "o": 323.91,
+            "h": 323.91,
+            "l": 323.8,
+            "c": 323.8,
+            "v": 200
+          },
+          {
+            "t": "2026-02-07T00:29:00+00:00",
+            "o": 323.8,
+            "h": 323.8,
+            "l": 323.8,
+            "c": 323.8,
+            "v": 136
+          },
+          {
+            "t": "2026-02-07T00:33:00+00:00",
+            "o": 323.9,
+            "h": 323.9,
+            "l": 323.9,
+            "c": 323.9,
+            "v": 144
+          },
+          {
+            "t": "2026-02-07T00:34:00+00:00",
+            "o": 323.94,
+            "h": 323.94,
+            "l": 323.94,
+            "c": 323.94,
+            "v": 100
+          },
+          {
+            "t": "2026-02-07T00:36:00+00:00",
+            "o": 323.88,
+            "h": 323.88,
+            "l": 323.88,
+            "c": 323.88,
+            "v": 100
+          },
+          {
+            "t": "2026-02-07T00:40:00+00:00",
+            "o": 324.0,
+            "h": 324.0,
+            "l": 323.9992,
+            "c": 323.9992,
+            "v": 200
+          },
+          {
+            "t": "2026-02-07T00:44:00+00:00",
+            "o": 323.9233,
+            "h": 323.9233,
+            "l": 323.9233,
+            "c": 323.9233,
+            "v": 150
+          },
+          {
+            "t": "2026-02-07T00:45:00+00:00",
+            "o": 323.91,
+            "h": 323.9901,
+            "l": 323.91,
+            "c": 323.99,
+            "v": 558
+          },
+          {
+            "t": "2026-02-07T00:46:00+00:00",
+            "o": 323.91,
+            "h": 323.99,
+            "l": 323.91,
+            "c": 323.9761,
+            "v": 700
+          },
+          {
+            "t": "2026-02-07T00:47:00+00:00",
+            "o": 323.9003,
+            "h": 323.9003,
+            "l": 323.9,
+            "c": 323.9,
+            "v": 273
+          },
+          {
+            "t": "2026-02-07T00:49:00+00:00",
+            "o": 323.9,
+            "h": 323.9,
+            "l": 323.9,
+            "c": 323.9,
+            "v": 100
+          },
+          {
+            "t": "2026-02-07T00:50:00+00:00",
+            "o": 323.897,
+            "h": 323.897,
+            "l": 323.8805,
+            "c": 323.8805,
+            "v": 402
+          },
+          {
+            "t": "2026-02-07T00:52:00+00:00",
+            "o": 323.8833,
+            "h": 323.8833,
+            "l": 323.88,
+            "c": 323.88,
+            "v": 420
+          },
+          {
+            "t": "2026-02-07T00:54:00+00:00",
+            "o": 323.93,
+            "h": 323.93,
+            "l": 323.93,
+            "c": 323.93,
+            "v": 500
+          },
+          {
+            "t": "2026-02-07T00:55:00+00:00",
+            "o": 323.93,
+            "h": 323.93,
+            "l": 323.9199,
+            "c": 323.9201,
+            "v": 1890
+          },
+          {
+            "t": "2026-02-07T00:58:00+00:00",
+            "o": 323.92,
+            "h": 323.92,
+            "l": 323.9191,
+            "c": 323.92,
+            "v": 500
+          },
+          {
+            "t": "2026-02-07T00:59:00+00:00",
+            "o": 323.91,
+            "h": 323.98,
+            "l": 323.9014,
+            "c": 323.98,
+            "v": 2374
+          }
+        ]
+      },
+      "GOOGL": {
+        "last_price": 324.26,
+        "bid": 324.25,
+        "ask": 324.4,
+        "total_volume": 39640055,
+        "net_change": 1.4,
+        "net_pct_change": 0.43362448,
+        "mark": 324.32,
+        "recent_candles_1m": [
+          {
+            "t": "2026-02-07T00:25:00+00:00",
+            "o": 323.55,
+            "h": 323.55,
+            "l": 323.55,
+            "c": 323.55,
+            "v": 100
+          },
+          {
+            "t": "2026-02-07T00:27:00+00:00",
+            "o": 323.5423,
+            "h": 323.5489,
+            "l": 323.5423,
+            "c": 323.5489,
+            "v": 855
+          },
+          {
+            "t": "2026-02-07T00:29:00+00:00",
+            "o": 323.5,
+            "h": 323.55,
+            "l": 323.5,
+            "c": 323.55,
+            "v": 775
+          },
+          {
+            "t": "2026-02-07T00:30:00+00:00",
+            "o": 323.55,
+            "h": 323.55,
+            "l": 323.55,
+            "c": 323.55,
+            "v": 1147
+          },
+          {
+            "t": "2026-02-07T00:33:00+00:00",
+            "o": 323.72,
+            "h": 323.72,
+            "l": 323.72,
+            "c": 323.72,
+            "v": 398
+          },
+          {
+            "t": "2026-02-07T00:34:00+00:00",
+            "o": 323.71,
+            "h": 323.71,
+            "l": 323.71,
+            "c": 323.71,
+            "v": 250
+          },
+          {
+            "t": "2026-02-07T00:35:00+00:00",
+            "o": 323.6983,
+            "h": 323.6983,
+            "l": 323.6983,
+            "c": 323.6983,
+            "v": 100
+          },
+          {
+            "t": "2026-02-07T00:36:00+00:00",
+            "o": 323.66,
+            "h": 323.66,
+            "l": 323.66,
+            "c": 323.66,
+            "v": 140
+          },
+          {
+            "t": "2026-02-07T00:37:00+00:00",
+            "o": 323.7007,
+            "h": 323.71,
+            "l": 323.7007,
+            "c": 323.71,
+            "v": 400
+          },
+          {
+            "t": "2026-02-07T00:38:00+00:00",
+            "o": 323.72,
+            "h": 323.72,
+            "l": 323.72,
+            "c": 323.72,
+            "v": 150
+          },
+          {
+            "t": "2026-02-07T00:39:00+00:00",
+            "o": 323.7,
+            "h": 323.72,
+            "l": 323.7,
+            "c": 323.72,
+            "v": 588
+          },
+          {
+            "t": "2026-02-07T00:40:00+00:00",
+            "o": 323.7,
+            "h": 323.75,
+            "l": 323.7,
+            "c": 323.75,
+            "v": 2137
+          },
+          {
+            "t": "2026-02-07T00:41:00+00:00",
+            "o": 323.73,
+            "h": 323.73,
+            "l": 323.7,
+            "c": 323.7,
+            "v": 1525
+          },
+          {
+            "t": "2026-02-07T00:42:00+00:00",
+            "o": 323.74,
+            "h": 323.74,
+            "l": 323.74,
+            "c": 323.74,
+            "v": 100
+          },
+          {
+            "t": "2026-02-07T00:44:00+00:00",
+            "o": 323.73,
+            "h": 323.82,
+            "l": 323.73,
+            "c": 323.82,
+            "v": 3361
+          },
+          {
+            "t": "2026-02-07T00:45:00+00:00",
+            "o": 323.85,
+            "h": 323.85,
+            "l": 323.85,
+            "c": 323.85,
+            "v": 100
+          },
+          {
+            "t": "2026-02-07T00:46:00+00:00",
+            "o": 323.85,
+            "h": 323.85,
+            "l": 323.85,
+            "c": 323.85,
+            "v": 100
+          },
+          {
+            "t": "2026-02-07T00:47:00+00:00",
+            "o": 323.8179,
+            "h": 323.8179,
+            "l": 323.8179,
+            "c": 323.8179,
+            "v": 100
+          },
+          {
+            "t": "2026-02-07T00:48:00+00:00",
+            "o": 323.83,
+            "h": 323.83,
+            "l": 323.77,
+            "c": 323.77,
+            "v": 600
+          },
+          {
+            "t": "2026-02-07T00:49:00+00:00",
+            "o": 323.73,
+            "h": 323.73,
+            "l": 323.73,
+            "c": 323.73,
+            "v": 100
+          },
+          {
+            "t": "2026-02-07T00:50:00+00:00",
+            "o": 323.8,
+            "h": 323.8,
+            "l": 323.8,
+            "c": 323.8,
+            "v": 500
+          },
+          {
+            "t": "2026-02-07T00:51:00+00:00",
+            "o": 323.7,
+            "h": 323.7,
+            "l": 323.7,
+            "c": 323.7,
+            "v": 300
+          },
+          {
+            "t": "2026-02-07T00:52:00+00:00",
+            "o": 323.7,
+            "h": 323.7,
+            "l": 323.7,
+            "c": 323.7,
+            "v": 245
+          },
+          {
+            "t": "2026-02-07T00:53:00+00:00",
+            "o": 323.72,
+            "h": 323.72,
+            "l": 323.7,
+            "c": 323.7,
+            "v": 2689
+          },
+          {
+            "t": "2026-02-07T00:54:00+00:00",
+            "o": 323.63,
+            "h": 323.63,
+            "l": 323.63,
+            "c": 323.63,
+            "v": 289
+          },
+          {
+            "t": "2026-02-07T00:55:00+00:00",
+            "o": 323.63,
+            "h": 323.8,
+            "l": 323.63,
+            "c": 323.8,
+            "v": 1301
+          },
+          {
+            "t": "2026-02-07T00:56:00+00:00",
+            "o": 323.77,
+            "h": 323.77,
+            "l": 323.689,
+            "c": 323.689,
+            "v": 600
+          },
+          {
+            "t": "2026-02-07T00:57:00+00:00",
+            "o": 323.69,
+            "h": 323.75,
+            "l": 323.6899,
+            "c": 323.75,
+            "v": 1700
+          },
+          {
+            "t": "2026-02-07T00:58:00+00:00",
+            "o": 323.67,
+            "h": 323.67,
+            "l": 323.67,
+            "c": 323.67,
+            "v": 180
+          },
+          {
+            "t": "2026-02-07T00:59:00+00:00",
+            "o": 323.7481,
+            "h": 323.78,
+            "l": 323.7017,
+            "c": 323.78,
+            "v": 2682
+          }
+        ]
+      },
+      "MSFT": {
+        "last_price": 415.73,
+        "bid": 415.65,
+        "ask": 415.75,
+        "total_volume": 45480526,
+        "net_change": 14.59,
+        "net_pct_change": 3.63713417,
+        "mark": 415.65,
+        "recent_candles_1m": [
+          {
+            "t": "2026-02-07T00:30:00+00:00",
+            "o": 402.55,
+            "h": 402.55,
+            "l": 402.55,
+            "c": 402.55,
+            "v": 100
+          },
+          {
+            "t": "2026-02-07T00:31:00+00:00",
+            "o": 402.55,
+            "h": 402.6,
+            "l": 402.55,
+            "c": 402.6,
+            "v": 278
+          },
+          {
+            "t": "2026-02-07T00:32:00+00:00",
+            "o": 402.56,
+            "h": 402.57,
+            "l": 402.56,
+            "c": 402.57,
+            "v": 182
+          },
+          {
+            "t": "2026-02-07T00:33:00+00:00",
+            "o": 402.6,
+            "h": 402.6,
+            "l": 402.55,
+            "c": 402.56,
+            "v": 806
+          },
+          {
+            "t": "2026-02-07T00:34:00+00:00",
+            "o": 402.5999,
+            "h": 402.5999,
+            "l": 402.5,
+            "c": 402.5001,
+            "v": 290
+          },
+          {
+            "t": "2026-02-07T00:35:00+00:00",
+            "o": 402.5881,
+            "h": 402.5881,
+            "l": 402.51,
+            "c": 402.51,
+            "v": 270
+          },
+          {
+            "t": "2026-02-07T00:36:00+00:00",
+            "o": 402.58,
+            "h": 402.6,
+            "l": 402.54,
+            "c": 402.54,
+            "v": 500
+          },
+          {
+            "t": "2026-02-07T00:37:00+00:00",
+            "o": 402.6,
+            "h": 402.68,
+            "l": 402.5,
+            "c": 402.5,
+            "v": 1637
+          },
+          {
+            "t": "2026-02-07T00:38:00+00:00",
+            "o": 402.58,
+            "h": 402.58,
+            "l": 402.55,
+            "c": 402.55,
+            "v": 120
+          },
+          {
+            "t": "2026-02-07T00:39:00+00:00",
+            "o": 402.5279,
+            "h": 402.64,
+            "l": 402.5279,
+            "c": 402.64,
+            "v": 150
+          },
+          {
+            "t": "2026-02-07T00:40:00+00:00",
+            "o": 402.51,
+            "h": 402.51,
+            "l": 402.51,
+            "c": 402.51,
+            "v": 450
+          },
+          {
+            "t": "2026-02-07T00:41:00+00:00",
+            "o": 402.63,
+            "h": 402.63,
+            "l": 402.63,
+            "c": 402.63,
+            "v": 40
+          },
+          {
+            "t": "2026-02-07T00:42:00+00:00",
+            "o": 402.66,
+            "h": 402.68,
+            "l": 402.66,
+            "c": 402.68,
+            "v": 159
+          },
+          {
+            "t": "2026-02-07T00:43:00+00:00",
+            "o": 402.6,
+            "h": 402.6,
+            "l": 402.6,
+            "c": 402.6,
+            "v": 58
+          },
+          {
+            "t": "2026-02-07T00:44:00+00:00",
+            "o": 402.68,
+            "h": 402.87,
+            "l": 402.68,
+            "c": 402.87,
+            "v": 985
+          },
+          {
+            "t": "2026-02-07T00:45:00+00:00",
+            "o": 402.91,
+            "h": 402.91,
+            "l": 402.9,
+            "c": 402.9,
+            "v": 631
+          },
+          {
+            "t": "2026-02-07T00:46:00+00:00",
+            "o": 402.85,
+            "h": 402.85,
+            "l": 402.67,
+            "c": 402.7501,
+            "v": 1187
+          },
+          {
+            "t": "2026-02-07T00:47:00+00:00",
+            "o": 402.75,
+            "h": 402.8,
+            "l": 402.75,
+            "c": 402.8,
+            "v": 589
+          },
+          {
+            "t": "2026-02-07T00:48:00+00:00",
+            "o": 402.95,
+            "h": 402.96,
+            "l": 402.83,
+            "c": 402.95,
+            "v": 1552
+          },
+          {
+            "t": "2026-02-07T00:49:00+00:00",
+            "o": 402.96,
+            "h": 402.96,
+            "l": 402.95,
+            "c": 402.95,
+            "v": 595
+          },
+          {
+            "t": "2026-02-07T00:50:00+00:00",
+            "o": 402.96,
+            "h": 402.96,
+            "l": 402.95,
+            "c": 402.95,
+            "v": 339
+          },
+          {
+            "t": "2026-02-07T00:51:00+00:00",
+            "o": 402.9478,
+            "h": 402.96,
+            "l": 402.9,
+            "c": 402.9005,
+            "v": 1334
+          },
+          {
+            "t": "2026-02-07T00:52:00+00:00",
+            "o": 402.9507,
+            "h": 402.9507,
+            "l": 402.83,
+            "c": 402.92,
+            "v": 254
+          },
+          {
+            "t": "2026-02-07T00:53:00+00:00",
+            "o": 402.9,
+            "h": 402.96,
+            "l": 402.9,
+            "c": 402.95,
+            "v": 1384
+          },
+          {
+            "t": "2026-02-07T00:54:00+00:00",
+            "o": 402.9543,
+            "h": 402.99,
+            "l": 402.8,
+            "c": 402.99,
+            "v": 744
+          },
+          {
+            "t": "2026-02-07T00:55:00+00:00",
+            "o": 402.95,
+            "h": 402.99,
+            "l": 402.95,
+            "c": 402.95,
+            "v": 674
+          },
+          {
+            "t": "2026-02-07T00:56:00+00:00",
+            "o": 402.89,
+            "h": 402.9,
+            "l": 402.83,
+            "c": 402.9,
+            "v": 727
+          },
+          {
+            "t": "2026-02-07T00:57:00+00:00",
+            "o": 402.9,
+            "h": 403.0,
+            "l": 402.9,
+            "c": 402.9999,
+            "v": 1394
+          },
+          {
+            "t": "2026-02-07T00:58:00+00:00",
+            "o": 402.9577,
+            "h": 403.0,
+            "l": 402.9577,
+            "c": 403.0,
+            "v": 2156
+          },
+          {
+            "t": "2026-02-07T00:59:00+00:00",
+            "o": 403.0,
+            "h": 403.2,
+            "l": 403.0,
+            "c": 403.0,
+            "v": 906
+          }
+        ]
+      },
+      "NVDA": {
+        "last_price": 189.695,
+        "bid": 189.69,
+        "ask": 189.7,
+        "total_volume": 196387351,
+        "net_change": 4.285,
+        "net_pct_change": 2.31109433,
+        "mark": 189.7,
+        "recent_candles_1m": [
+          {
+            "t": "2026-02-07T00:30:00+00:00",
+            "o": 185.3496,
+            "h": 185.3497,
+            "l": 185.33,
+            "c": 185.33,
+            "v": 860
+          },
+          {
+            "t": "2026-02-07T00:31:00+00:00",
+            "o": 185.33,
+            "h": 185.3301,
+            "l": 185.31,
+            "c": 185.31,
+            "v": 4133
+          },
+          {
+            "t": "2026-02-07T00:32:00+00:00",
+            "o": 185.33,
+            "h": 185.33,
+            "l": 185.31,
+            "c": 185.32,
+            "v": 1429
+          },
+          {
+            "t": "2026-02-07T00:33:00+00:00",
+            "o": 185.3197,
+            "h": 185.32,
+            "l": 185.31,
+            "c": 185.32,
+            "v": 11214
+          },
+          {
+            "t": "2026-02-07T00:34:00+00:00",
+            "o": 185.3199,
+            "h": 185.32,
+            "l": 185.31,
+            "c": 185.3131,
+            "v": 826
+          },
+          {
+            "t": "2026-02-07T00:35:00+00:00",
+            "o": 185.32,
+            "h": 185.33,
+            "l": 185.32,
+            "c": 185.33,
+            "v": 2088
+          },
+          {
+            "t": "2026-02-07T00:36:00+00:00",
+            "o": 185.3294,
+            "h": 185.38,
+            "l": 185.3199,
+            "c": 185.38,
+            "v": 8412
+          },
+          {
+            "t": "2026-02-07T00:37:00+00:00",
+            "o": 185.34,
+            "h": 185.35,
+            "l": 185.3315,
+            "c": 185.35,
+            "v": 1430
+          },
+          {
+            "t": "2026-02-07T00:38:00+00:00",
+            "o": 185.36,
+            "h": 185.37,
+            "l": 185.35,
+            "c": 185.37,
+            "v": 1642
+          },
+          {
+            "t": "2026-02-07T00:39:00+00:00",
+            "o": 185.35,
+            "h": 185.3501,
+            "l": 185.3162,
+            "c": 185.33,
+            "v": 3022
+          },
+          {
+            "t": "2026-02-07T00:40:00+00:00",
+            "o": 185.3699,
+            "h": 185.3699,
+            "l": 185.28,
+            "c": 185.28,
+            "v": 3045
+          },
+          {
+            "t": "2026-02-07T00:41:00+00:00",
+            "o": 185.29,
+            "h": 185.3098,
+            "l": 185.25,
+            "c": 185.2696,
+            "v": 2349
+          },
+          {
+            "t": "2026-02-07T00:42:00+00:00",
+            "o": 185.26,
+            "h": 185.2601,
+            "l": 185.22,
+            "c": 185.2308,
+            "v": 3143
+          },
+          {
+            "t": "2026-02-07T00:43:00+00:00",
+            "o": 185.24,
+            "h": 185.24,
+            "l": 185.1806,
+            "c": 185.1806,
+            "v": 3900
+          },
+          {
+            "t": "2026-02-07T00:44:00+00:00",
+            "o": 185.17,
+            "h": 185.1985,
+            "l": 185.15,
+            "c": 185.1585,
+            "v": 17281
+          },
+          {
+            "t": "2026-02-07T00:45:00+00:00",
+            "o": 185.15,
+            "h": 185.17,
+            "l": 185.15,
+            "c": 185.16,
+            "v": 5331
+          },
+          {
+            "t": "2026-02-07T00:46:00+00:00",
+            "o": 185.15,
+            "h": 185.2,
+            "l": 185.15,
+            "c": 185.1895,
+            "v": 3978
+          },
+          {
+            "t": "2026-02-07T00:47:00+00:00",
+            "o": 185.19,
+            "h": 185.1999,
+            "l": 185.17,
+            "c": 185.1998,
+            "v": 6059
+          },
+          {
+            "t": "2026-02-07T00:48:00+00:00",
+            "o": 185.2,
+            "h": 185.2,
+            "l": 185.1,
+            "c": 185.1,
+            "v": 6160
+          },
+          {
+            "t": "2026-02-07T00:49:00+00:00",
+            "o": 185.11,
+            "h": 185.11,
+            "l": 185.07,
+            "c": 185.07,
+            "v": 8113
+          },
+          {
+            "t": "2026-02-07T00:50:00+00:00",
+            "o": 185.09,
+            "h": 185.17,
+            "l": 185.09,
+            "c": 185.17,
+            "v": 9562
+          },
+          {
+            "t": "2026-02-07T00:51:00+00:00",
+            "o": 185.15,
+            "h": 185.15,
+            "l": 185.1,
+            "c": 185.1077,
+            "v": 4830
+          },
+          {
+            "t": "2026-02-07T00:52:00+00:00",
+            "o": 185.15,
+            "h": 185.1691,
+            "l": 185.1,
+            "c": 185.1,
+            "v": 7242
+          },
+          {
+            "t": "2026-02-07T00:53:00+00:00",
+            "o": 185.08,
+            "h": 185.08,
+            "l": 184.97,
+            "c": 185.04,
+            "v": 20334
+          },
+          {
+            "t": "2026-02-07T00:54:00+00:00",
+            "o": 185.027,
+            "h": 185.07,
+            "l": 185.027,
+            "c": 185.0577,
+            "v": 1866
+          },
+          {
+            "t": "2026-02-07T00:55:00+00:00",
+            "o": 185.0708,
+            "h": 185.12,
+            "l": 185.0708,
+            "c": 185.11,
+            "v": 4170
+          },
+          {
+            "t": "2026-02-07T00:56:00+00:00",
+            "o": 185.12,
+            "h": 185.14,
+            "l": 185.1,
+            "c": 185.1201,
+            "v": 5966
+          },
+          {
+            "t": "2026-02-07T00:57:00+00:00",
+            "o": 185.14,
+            "h": 185.14,
+            "l": 185.12,
+            "c": 185.1369,
+            "v": 9797
+          },
+          {
+            "t": "2026-02-07T00:58:00+00:00",
+            "o": 185.14,
+            "h": 185.14,
+            "l": 185.12,
+            "c": 185.12,
+            "v": 13952
+          },
+          {
+            "t": "2026-02-07T00:59:00+00:00",
+            "o": 185.12,
+            "h": 185.2,
+            "l": 185.12,
+            "c": 185.1801,
+            "v": 18790
+          }
+        ]
+      },
+      "TSM": {
+        "last_price": 355.9,
+        "bid": 355.7,
+        "ask": 357.0,
+        "total_volume": 14594922,
+        "net_change": 7.05,
+        "net_pct_change": 2.0209259,
+        "mark": 355.7,
+        "recent_candles_1m": [
+          {
+            "t": "2026-02-07T00:19:00+00:00",
+            "o": 349.85,
+            "h": 349.85,
+            "l": 349.8437,
+            "c": 349.8437,
+            "v": 544
+          },
+          {
+            "t": "2026-02-07T00:21:00+00:00",
+            "o": 349.99,
+            "h": 349.99,
+            "l": 349.985,
+            "c": 349.985,
+            "v": 80
+          },
+          {
+            "t": "2026-02-07T00:22:00+00:00",
+            "o": 349.9,
+            "h": 349.9,
+            "l": 349.9,
+            "c": 349.9,
+            "v": 50
+          },
+          {
+            "t": "2026-02-07T00:23:00+00:00",
+            "o": 350.0,
+            "h": 350.0,
+            "l": 349.96,
+            "c": 349.96,
+            "v": 250
+          },
+          {
+            "t": "2026-02-07T00:24:00+00:00",
+            "o": 349.96,
+            "h": 349.96,
+            "l": 349.96,
+            "c": 349.96,
+            "v": 100
+          },
+          {
+            "t": "2026-02-07T00:25:00+00:00",
+            "o": 349.9,
+            "h": 349.9,
+            "l": 349.9,
+            "c": 349.9,
+            "v": 180
+          },
+          {
+            "t": "2026-02-07T00:27:00+00:00",
+            "o": 350.0,
+            "h": 350.0,
+            "l": 349.982,
+            "c": 350.0,
+            "v": 1871
+          },
+          {
+            "t": "2026-02-07T00:29:00+00:00",
+            "o": 350.01,
+            "h": 350.01,
+            "l": 349.96,
+            "c": 349.97,
+            "v": 647
+          },
+          {
+            "t": "2026-02-07T00:30:00+00:00",
+            "o": 349.97,
+            "h": 349.97,
+            "l": 349.9586,
+            "c": 349.9586,
+            "v": 275
+          },
+          {
+            "t": "2026-02-07T00:32:00+00:00",
+            "o": 349.9012,
+            "h": 349.98,
+            "l": 349.9012,
+            "c": 349.98,
+            "v": 500
+          },
+          {
+            "t": "2026-02-07T00:33:00+00:00",
+            "o": 349.9097,
+            "h": 349.9097,
+            "l": 349.9097,
+            "c": 349.9097,
+            "v": 200
+          },
+          {
+            "t": "2026-02-07T00:34:00+00:00",
+            "o": 349.99,
+            "h": 349.99,
+            "l": 349.99,
+            "c": 349.99,
+            "v": 50
+          },
+          {
+            "t": "2026-02-07T00:35:00+00:00",
+            "o": 349.9982,
+            "h": 349.9982,
+            "l": 349.9982,
+            "c": 349.9982,
+            "v": 45
+          },
+          {
+            "t": "2026-02-07T00:36:00+00:00",
+            "o": 349.9845,
+            "h": 349.9845,
+            "l": 349.9845,
+            "c": 349.9845,
+            "v": 100
+          },
+          {
+            "t": "2026-02-07T00:37:00+00:00",
+            "o": 350.0,
+            "h": 350.0,
+            "l": 350.0,
+            "c": 350.0,
+            "v": 50
+          },
+          {
+            "t": "2026-02-07T00:40:00+00:00",
+            "o": 350.1,
+            "h": 350.1,
+            "l": 350.1,
+            "c": 350.1,
+            "v": 50
+          },
+          {
+            "t": "2026-02-07T00:41:00+00:00",
+            "o": 350.17,
+            "h": 350.17,
+            "l": 350.17,
+            "c": 350.17,
+            "v": 100
+          },
+          {
+            "t": "2026-02-07T00:43:00+00:00",
+            "o": 350.182,
+            "h": 350.182,
+            "l": 350.182,
+            "c": 350.182,
+            "v": 100
+          },
+          {
+            "t": "2026-02-07T00:44:00+00:00",
+            "o": 350.15,
+            "h": 350.16,
+            "l": 350.15,
+            "c": 350.15,
+            "v": 340
+          },
+          {
+            "t": "2026-02-07T00:46:00+00:00",
+            "o": 350.169,
+            "h": 350.169,
+            "l": 350.169,
+            "c": 350.169,
+            "v": 100
+          },
+          {
+            "t": "2026-02-07T00:47:00+00:00",
+            "o": 350.17,
+            "h": 350.17,
+            "l": 350.0,
+            "c": 350.0,
+            "v": 187
+          },
+          {
+            "t": "2026-02-07T00:50:00+00:00",
+            "o": 350.0,
+            "h": 350.0,
+            "l": 350.0,
+            "c": 350.0,
+            "v": 50
+          },
+          {
+            "t": "2026-02-07T00:51:00+00:00",
+            "o": 350.0,
+            "h": 350.0,
+            "l": 350.0,
+            "c": 350.0,
+            "v": 100
+          },
+          {
+            "t": "2026-02-07T00:52:00+00:00",
+            "o": 349.9893,
+            "h": 350.0,
+            "l": 349.98,
+            "c": 349.98,
+            "v": 498
+          },
+          {
+            "t": "2026-02-07T00:53:00+00:00",
+            "o": 350.17,
+            "h": 350.17,
+            "l": 350.1586,
+            "c": 350.1586,
+            "v": 644
+          },
+          {
+            "t": "2026-02-07T00:54:00+00:00",
+            "o": 350.0,
+            "h": 350.0,
+            "l": 350.0,
+            "c": 350.0,
+            "v": 145
+          },
+          {
+            "t": "2026-02-07T00:55:00+00:00",
+            "o": 350.1,
+            "h": 350.18,
+            "l": 350.1,
+            "c": 350.18,
+            "v": 2780
+          },
+          {
+            "t": "2026-02-07T00:56:00+00:00",
+            "o": 349.97,
+            "h": 349.97,
+            "l": 349.97,
+            "c": 349.97,
+            "v": 100
+          },
+          {
+            "t": "2026-02-07T00:57:00+00:00",
+            "o": 350.1,
+            "h": 350.1,
+            "l": 350.1,
+            "c": 350.1,
+            "v": 100
+          },
+          {
+            "t": "2026-02-07T00:58:00+00:00",
+            "o": 350.02,
+            "h": 350.02,
+            "l": 349.991,
+            "c": 349.991,
+            "v": 350
+          }
+        ]
+      }
+    }
+  },
+  "exploration_budget": {
+    "max_hops": 3,
+    "max_cost_usd": 0.35
+  },
+  "tool_traces": [
+    {
+      "trace_id": "trace_1",
+      "hop_index": 1,
+      "parent_trace_id": null,
+      "decision_context": {
+        "state_summary": "",
+        "reason_for_action": "Phase1 action: confirm price move vs noise",
+        "symbols": [
+          "AMD",
+          "AMZN",
+          "GOOG",
+          "GOOGL",
+          "MSFT",
+          "NVDA",
+          "TSM"
+        ]
+      },
+      "action": {
+        "tool": "price_check",
+        "provider": "market",
+        "query_template": "price_spike_check",
+        "query": "AMD",
+        "filters": {}
+      },
+      "execution": {
+        "model": "market",
+        "start_time": "2026-02-10T03:54:47.764285+00:00",
+        "end_time": "2026-02-10T03:54:47.998268+00:00",
+        "cost_usd": 0.0
+      },
+      "results": [
+        {
+          "source_type": "market",
+          "title": "price_spike_check",
+          "timestamp": "2026-02-10T03:54:47.998268+00:00",
+          "snippet": "{\"symbol\": \"AMD\", \"spike_detected\": false, \"price_change_pct\": -0.12, \"last_price\": 208.63, \"avg_volume_5m\": 2721, \"last_volume\": 5995}"
+        }
+      ],
+      "extracted_signals": {
+        "observation": {
+          "symbol": "AMD",
+          "spike_detected": false,
+          "price_change_pct": -0.12,
+          "last_price": 208.63,
+          "avg_volume_5m": 2721,
+          "last_volume": 5995
+        }
+      },
+      "stop_signal": {
+        "should_stop": false,
+        "reason": ""
+      }
+    },
+    {
+      "trace_id": "trace_2",
+      "hop_index": 2,
+      "parent_trace_id": null,
+      "decision_context": {
+        "state_summary": "MOCK_LLM enabled; no external evidence gathered.",
+        "reason_for_action": "Phase1 action: freshness check",
+        "symbols": [
+          "AMD",
+          "AMZN",
+          "GOOG",
+          "GOOGL",
+          "MSFT",
+          "NVDA",
+          "TSM"
+        ]
+      },
+      "action": {
+        "tool": "web_search",
+        "provider": "openai",
+        "query_template": "breaking_followup",
+        "query": "breaking AMD today",
+        "filters": {
+          "max_items": 8
+        }
+      },
+      "execution": {
+        "model": "gpt-5-mini",
+        "start_time": "2026-02-10T03:54:47.998304+00:00",
+        "end_time": "2026-02-10T03:54:47.998363+00:00",
+        "cost_usd": 0.0
+      },
+      "results": [],
+      "extracted_signals": {
+        "takeaways": [
+          "MOCK_LLM: run with real keys to gather evidence"
+        ]
+      },
+      "stop_signal": {
+        "should_stop": false,
+        "reason": ""
+      }
+    },
+    {
+      "trace_id": "trace_3",
+      "hop_index": 3,
+      "parent_trace_id": null,
+      "decision_context": {
+        "state_summary": "MOCK_LLM enabled; no external evidence gathered.",
+        "reason_for_action": "Phase1 action: social rumor detection",
+        "symbols": [
+          "AMD",
+          "AMZN",
+          "GOOG",
+          "GOOGL",
+          "MSFT",
+          "NVDA",
+          "TSM"
+        ]
+      },
+      "action": {
+        "tool": "x_search",
+        "provider": "grok",
+        "query_template": "x_realtime_rumor",
+        "query": "AMD rumor OR hearing OR channel checks",
+        "filters": {
+          "max_items": 8
+        }
+      },
+      "execution": {
+        "model": "grok-4-1-fast-reasoning",
+        "start_time": "2026-02-10T03:54:47.998378+00:00",
+        "end_time": "2026-02-10T03:54:47.998420+00:00",
+        "cost_usd": 0.0
+      },
+      "results": [],
+      "extracted_signals": {
+        "takeaways": [
+          "MOCK_LLM: run with real keys to gather evidence"
+        ]
+      },
+      "stop_signal": {
+        "should_stop": false,
+        "reason": ""
+      }
+    },
+    {
+      "trace_id": "trace_4",
+      "hop_index": 4,
+      "parent_trace_id": null,
+      "decision_context": {
+        "state_summary": "MOCK_LLM: generated hypotheses from empty evidence.",
+        "reason_for_action": "Phase1: propose competing hypotheses",
+        "symbols": [
+          "AMD",
+          "AMZN",
+          "GOOG",
+          "GOOGL",
+          "MSFT",
+          "NVDA",
+          "TSM"
+        ]
+      },
+      "action": {
+        "tool": "web_search",
+        "provider": "openai",
+        "query_template": "phase1_hypotheses",
+        "query": "(prompted)",
+        "filters": {
+          "max_hypotheses": 5
+        }
+      },
+      "execution": {
+        "model": "gpt-5-mini",
+        "start_time": "2026-02-10T03:54:47.998531+00:00",
+        "end_time": "2026-02-10T03:54:47.998534+00:00",
+        "cost_usd": 0.0
+      },
+      "results": [
+        {
+          "hypothesis_id": "h1",
+          "label": "no_signal",
+          "description": "No external evidence available; this may be low-signal news.",
+          "confidence": 0.4,
+          "suggested_action_ids": [
+            "news_confirmation"
+          ],
+          "evidence_trace_ids": [
+            "trace_1"
+          ],
+          "category": "recycled"
+        },
+        {
+          "hypothesis_id": "h2",
+          "label": "possible_catalyst",
+          "description": "There could be an unseen catalyst; confirm with a follow-up.",
+          "confidence": 0.5,
+          "suggested_action_ids": [
+            "news_confirmation",
+            "analyst_reaction"
+          ],
+          "evidence_trace_ids": [
+            "trace_1"
+          ],
+          "category": "fundamental"
+        }
+      ],
+      "extracted_signals": {
+        "freshness": "uncertain",
+        "takeaways": [
+          "MOCK_LLM: enable real keys for evidence"
+        ]
+      },
+      "stop_signal": {
+        "should_stop": false,
+        "reason": ""
+      }
+    },
+    {
+      "trace_id": "trace_5",
+      "hop_index": 5,
+      "parent_trace_id": null,
+      "decision_context": {
+        "state_summary": "",
+        "reason_for_action": "Phase2: select top hypotheses and assign follow-up actions",
+        "symbols": [
+          "AMD",
+          "AMZN",
+          "GOOG",
+          "GOOGL",
+          "MSFT",
+          "NVDA",
+          "TSM"
+        ]
+      },
+      "action": {
+        "tool": "web_search",
+        "provider": "openai",
+        "query_template": "hypothesis_rank",
+        "query": "(prompted)",
+        "filters": {
+          "top_k": 2
+        }
+      },
+      "execution": {
+        "model": "gpt-5-mini",
+        "start_time": "2026-02-10T03:54:47.998598+00:00",
+        "end_time": "2026-02-10T03:54:47.998600+00:00",
+        "cost_usd": 0.0
+      },
+      "results": [
+        {
+          "hypothesis_id": "h2",
+          "assigned_action_id": "news_confirmation",
+          "reasoning": "MOCK"
+        },
+        {
+          "hypothesis_id": "h1",
+          "assigned_action_id": "analyst_reaction",
+          "reasoning": "MOCK"
+        }
+      ],
+      "extracted_signals": {
+        "orthogonality_check": "MOCK_LLM: selected two different actions"
+      },
+      "stop_signal": {
+        "should_stop": false,
+        "reason": ""
+      }
+    }
+  ],
+  "prediction": {},
+  "cost_summary": {
+    "total_usd": 0.0,
+    "by_tool": {
+      "price_check": 0.0,
+      "web_search": 0.0,
+      "x_search": 0.0
+    }
+  }
+}

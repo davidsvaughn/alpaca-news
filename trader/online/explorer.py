@@ -46,13 +46,29 @@ class ExploreResult:
 
 
 def _read_prompt(path: str) -> str:
-    p = Path(path)
+    # Resolve relative to repo root, not current working directory.
+    # explorer.py lives at trader/online/explorer.py → repo_root/trader/prompts
+    base = Path(__file__).resolve().parents[1]
+    p = base / "prompts" / path
     return p.read_text(encoding="utf-8")
 
 
-PROMPT_PHASE1 = _read_prompt("trader/prompts/explore_phase1.md")
-PROMPT_PHASE2 = _read_prompt("trader/prompts/explore_phase2.md")
-PROMPT_RANK = _read_prompt("trader/prompts/hypothesis_rank.md")
+def _render_prompt(prompt: str, mapping: dict[str, str]) -> str:
+    """Render a prompt template without interpreting arbitrary `{}`.
+
+    We intentionally avoid ``str.format`` because the prompt markdown files
+    include JSON examples with lots of braces, which would otherwise raise
+    KeyError.
+    """
+    out = prompt
+    for k, v in mapping.items():
+        out = out.replace("{" + k + "}", v)
+    return out
+
+
+PROMPT_PHASE1 = _read_prompt("explore_phase1.md")
+PROMPT_PHASE2 = _read_prompt("explore_phase2.md")
+PROMPT_RANK = _read_prompt("hypothesis_rank.md")
 
 
 def _action_menu_str(actions: list[ActionTemplate]) -> str:
@@ -184,6 +200,15 @@ def _dedupe_evidence(items: list[dict[str, Any]], *, max_items: int) -> list[dic
         if len(out) >= max_items:
             break
     return out
+
+
+def _accumulate_cost_by_tool(traces: list[dict[str, Any]]) -> dict[str, float]:
+    by_tool: dict[str, float] = {}
+    for t in traces:
+        tool = str((t.get("action") or {}).get("tool") or "unknown")
+        cost = float((t.get("execution") or {}).get("cost_usd") or 0.0)
+        by_tool[tool] = by_tool.get(tool, 0.0) + cost
+    return {k: round(v, 6) for k, v in by_tool.items()}
 
 
 def explore_two_phase(
@@ -356,11 +381,14 @@ def explore_two_phase(
 
     # Now ask LLM to generate hypotheses from Phase 1 evidence
     evidence_so_far = json.dumps(_dedupe_evidence(evidence_items, max_items=12), ensure_ascii=False)
-    prompt1 = PROMPT_PHASE1.format(
-        symbols=symbols_str,
-        news_json=json.dumps(news, ensure_ascii=False),
-        evidence_so_far=evidence_so_far,
-        action_menu=_action_menu_str(PHASE2_ACTIONS),
+    prompt1 = _render_prompt(
+        PROMPT_PHASE1,
+        {
+            "symbols": symbols_str,
+            "news_json": json.dumps(news, ensure_ascii=False),
+            "evidence_so_far": evidence_so_far,
+            "action_menu": _action_menu_str(PHASE2_ACTIONS),
+        },
     )
 
     res_h, tool_name_h = _call_llm_for_action(
@@ -422,10 +450,13 @@ def explore_two_phase(
     # ------------------------------------------------------------------
 
     top_k = max_phase2_branches
-    prompt_rank = PROMPT_RANK.format(
-        top_k=top_k,
-        hypotheses_json=json.dumps([h.to_dict() for h in hypotheses], ensure_ascii=False, indent=2),
-        action_menu=_action_menu_str(PHASE2_ACTIONS),
+    prompt_rank = _render_prompt(
+        PROMPT_RANK,
+        {
+            "top_k": str(top_k),
+            "hypotheses_json": json.dumps([h.to_dict() for h in hypotheses], ensure_ascii=False, indent=2),
+            "action_menu": _action_menu_str(PHASE2_ACTIONS),
+        },
     )
     res_r, tool_name_r = _call_llm_for_action(
         llm=llm,
@@ -524,18 +555,21 @@ def explore_two_phase(
             provider = research_provider
             model = research_model
 
-        prompt2 = PROMPT_PHASE2.format(
-            symbols=symbols_str,
-            headline=headline,
-            hypothesis_id=hyp.hypothesis_id,
-            hypothesis_label=hyp.label,
-            hypothesis_description=hyp.description,
-            hypothesis_confidence=hyp.confidence,
-            hypothesis_category=hyp.category,
-            action_id=chosen_action.action_id,
-            action_purpose=chosen_action.purpose,
-            rendered_query=rendered,
-            prior_evidence=evidence_so_far,
+        prompt2 = _render_prompt(
+            PROMPT_PHASE2,
+            {
+                "symbols": symbols_str,
+                "headline": headline,
+                "hypothesis_id": hyp.hypothesis_id,
+                "hypothesis_label": hyp.label,
+                "hypothesis_description": hyp.description,
+                "hypothesis_confidence": str(hyp.confidence),
+                "hypothesis_category": hyp.category,
+                "action_id": chosen_action.action_id,
+                "action_purpose": chosen_action.purpose,
+                "rendered_query": rendered,
+                "prior_evidence": evidence_so_far,
+            },
         )
 
         trace_id = f"trace_{hop_index}"
@@ -598,3 +632,8 @@ def explore_two_phase(
         cost_usd=total_cost,
         hypotheses=[h.to_dict() for h in hypotheses],
     )
+
+
+def summarize_cost_by_tool(traces: list[dict[str, Any]]) -> dict[str, float]:
+    """Public helper for orchestrator: compute cost by tool from tool traces."""
+    return _accumulate_cost_by_tool(traces)

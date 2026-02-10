@@ -83,6 +83,10 @@ class Settings:
     max_web_searches_per_item: int
     max_x_searches_per_item: int
 
+    # Explorer v1 (Phase 2)
+    max_phase1_actions: int
+    max_phase2_branches: int
+
     # SSE
     sse_ping_interval_s: float
 
@@ -135,6 +139,10 @@ def load_settings(*, dotenv_path: str | None = None) -> Settings:
     max_web_searches_per_item = _env_int("MAX_WEB_SEARCHES_PER_ITEM", 3)
     max_x_searches_per_item = _env_int("MAX_X_SEARCHES_PER_ITEM", 2)
 
+    # Phase 2 explorer controls
+    max_phase1_actions = _env_int("MAX_PHASE1_ACTIONS", 4)
+    max_phase2_branches = _env_int("MAX_PHASE2_BRANCHES", 2)
+
     sse_ping_interval_s = _env_float("SSE_PING_INTERVAL_S", 10.0)
 
     mock_llm = _env_bool("MOCK_LLM", False)
@@ -162,6 +170,8 @@ def load_settings(*, dotenv_path: str | None = None) -> Settings:
         max_total_hops=max_total_hops,
         max_web_searches_per_item=max_web_searches_per_item,
         max_x_searches_per_item=max_x_searches_per_item,
+        max_phase1_actions=max_phase1_actions,
+        max_phase2_branches=max_phase2_branches,
         sse_ping_interval_s=sse_ping_interval_s,
         mock_llm=mock_llm,
         backfill_on_start=backfill_on_start,

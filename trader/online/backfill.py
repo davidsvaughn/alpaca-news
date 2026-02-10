@@ -36,6 +36,8 @@ def main() -> None:
     for p in files[-limit:]:
         process_news_file(path=p, settings=settings, db=db, knowledge=knowledge, bus=bus)
 
+    print(f"Backfill complete. Processed up to {limit} files.")
+
 
 if __name__ == "__main__":
     main()

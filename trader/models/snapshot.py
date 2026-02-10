@@ -147,6 +147,15 @@ class SnapshotBuilder:
         """Override the auto-accumulated total (e.g. from CostTracker)."""
         self._cost_total = total
 
+    def set_cost_by_tool(self, by_tool: dict[str, float]) -> None:
+        """Override the per-tool cost breakdown (e.g. from CostTracker)."""
+        self._cost_by_tool = dict(by_tool)
+
+    def set_cost_summary(self, *, total: float, by_tool: dict[str, float]) -> None:
+        """Override both total and per-tool cost breakdown."""
+        self._cost_total = float(total)
+        self._cost_by_tool = dict(by_tool)
+
     # ------------------------------------------------------------------
     # Seal
     # ------------------------------------------------------------------

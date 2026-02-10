@@ -33,7 +33,7 @@ from trader.llm.cost_tracker import CostTracker
 from trader.llm.mock import MockLLMClient
 from trader.market.schwab_client import SchwabMarketClient
 from trader.models.snapshot import SnapshotBuilder, Trigger, deterministic_snapshot_id
-from trader.online.explorer import explore_two_phase
+from trader.online.explorer import explore_two_phase, summarize_cost_by_tool
 from trader.online.triage import run_triage
 
 DEBUG = os.getenv("DEBUG", "false").lower() in ("true", "1")
@@ -203,6 +203,10 @@ def process_news_file(
         for trace in explore.traces:
             builder.add_tool_trace(trace)
 
+        # Cost by tool from executed traces (more accurate than provider token accounting
+        # when running mocks or when providers don't report tool-level token usage).
+        builder.set_cost_by_tool(summarize_cost_by_tool(explore.traces))
+
         if market is not None:
             try:
                 market.stop_stream()
@@ -211,9 +215,12 @@ def process_news_file(
                     raise
                 print(f"WARN: Schwab stop stream failed: {e}")
 
-    # --- Seal snapshot ---
-    # Override cost total with the tracker's authoritative figure
+    # Override cost total with the tracker's authoritative figure.
+    # We intentionally keep SnapshotBuilder's per-tool breakdown, which reflects
+    # the observed costs per executed action (web_search / x_search / market, etc.).
     builder.set_cost_total(cost_tracker.item_spent)
+
+    # --- Seal snapshot ---
     snapshot = builder.seal()
 
     # Persist to JSON file
