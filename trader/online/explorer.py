@@ -333,7 +333,8 @@ def explore_two_phase(
             "You are a trading research assistant.\n\n"
             f"Execute action_id={a.action_id} to gather evidence.\n"
             f"Query: {rendered_query}\n\n"
-            "Return STRICT JSON with keys: state_summary, evidence (<=8), takeaways (<=6).\n\n"
+            "Return STRICT JSON with keys: state_summary, evidence (<=8), takeaways (<=6).\n"
+            "For WEB sources, each evidence item MUST include a 'url'.\n\n"
             f"News JSON:\n{json.dumps(news, ensure_ascii=False)}\n"
         )
 

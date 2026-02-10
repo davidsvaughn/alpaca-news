@@ -45,7 +45,7 @@ You are looking for *disagreement* (competing narratives), not accumulating volu
     {
       "source_type": "web|x|market|other",
       "title": "string",
-      "url": "string (optional)",
+      "url": "string (REQUIRED for web sources; omit only if truly unavailable)",
       "timestamp": "string (optional)",
       "snippet": "string"
     }

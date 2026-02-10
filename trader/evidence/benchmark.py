@@ -33,7 +33,7 @@ class BenchRow:
     title: str | None
 
 
-def run_benchmark(urls: list[str]) -> list[BenchRow]:
+def run_benchmark(urls: list[str], *, extractor: str) -> list[BenchRow]:
     rows: list[BenchRow] = []
     for url in urls:
         url = url.strip()
@@ -42,7 +42,7 @@ def run_benchmark(urls: list[str]) -> list[BenchRow]:
         t0 = time.time()
         try:
             fr = fetch_url(url=url)
-            art = extract_article(html=fr.content, url=fr.final_url, extractor="trafilatura")
+            art = extract_article(html=fr.content, url=fr.final_url, extractor=extractor)
             title = None
             # Trafilatura JSON output often includes 'title'
             if isinstance(art.metadata, dict):
@@ -74,17 +74,23 @@ def run_benchmark(urls: list[str]) -> list[BenchRow]:
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--urls-file", required=True, help="Path to a newline-delimited URL list")
+    ap.add_argument(
+        "--extractor",
+        default="trafilatura",
+        help="trafilatura | newspaper_fulltext",
+    )
     args = ap.parse_args()
 
     urls_file = Path(args.urls_file)
     urls = urls_file.read_text(encoding="utf-8").splitlines()
-    rows = run_benchmark(urls)
+    rows = run_benchmark(urls, extractor=args.extractor)
 
     out_dir = Path("data") / "evidence" / "benchmarks"
     out_dir.mkdir(parents=True, exist_ok=True)
     out_path = out_dir / f"{int(time.time())}.json"
 
     payload: dict[str, Any] = {
+        "extractor": args.extractor,
         "rows": [asdict(r) for r in rows],
         "summary": {
             "total": len(rows),

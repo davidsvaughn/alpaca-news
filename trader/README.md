@@ -24,6 +24,43 @@ for offline labeling + policy learning.
 - **Per-tool cost tracking** in both CostTracker and sealed Snapshots
 - **Pre-filter** catches obvious fluff headlines without an LLM call (saves money)
 
+## New capabilities (added)
+
+### 1) X API v2 integration (optional)
+
+New module: `trader/xapi/`.
+
+Implements (Bearer token):
+- Filtered stream rules: `GET/POST /2/tweets/search/stream/rules`
+- Stream consumer: `GET /2/tweets/search/stream` (reconnect/backoff)
+- Usage polling: `GET /2/usage/tweets`
+
+There is also a conservative **BURST-first** background service:
+- `trader/online/x_stream_service.py`
+
+It is gated by env vars and defaults to disabled.
+
+**Quick smoke test (safe):**
+```bash
+uv run python -c "from trader.xapi.client import XApiClient; from trader.xapi.usage import get_usage; print(get_usage(client=XApiClient(), days=7))"
+```
+
+### 2) Evidence acquisition layer (optional)
+
+New module: `trader/evidence/`.
+
+Implements the scout→acquire pattern:
+- exploration traces provide candidate URLs
+- the system fetches and extracts article text itself
+- persists immutable evidence docs under `data/evidence/*.json`
+
+Extractor defaults to **Trafilatura**, but is configurable.
+
+**Smoke test:**
+```bash
+uv run python -m trader.evidence.smoke_test --url https://example.com
+```
+
 ## Phase 1 vs Phase 2 (important clarification)
 
 There are **two different “phase” concepts** used across the repo:
