@@ -220,3 +220,5 @@ __marimo__/
 # archive/
 /data/trader.db
 /data/snapshots/*.json
+!/data/snapshots/8eaf781d-c6e7-5afc-9954-bf63eac8cfc6.json
+!/data/snapshots/b41b0a6d-cb81-42a2-95e8-427cd00d5093.json
