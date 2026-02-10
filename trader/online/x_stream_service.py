@@ -252,6 +252,7 @@ def build_rules_for_symbols(*, symbols: list[str]) -> list[StreamRule]:
         sym = s.strip().upper()
         if not sym:
             continue
+        # Verified with dry_run: bare $TSLA cashtag token is accepted by your plan.
         value = f"({sym} OR ${sym}) -is:retweet lang:en"
         out.append(StreamRule(value=value, tag=sym))
     return out

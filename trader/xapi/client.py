@@ -28,6 +28,16 @@ class XApiConfig:
 
 
 def load_xapi_config() -> XApiConfig:
+    # Ensure .env is loaded when this client is used outside the main app.
+    # (In the main app, trader.config.load_settings() already loads dotenv.)
+    try:
+        from dotenv import load_dotenv
+
+        load_dotenv()
+    except Exception:
+        # If python-dotenv isn't available for some reason, continue with os.environ.
+        pass
+
     base_url = (os.getenv("X_API_BASE_URL") or "https://api.x.com").rstrip("/")
     bearer = os.getenv("X_BEARER_TOKEN") or ""
     if not bearer:

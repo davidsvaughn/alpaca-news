@@ -32,6 +32,7 @@ from trader.llm.cost_tracker import CostTracker
 from trader.llm.mock import MockLLMClient
 from trader.market.schwab_client import SchwabMarketClient
 from trader.models.snapshot import SnapshotBuilder, Trigger, deterministic_snapshot_id
+from trader.evidence.acquirer import acquire_from_traces
 from trader.online.explorer import explore_two_phase, summarize_cost_by_tool
 from trader.online.triage import run_triage
 from trader.online.event_bus import EventBus, PipelineEvent
@@ -191,6 +192,25 @@ def process_news_file(
         )
         for trace in explore.traces:
             builder.add_tool_trace(trace)
+
+        # Optional: explicit acquisition of web evidence for auditability.
+        if settings.evidence_acquire_enabled:
+            try:
+                ar = acquire_from_traces(
+                    traces=explore.traces,
+                    evidence_root=Path(settings.data_dir) / "evidence",
+                    max_docs=settings.evidence_max_docs_per_item,
+                    extractor=settings.evidence_extractor,
+                )
+                # Add acquisition traces after exploration traces
+                for t in ar.traces:
+                    # Ensure hop indexes are monotonic in the final snapshot
+                    t["hop_index"] = len(builder.tool_traces) + 1
+                    builder.add_tool_trace(t)
+            except Exception as e:
+                if DEBUG:
+                    raise
+                bus.publish(PipelineEvent(type="evidence_acquire_error", payload={"error": str(e)}))
 
         # Cost by tool from executed traces (more accurate than provider token accounting
         # when running mocks or when providers don't report tool-level token usage).

@@ -104,6 +104,11 @@ class Settings:
     x_usage_poll_interval_s: int
     x_min_triage_confidence_for_burst: float
 
+    # Evidence acquisition (optional)
+    evidence_acquire_enabled: bool
+    evidence_max_docs_per_item: int
+    evidence_extractor: Literal["trafilatura", "newspaper_fulltext", "readability_lxml"]
+
 
 def load_settings(*, dotenv_path: str | None = None) -> Settings:
     """Load settings from environment.
@@ -169,6 +174,12 @@ def load_settings(*, dotenv_path: str | None = None) -> Settings:
     x_usage_poll_interval_s = _env_int("X_USAGE_POLL_INTERVAL_S", 300)
     x_min_triage_confidence_for_burst = _env_float("X_MIN_TRIAGE_CONFIDENCE_FOR_BURST", 0.75)
 
+    evidence_acquire_enabled = _env_bool("EVIDENCE_ACQUIRE_ENABLED", False)
+    evidence_max_docs_per_item = _env_int("EVIDENCE_MAX_DOCS_PER_ITEM", 3)
+    evidence_extractor = (os.getenv("EVIDENCE_EXTRACTOR") or "trafilatura").strip().lower()
+    if evidence_extractor not in ("trafilatura", "newspaper_fulltext", "readability_lxml"):
+        raise ValueError("EVIDENCE_EXTRACTOR must be one of: trafilatura, newspaper_fulltext, readability_lxml")
+
     return Settings(
         learning_mode=learning_mode,
         trading_mode=trading_mode,  # type: ignore[arg-type]
@@ -204,4 +215,8 @@ def load_settings(*, dotenv_path: str | None = None) -> Settings:
         x_burst_ttl_minutes=x_burst_ttl_minutes,
         x_usage_poll_interval_s=x_usage_poll_interval_s,
         x_min_triage_confidence_for_burst=x_min_triage_confidence_for_burst,
+
+        evidence_acquire_enabled=evidence_acquire_enabled,
+        evidence_max_docs_per_item=evidence_max_docs_per_item,
+        evidence_extractor=evidence_extractor,  # type: ignore[arg-type]
     )

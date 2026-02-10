@@ -15,7 +15,10 @@ uv sync
 
 GROK x_search: https://docs.x.ai/developers/tools/x-search
 
-X DEVELOPER CONSOLE: https://console.x.com/accounts/2020768736576253952/apps
+X DEVELOPER CONSOLE: 
+https://console.x.com/accounts/2020768736576253952/apps
+https://docs.x.com/x-api/posts/search-recent-posts
+https://docs.x.com/x-api/stream/stream-filtered-posts
 
 App: 2020768736576253952blammo3030
 
