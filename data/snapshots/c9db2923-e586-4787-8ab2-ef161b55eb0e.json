@@ -1,0 +1,79 @@
+{
+  "snapshot_id": "c9db2923-e586-4787-8ab2-ef161b55eb0e",
+  "version": "v1",
+  "created_at": "2026-02-09T23:45:16.276619+00:00",
+  "trigger": {
+    "type": "alpaca_news",
+    "alpaca_timestamp": "2026-02-09T23:26:52+00:00",
+    "headline": "Super Bowl LX: 'Kalshi The Big Winner,' Sportsbooks Could Take Hit From Seahawks Victory, Says Bank Of America",
+    "summary": "Sportsbooks may have been rooting against the Seattle Seahawks in Super Bowl LX.",
+    "source": "benzinga",
+    "symbols": [
+      "DKNG",
+      "MGM"
+    ],
+    "raw": {
+      "id": 50499044,
+      "headline": "Super Bowl LX: 'Kalshi The Big Winner,' Sportsbooks Could Take Hit From Seahawks Victory, Says Bank Of America",
+      "source": "benzinga",
+      "url": "https://www.benzinga.com/news/sports-betting/26/02/50499044/super-bowl-lx-kalshi-the-big-winner-sportsbooks-could-take-hit-from-seahawks-victory-says-bank-of-america",
+      "summary": "Sportsbooks may have been rooting against the Seattle Seahawks in Super Bowl LX.",
+      "created_at": "2026-02-09T23:26:52+00:00",
+      "updated_at": "2026-02-09T23:26:53+00:00",
+      "symbols": [
+        "DKNG",
+        "MGM"
+      ],
+      "author": "Chris Katje",
+      "content": "<p><strong>Super Bowl LX </strong>saw hundreds of millions of dollars bet on<a href=\"https://www.benzinga.com/trading-ideas/long-ideas/26/02/50488011/super-bowl-commercials-2026-complete-list-of-ads-the-companies-behind-them-and-who-won-over-fans\"> the matchup between</a> the Seattle Seahawks and New England Patriots. <strong>Bank of America</strong> names Kalshi a winner for the Super Bowl and worries sportsbooks may have been overexposed <a href=\"https://www.benzinga.com/topic/super-bowl\">to the Seahawks</a>.</p>\n\n\n\n<p><strong>       • DraftKings stock is showing downward pressure. <a href=\"https://www.benzinga.com/quote/DKNG\" target=\"_blank\" rel=\"noreferrer noopener\">What’s the outlook for DKNG shares?</a></strong></p>\n\n\n\n<h2 class=\"wp-block-heading\"><strong>Kalshi Is a Super Bowl LX Winner</strong></h2>\n\n\n\n<p>Prediction market companies like <strong>Kalshi </strong>and <strong>Polymarket </strong>were unable to run Super Bowl commercials this year due to being <a href=\"https://www.benzinga.com/news/sports-betting/26/02/50314582/nfl-puts-prediction-markets-on-banned-list-alongside-tobacco-firearms-for-super-bowl-commercials\">on the restricted list </a>of the National Football League.</p>\n\n\n\n<p>That didn't stop Kalshi from being one of the big winners of Super Bowl LX, according to Bank of America.</p>\n\n\n\n<p>The analysts estimate that Kalshi volume reached $871 million on Super Bowl Sunday, with around $650 million placed on Super Bowl markets. The Kalshi app also ranked second on Sunday night.</p>\n\n\n\n<p>The analyst report also highlights that Polymarket U.S. and Kalshi had higher payouts on the Seahawks victory compared to traditional online sportsbooks.</p>\n\n\n\n<p>One concern for Kalshi was that the heightened betting volume also led to<a href=\"https://www.benzinga.com/markets/prediction-markets/26/02/50471994/kalshis-tech-glitches-mar-super-bowl-debut-betting-apps-not-ready-for-prime-time\"> delays in processing payments,</a> an item not lost on the Bank of America analysts.</p>\n\n\n\n<p>Kalshi may have offset the payments concerns with its strong payout amounts and wager options along with new tools. The company launched play-by-play feed on Sunday morning and new live stats feeds for the Super Bowl.</p>\n\n\n\n<h2 class=\"wp-block-heading\"><strong>Sportsbooks Lose From Seahawks Win?</strong></h2>\n\n\n\n<p>The Seahawks won Super Bowl LX by a score of 29-13, easily covering the -4.5 spread that most sportsbooks had on the game. The Seahawks saw heavy betting as the favorite at most sportsbooks.</p>\n\n\n\n<p>\"We think books were rooting for the Pats to upset the Seahawks,\" Bank of America said.</p>\n\n\n\n<p>The <strong>DraftKings Inc</strong> <a class=\"ticker-link\" data-ticker=\"DKNG\" data-exchange=\"NASDAQ\" href=\"https://www.benzinga.com/quote/DKNG\" target=\"_blank\" rel=\"noopener\">(NASDAQ:<a class=\"ticker\" href=\"https://www.benzinga.com/quote/DKNG\">DKNG</a>)</a> app ranked fifth on Sunday night, which could signal a dominant position for the sportsbook in sports betting volume.</p>\n\n\n\n<p>DraftKings could also come out as a potential winner given its headquarters in Boston and what Bank of America calls a more balanced betting split between the Seahawks and Patriots.</p>\n\n\n\n<p>Other sportsbooks, such as BetMGM, had 60% of wagers on the Seahawks, the report said. BetMGM is a joint venture between <strong>Entain </strong>and<strong> MGM Resorts International</strong> <a class=\"ticker-link\" data-ticker=\"MGM\" data-exchange=\"NYSE\" href=\"https://www.benzinga.com/quote/MGM\" target=\"_blank\" rel=\"noopener\">(NYSE:<a class=\"ticker\" href=\"https://www.benzinga.com/quote/MGM\">MGM</a>)</a>.</p>\n\n\n\n<p>The Bank of America analysts also highlight that many of the rushing and receiving top bet props hit, but the majority of the anytime touchdown scorers didn't hit, which could balance out the overall betting.</p>\n\n\n\n<p>The American Gaming Association estimates that legal sportsbooks had $1.76 billion in total wagers for Super Bowl LX.  </p>\n\n\n\n<p><em>This photo was created by Shutterstock AI</em></p>\n\n\n\n<p></p>",
+      "images": null
+    }
+  },
+  "market_context": {},
+  "price_context": {},
+  "exploration_budget": {
+    "max_hops": 3,
+    "max_cost_usd": 0.35
+  },
+  "tool_traces": [
+    {
+      "trace_id": "trace_1",
+      "hop_index": 1,
+      "parent_trace_id": null,
+      "decision_context": {
+        "state_summary": "MOCK_LLM enabled; no external evidence gathered.",
+        "reason_for_action": "Phase1: broad evidence gathering"
+      },
+      "action": {
+        "tool": "web_search",
+        "provider": "openai",
+        "query_template": "phase1_evidence",
+        "query": "(implicit by model)",
+        "filters": {
+          "max_items": 8
+        }
+      },
+      "execution": {
+        "model": "gpt-5-mini",
+        "start_time": "2026-02-09T23:45:16.277209+00:00",
+        "end_time": "2026-02-09T23:45:16.277222+00:00",
+        "cost_usd": 0.0
+      },
+      "results": [],
+      "extracted_signals": {
+        "takeaways": [
+          "MOCK_LLM: run with real keys to gather evidence"
+        ]
+      },
+      "stop_signal": {
+        "should_stop": true,
+        "reason": "Phase 1 complete"
+      }
+    }
+  ],
+  "prediction": {},
+  "cost_summary": {
+    "total_usd": 0.0,
+    "by_tool": {}
+  }
+}

@@ -32,6 +32,7 @@ class CostTracker:
     debug: bool = False
     daily_spent: float = 0.0
     day: date = field(default_factory=date.today)
+    by_tool: dict[str, float] = field(default_factory=dict)
 
     def _roll_day_if_needed(self) -> None:
         today = date.today()
@@ -83,6 +84,15 @@ class CostTracker:
         total = float(token_cost + tool_cost)
         self.check_budget(total)
         self.daily_spent += total
+
+        # Track per-tool cost breakdown
+        for tool in tools_used:
+            self.by_tool[tool] = self.by_tool.get(tool, 0.0) + estimate_tool_cost(
+                provider=provider, tool_name=tool, calls=1
+            )
+        if token_cost > 0:
+            # Attribute token cost to "llm" pseudo-tool for visibility
+            self.by_tool["llm_tokens"] = self.by_tool.get("llm_tokens", 0.0) + token_cost
 
         if self.debug or os.getenv("DEBUG", "").lower() in ("1", "true"):
             print(

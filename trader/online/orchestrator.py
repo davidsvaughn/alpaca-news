@@ -1,16 +1,22 @@
 """Online orchestrator.
 
-Watches `output/alpaca/*.json` for new files and produces sealed Snapshots.
+Watches ``output/alpaca/*.json`` for new files and produces sealed Snapshots.
 
-Phase 1 constraints:
-- One snapshot per input file
-- Persist snapshot to (a) JSON file under data/snapshots and (b) SQLite row
-- Emit events to an in-memory SSE bus (dashboard)
+Design:
+- Watchdog enqueues file paths into a :class:`queue.Queue`.
+- A separate worker thread dequeues and processes them sequentially.
+  This prevents blocking the watchdog thread during LLM API calls.
+- Uses :class:`SnapshotBuilder` to accumulate data and ``.seal()`` a frozen
+  Snapshot at the end.
+- Snapshot IDs are deterministic (derived from the Alpaca article id) so that
+  backfill is idempotent.
 """
 
 from __future__ import annotations
 
 import json
+import os
+import queue
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -20,14 +26,21 @@ from watchdog.events import FileSystemEventHandler
 from watchdog.observers import Observer
 
 from trader.config import Settings
-from trader.db.database import Database, insert_snapshot
+from trader.db.database import Database, insert_snapshot, snapshot_exists
 from trader.knowledge.store import KnowledgeStore
 from trader.llm.client import LLMClient
 from trader.llm.cost_tracker import CostTracker
 from trader.llm.mock import MockLLMClient
-from trader.models.snapshot import Snapshot, Trigger
+from trader.models.snapshot import SnapshotBuilder, Trigger, deterministic_snapshot_id
 from trader.online.explorer import explore_phase1
 from trader.online.triage import run_triage
+
+DEBUG = os.getenv("DEBUG", "false").lower() in ("true", "1")
+
+
+# ---------------------------------------------------------------------------
+# SSE event bus
+# ---------------------------------------------------------------------------
 
 
 @dataclass(frozen=True)
@@ -56,6 +69,11 @@ class EventBus:
         return unsubscribe
 
 
+# ---------------------------------------------------------------------------
+# Core processing
+# ---------------------------------------------------------------------------
+
+
 def _load_news_json(path: Path) -> dict[str, Any]:
     return json.loads(path.read_text(encoding="utf-8"))
 
@@ -73,6 +91,16 @@ def process_news_file(
     bus: EventBus,
 ) -> None:
     news = _load_news_json(path)
+
+    # Deterministic ID → idempotent on re-run
+    snap_id = deterministic_snapshot_id(news)
+
+    # Skip if already processed (backfill safety)
+    if snapshot_exists(db, snap_id):
+        if DEBUG:
+            print(f"SKIP (already processed): {snap_id} from {path}")
+        return
+
     trigger = Trigger(
         type="alpaca_news",
         alpaca_timestamp=str(news.get("created_at")) if news.get("created_at") else None,
@@ -83,8 +111,9 @@ def process_news_file(
         raw=news,
     )
 
-    snapshot = Snapshot.new(trigger=trigger)
-    bus.publish(PipelineEvent(type="news_received", payload={"path": str(path), "snapshot_id": snapshot.snapshot_id}))
+    builder = SnapshotBuilder(trigger=trigger, snapshot_id=snap_id)
+
+    bus.publish(PipelineEvent(type="news_received", payload={"path": str(path), "snapshot_id": snap_id}))
 
     cost_tracker = CostTracker(
         max_daily_cost=settings.max_daily_cost,
@@ -96,7 +125,7 @@ def process_news_file(
     else:
         llm = LLMClient(cost_tracker=cost_tracker)
 
-    # Stage 1
+    # --- Stage 1: Triage ---
     triage = run_triage(
         llm=llm,  # type: ignore[arg-type]
         provider=settings.triage_provider,
@@ -108,10 +137,11 @@ def process_news_file(
         PipelineEvent(
             type="triage_decision",
             payload={
-                "snapshot_id": snapshot.snapshot_id,
+                "snapshot_id": snap_id,
                 "action": triage.action,
                 "confidence": triage.confidence,
                 "symbols": triage.symbols,
+                "reasoning": triage.reasoning,
             },
         )
     )
@@ -119,51 +149,50 @@ def process_news_file(
     if triage.skip_patterns_learned:
         knowledge.append_skip_keywords(triage.skip_patterns_learned)
 
-    tool_traces: list[dict[str, Any]] = []
+    # --- Stage 2: Exploration (if investigate) ---
     if triage.action == "investigate":
-        # Stage 2 (Phase 1 minimal)
+        # Use triage-refined symbols (falls back to trigger symbols)
+        symbols = triage.symbols if triage.symbols else trigger.symbols
+
         explore = explore_phase1(
             llm=llm,  # type: ignore[arg-type]
             provider=settings.research_provider,
             model=settings.research_model,
             news=news,
+            symbols=symbols,
             use_web_search_tool=True,
             use_x_search_tool=(settings.research_provider == "grok"),
         )
-        tool_traces.extend(explore.traces)
+        for trace in explore.traces:
+            builder.add_tool_trace(trace)
 
-    # Seal snapshot: include traces and cost summary
-    snap_dict = snapshot.to_dict()
-    snap_dict["tool_traces"] = tool_traces
-    snap_dict["cost_summary"] = {
-        "total_usd": getattr(cost_tracker, "daily_spent", 0.0),
-        "by_tool": {},
-    }
+    # --- Seal snapshot ---
+    # Override cost total with the tracker's authoritative figure
+    builder.set_cost_total(cost_tracker.daily_spent)
+    snapshot = builder.seal()
 
-    # Persist
+    # Persist to JSON file
     out_path = _snapshot_path(settings, snapshot.snapshot_id)
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    out_path.write_text(json.dumps(snap_dict, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    insert_snapshot(db, snapshot=snap_dict)
+    snapshot.persist(out_path)
+
+    # Persist to DB (idempotent)
+    insert_snapshot(db, snapshot=snapshot.to_dict())
 
     bus.publish(
         PipelineEvent(type="snapshot_sealed", payload={"snapshot_id": snapshot.snapshot_id, "path": str(out_path)})
     )
 
 
+# ---------------------------------------------------------------------------
+# Watchdog + worker queue
+# ---------------------------------------------------------------------------
+
+
 class _NewsHandler(FileSystemEventHandler):
-    def __init__(
-        self,
-        *,
-        settings: Settings,
-        db: Database,
-        knowledge: KnowledgeStore,
-        bus: EventBus,
-    ) -> None:
-        self.settings = settings
-        self.db = db
-        self.knowledge = knowledge
-        self.bus = bus
+    """Enqueues new JSON file paths; does NOT process them inline."""
+
+    def __init__(self, *, work_queue: queue.Queue[Path]) -> None:
+        self._q = work_queue
 
     def on_created(self, event):  # type: ignore[override]
         if event.is_directory:
@@ -171,27 +200,76 @@ class _NewsHandler(FileSystemEventHandler):
         path = Path(event.src_path)
         if path.suffix.lower() != ".json":
             return
-
-        # Give the writer a moment to finish.
+        # Small delay to let the writer finish flushing
         time.sleep(0.1)
-        process_news_file(
-            path=path,
-            settings=self.settings,
-            db=self.db,
-            knowledge=self.knowledge,
-            bus=self.bus,
-        )
+        self._q.put(path)
 
 
-def run_watch_loop(*, settings: Settings, db: Database, knowledge: KnowledgeStore, bus: EventBus) -> None:
+def _worker_loop(
+    *,
+    work_queue: queue.Queue[Path],
+    settings: Settings,
+    db: Database,
+    knowledge: KnowledgeStore,
+    bus: EventBus,
+) -> None:
+    """Pull paths from the queue and process them one at a time."""
+    while True:
+        try:
+            path = work_queue.get(timeout=1.0)
+        except queue.Empty:
+            continue
+        try:
+            process_news_file(
+                path=path,
+                settings=settings,
+                db=db,
+                knowledge=knowledge,
+                bus=bus,
+            )
+        except Exception as e:
+            if DEBUG:
+                raise
+            print(f"ERROR processing {path}: {e}")
+        finally:
+            work_queue.task_done()
+
+
+def run_watch_loop(
+    *,
+    settings: Settings,
+    db: Database,
+    knowledge: KnowledgeStore,
+    bus: EventBus,
+) -> None:
+    """Start watchdog observer + worker thread, block forever."""
+    import threading
+
     watch_dir = Path(settings.alpaca_output_dir)
     watch_dir.mkdir(parents=True, exist_ok=True)
 
-    handler = _NewsHandler(settings=settings, db=db, knowledge=knowledge, bus=bus)
+    work_q: queue.Queue[Path] = queue.Queue()
+
+    # Worker thread processes items from the queue
+    worker = threading.Thread(
+        target=_worker_loop,
+        kwargs={
+            "work_queue": work_q,
+            "settings": settings,
+            "db": db,
+            "knowledge": knowledge,
+            "bus": bus,
+        },
+        daemon=True,
+    )
+    worker.start()
+
+    handler = _NewsHandler(work_queue=work_q)
     observer = Observer()
     observer.schedule(handler, str(watch_dir), recursive=False)
     observer.start()
     bus.publish(PipelineEvent(type="watching", payload={"dir": str(watch_dir)}))
+
     try:
         while True:
             time.sleep(1)

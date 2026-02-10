@@ -784,5 +784,70 @@ alpaca-news/
 ### Remaining questions
 
 1. **Postgres hosting path (now):** do you want to start with local Docker Postgres, or immediately use Supabase?
-2. **Live-trading safety workflow:** when `TRADING_MODE=live`, should we require manual confirmation in the UI for every order, or allow fully automated orders after a “session unlock”?
+2. **Live-trading safety workflow:** when `TRADING_MODE=live`, should we require manual confirmation in the UI for every order, or allow fully automated orders after a "session unlock"?
 3. **Streamlit workbench:** do you want a Streamlit app in Phase 4/5 for offline analysis, or keep everything in the FastAPI dashboard?
+
+---
+
+## Phase 1 Implementation Notes (Post-Review Refinements)
+
+After the initial Phase 1 implementation, the following improvements were made based on a code review:
+
+### 1. SnapshotBuilder pattern (replaces frozen-then-mutate-dict)
+
+The original `Snapshot` was a frozen dataclass, but the orchestrator immediately converted it to a dict and mutated it to add tool traces and costs — defeating the purpose of immutability.
+
+**Fix:** Introduced `SnapshotBuilder`, a mutable accumulator that collects data during the pipeline (tool traces, market context, predictions, costs), then produces a frozen `Snapshot` via `.seal()`. The `Snapshot` class itself remains frozen/immutable and is now only created at seal time.
+
+### 2. Keyword pre-filter before LLM triage
+
+The design plan specified checking against learned skip patterns *before* calling the LLM, but the implementation sent everything to the LLM regardless.
+
+**Fix:** Added `_pre_filter()` in `triage.py` that performs cheap local keyword matching against:
+- Learned skip keywords from the knowledge store
+- Built-in obvious fluff patterns (e.g. "if you had invested", "years ago would be worth", "dividend aristocrat")
+- Known auto-generated content authors (e.g. "Benzinga Insights")
+
+This skips obvious fluff without any LLM call, saving real money at scale.
+
+### 3. Queue-decoupled watchdog processing
+
+The original watchdog `on_created` handler called `process_news_file()` synchronously, blocking the watchdog thread during LLM API calls. If multiple files arrived quickly, processing was serialized inside the watchdog thread itself.
+
+**Fix:** The watchdog handler now only enqueues file paths into a `queue.Queue`. A separate worker thread dequeues and processes them. This prevents:
+- Blocking the watchdog (could miss OS events if the buffer overflows)
+- Unnecessary coupling between file detection and processing
+
+### 4. Per-tool cost tracking in CostTracker
+
+The `CostTracker` only tracked `daily_spent` as a single float. The `cost_summary.by_tool` in sealed Snapshots was always `{}`.
+
+**Fix:** Added a `by_tool` dict accumulator to `CostTracker` that records costs per tool name (e.g. `web_search`, `x_search`, `GoogleSearch`, `llm_tokens`). The `SnapshotBuilder` also auto-accumulates per-tool costs from tool trace execution blocks.
+
+### 5. Triage symbols passed to explorer
+
+The explorer received the raw `news` dict but not the triage decision's refined symbol list. The triage might correct/expand the symbol list, but the explorer ignored this.
+
+**Fix:** `explore_phase1()` now accepts a `symbols: list[str]` parameter. The orchestrator passes `triage.symbols` (falling back to `trigger.symbols` if empty). The explorer prompt now includes a "Focus on these symbols:" directive.
+
+### 6. Robust JSON extraction from LLM output
+
+Both triage and explorer did `json.loads(res.text)` directly on LLM output. LLMs frequently wrap JSON in markdown code fences (`` ```json ... ``` ``) or add prose, which would crash.
+
+**Fix:** Added `trader/llm/extract.py` with `extract_json()` that handles:
+- Raw JSON (no fences)
+- Markdown code fences
+- Leading/trailing prose
+- Balanced-brace scanning as a last resort
+
+Both triage and explorer now use `extract_json()` instead of raw `json.loads()`.
+
+### 7. Deterministic snapshot IDs for backfill idempotency
+
+Snapshot IDs were random UUIDs, so re-running backfill on the same files created duplicates.
+
+**Fix:**
+- `deterministic_snapshot_id()` derives a reproducible UUID from the Alpaca article `id` (via `uuid5`), or falls back to hashing `headline + created_at`.
+- `snapshot_exists()` checks the DB before processing.
+- `insert_snapshot()` uses `INSERT OR IGNORE` for additional safety.
+- Re-running backfill now correctly skips already-processed files.

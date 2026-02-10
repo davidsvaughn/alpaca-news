@@ -3,16 +3,19 @@
 Implements a minimal multi-hop trace builder. For Phase 1:
 - if triage says investigate, do up to 1 web search and optionally 1 x_search
 - store evidence (top items) rather than raw web dumps
+
+The explorer receives the *triage-refined* symbol list so it knows which
+tickers to focus on.
 """
 
 from __future__ import annotations
 
 import json
-import uuid
 from dataclasses import dataclass
 from typing import Any
 
 from trader.llm.client import LLMClient
+from trader.llm.extract import extract_json
 from trader.models.tool_trace import TraceExecution, new_tool_trace, utc_now_iso
 
 
@@ -26,6 +29,8 @@ PHASE1_PROMPT = """You are a trading research assistant.
 
 Goal: quickly gather *evidence* about this news item and summarize key takeaways.
 Do not speculate. Prefer recency and direct sources.
+
+Focus on these symbols: {symbols}
 
 Return STRICT JSON with keys:
   state_summary: short string
@@ -48,14 +53,16 @@ def explore_phase1(
     provider: str,
     model: str,
     news: dict[str, Any],
+    symbols: list[str],
     use_web_search_tool: bool,
     use_x_search_tool: bool,
 ) -> ExploreResult:
     traces: list[dict[str, Any]] = []
     total_cost = 0.0
 
-    prompt = PHASE1_PROMPT.format(news_json=json.dumps(news))
-    trace_id = f"trace_{1}"
+    symbols_str = ", ".join(symbols) if symbols else "(all mentioned)"
+    prompt = PHASE1_PROMPT.format(symbols=symbols_str, news_json=json.dumps(news))
+    trace_id = "trace_1"
     start = utc_now_iso()
 
     if provider == "openai":
@@ -92,10 +99,7 @@ def explore_phase1(
     end = utc_now_iso()
     total_cost += res.cost_usd
 
-    try:
-        data = json.loads(res.text)
-    except json.JSONDecodeError as e:
-        raise RuntimeError(f"Explore phase1 did not return valid JSON. Text was: {res.text[:500]!r}") from e
+    data = extract_json(res.text)
 
     results = data.get("evidence") or []
 
@@ -107,6 +111,7 @@ def explore_phase1(
             decision_context={
                 "state_summary": str(data.get("state_summary") or ""),
                 "reason_for_action": "Phase1: broad evidence gathering",
+                "symbols": symbols,
             },
             action={
                 "tool": tool_name,

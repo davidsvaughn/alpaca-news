@@ -2,6 +2,9 @@
 
 Phase 1 uses SQLite for fast local iteration (no docker required).
 We can add Postgres later while keeping the same logical tables.
+
+Snapshot inserts use INSERT OR IGNORE so that re-processing the same
+news file (deterministic snapshot_id) is idempotent.
 """
 
 from __future__ import annotations
@@ -11,7 +14,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from sqlalchemy import JSON, Column, DateTime, Integer, MetaData, String, Table, create_engine
+from sqlalchemy import JSON, Column, DateTime, Integer, MetaData, String, Table, create_engine, text
 from sqlalchemy.engine import Engine
 from sqlalchemy.sql import func
 
@@ -44,16 +47,36 @@ def open_sqlite(path: str) -> Database:
     return Database(engine=engine)
 
 
-def insert_snapshot(db: Database, *, snapshot: dict[str, Any]) -> None:
+def snapshot_exists(db: Database, snapshot_id: str) -> bool:
+    """Check whether a snapshot with this ID already exists in the DB."""
+    with db.engine.connect() as conn:
+        row = conn.execute(
+            text("SELECT 1 FROM snapshots WHERE snapshot_id = :sid LIMIT 1"),
+            {"sid": snapshot_id},
+        ).fetchone()
+    return row is not None
+
+
+def insert_snapshot(db: Database, *, snapshot: dict[str, Any]) -> bool:
+    """Insert a snapshot. Returns True if inserted, False if duplicate (idempotent).
+
+    Uses INSERT OR IGNORE so re-processing the same news file is safe.
+    """
     trigger = snapshot.get("trigger") or {}
     symbols = trigger.get("symbols") or []
     symbols_str = ",".join(symbols)
+
     with db.engine.begin() as conn:
-        conn.execute(
-            snapshots_table.insert().values(
-                snapshot_id=snapshot["snapshot_id"],
-                trigger_type=str(trigger.get("type") or ""),
-                symbols=symbols_str,
-                snapshot_json=json.loads(json.dumps(snapshot)),
-            )
+        result = conn.execute(
+            text(
+                "INSERT OR IGNORE INTO snapshots (snapshot_id, trigger_type, symbols, snapshot_json) "
+                "VALUES (:sid, :ttype, :syms, :sjson)"
+            ),
+            {
+                "sid": snapshot["snapshot_id"],
+                "ttype": str(trigger.get("type") or ""),
+                "syms": symbols_str,
+                "sjson": json.dumps(snapshot, ensure_ascii=False),
+            },
         )
+    return result.rowcount > 0
