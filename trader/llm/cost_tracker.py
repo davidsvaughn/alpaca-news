@@ -31,20 +31,33 @@ class CostTracker:
     max_cost_per_item: float
     debug: bool = False
     daily_spent: float = 0.0
+    item_spent: float = 0.0
     day: date = field(default_factory=date.today)
-    by_tool: dict[str, float] = field(default_factory=dict)
+    daily_by_tool: dict[str, float] = field(default_factory=dict)
+    item_by_tool: dict[str, float] = field(default_factory=dict)
 
     def _roll_day_if_needed(self) -> None:
         today = date.today()
         if today != self.day:
             self.day = today
             self.daily_spent = 0.0
+            self.daily_by_tool = {}
+
+    def reset_item(self) -> None:
+        """Reset the per-news-item accumulator."""
+        self.item_spent = 0.0
+        self.item_by_tool = {}
 
     def check_budget(self, estimated_cost: float) -> None:
         self._roll_day_if_needed()
         if self.daily_spent + estimated_cost > self.max_daily_cost:
             raise BudgetExceeded(
                 f"Daily budget exceeded: spent={self.daily_spent:.4f} estimated_add={estimated_cost:.4f} max={self.max_daily_cost:.4f}"
+            )
+
+        if self.item_spent + estimated_cost > self.max_cost_per_item:
+            raise BudgetExceeded(
+                f"Per-item budget exceeded: spent={self.item_spent:.4f} estimated_add={estimated_cost:.4f} max={self.max_cost_per_item:.4f}"
             )
 
     def log_llm_call(
@@ -84,15 +97,19 @@ class CostTracker:
         total = float(token_cost + tool_cost)
         self.check_budget(total)
         self.daily_spent += total
+        self.item_spent += total
 
         # Track per-tool cost breakdown
         for tool in tools_used:
-            self.by_tool[tool] = self.by_tool.get(tool, 0.0) + estimate_tool_cost(
+            add = estimate_tool_cost(
                 provider=provider, tool_name=tool, calls=1
             )
+            self.daily_by_tool[tool] = self.daily_by_tool.get(tool, 0.0) + add
+            self.item_by_tool[tool] = self.item_by_tool.get(tool, 0.0) + add
         if token_cost > 0:
             # Attribute token cost to "llm" pseudo-tool for visibility
-            self.by_tool["llm_tokens"] = self.by_tool.get("llm_tokens", 0.0) + token_cost
+            self.daily_by_tool["llm_tokens"] = self.daily_by_tool.get("llm_tokens", 0.0) + token_cost
+            self.item_by_tool["llm_tokens"] = self.item_by_tool.get("llm_tokens", 0.0) + token_cost
 
         if self.debug or os.getenv("DEBUG", "").lower() in ("1", "true"):
             print(

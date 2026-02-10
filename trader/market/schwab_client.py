@@ -5,9 +5,10 @@ Wraps ``schwabdev`` to provide:
 - Real-time quote snapshots
 - Real-time streaming (level-one equities)
 
-All methods are designed to be *safe to call even when Schwab credentials
-are missing* — they return empty / None results and log a warning.  This
-lets the pipeline run in mock / offline modes without crashing.
+Fail-loud philosophy:
+- If Schwab is enabled (default) but credentials are missing or calls fail,
+  raise clear exceptions.
+- You can explicitly disable Schwab integration with ``SCHWAB_DISABLED=true``.
 """
 
 from __future__ import annotations
@@ -116,11 +117,7 @@ FIELD_NAMES: dict[str, str] = {
 
 
 class SchwabMarketClient:
-    """High-level wrapper around schwabdev for market data.
-
-    If Schwab credentials are missing, all methods return empty results
-    and log a warning (never crash).
-    """
+    """High-level wrapper around schwabdev for market data."""
 
     def __init__(self) -> None:
         self._client: Any | None = None
@@ -130,19 +127,22 @@ class SchwabMarketClient:
         self._init_client()
 
     def _init_client(self) -> None:
+        if os.getenv("SCHWAB_DISABLED", "false").lower() in ("true", "1"):
+            if DEBUG:
+                print("INFO: SCHWAB_DISABLED=true — market data disabled")
+            return
+
         app_key = os.getenv("SCHWAB_APP_KEY")
         app_secret = os.getenv("SCHWAB_APP_SECRET")
         if not app_key or not app_secret:
-            if DEBUG:
-                print("WARN: SCHWAB_APP_KEY / SCHWAB_APP_SECRET not set — market data disabled")
-            return
+            raise RuntimeError("Missing SCHWAB_APP_KEY / SCHWAB_APP_SECRET (set SCHWAB_DISABLED=true to disable)")
         try:
             import schwabdev
             self._client = schwabdev.Client(app_key, app_secret)
         except Exception as e:
             if DEBUG:
                 raise
-            print(f"WARN: Could not init Schwab client: {e}")
+            raise RuntimeError(f"Could not init Schwab client: {e}") from e
 
     @property
     def available(self) -> bool:
@@ -165,10 +165,10 @@ class SchwabMarketClient:
         """Fetch intraday candles for *symbol*.
 
         Defaults: last 1 trading day, 1-min bars, with extended hours.
-        Returns empty list if Schwab is unavailable.
+        Raises if Schwab is unavailable.
         """
         if not self.available:
-            return []
+            raise RuntimeError("Schwab client unavailable")
         try:
             resp = self._client.price_history(
                 symbol,
@@ -197,8 +197,7 @@ class SchwabMarketClient:
         except Exception as e:
             if DEBUG:
                 raise
-            print(f"WARN: get_intraday_candles({symbol}): {e}")
-            return []
+            raise RuntimeError(f"get_intraday_candles({symbol}) failed: {e}") from e
 
     # ------------------------------------------------------------------
     # Snapshot quote
@@ -207,10 +206,10 @@ class SchwabMarketClient:
     def get_quote(self, symbol: str) -> QuoteSnapshot | None:
         """Fetch a single real-time quote snapshot.
 
-        Returns None if unavailable.
+        Raises if Schwab is unavailable.
         """
         if not self.available:
-            return None
+            raise RuntimeError("Schwab client unavailable")
         try:
             resp = self._client.quote(symbol)
             data = resp.json()
@@ -234,14 +233,15 @@ class SchwabMarketClient:
         except Exception as e:
             if DEBUG:
                 raise
-            print(f"WARN: get_quote({symbol}): {e}")
-            return None
+            raise RuntimeError(f"get_quote({symbol}) failed: {e}") from e
 
     def get_quotes(self, symbols: list[str]) -> dict[str, QuoteSnapshot]:
         """Fetch quotes for multiple symbols. Returns dict keyed by symbol."""
         result: dict[str, QuoteSnapshot] = {}
-        if not self.available or not symbols:
+        if not symbols:
             return result
+        if not self.available:
+            raise RuntimeError("Schwab client unavailable")
         try:
             resp = self._client.quotes(symbols)
             data = resp.json()
@@ -268,7 +268,7 @@ class SchwabMarketClient:
         except Exception as e:
             if DEBUG:
                 raise
-            print(f"WARN: get_quotes({symbols}): {e}")
+            raise RuntimeError(f"get_quotes({symbols}) failed: {e}") from e
         return result
 
     # ------------------------------------------------------------------
@@ -283,7 +283,7 @@ class SchwabMarketClient:
         (additional symbols are added).
         """
         if not self.available:
-            return
+            raise RuntimeError("Schwab client unavailable")
         try:
             import schwabdev
 
@@ -303,7 +303,7 @@ class SchwabMarketClient:
         except Exception as e:
             if DEBUG:
                 raise
-            print(f"WARN: start_stream({symbols}): {e}")
+            raise RuntimeError(f"start_stream({symbols}) failed: {e}") from e
 
     def _on_stream_message(self, message: Any) -> None:
         """Handler for incoming stream messages."""
@@ -345,7 +345,7 @@ class SchwabMarketClient:
             except Exception as e:
                 if DEBUG:
                     raise
-                print(f"WARN: stop_stream: {e}")
+                raise RuntimeError(f"stop_stream failed: {e}") from e
             self._stream_started = False
 
     # ------------------------------------------------------------------
@@ -358,8 +358,10 @@ class SchwabMarketClient:
         Fetches quotes + recent intraday candles for each symbol.
         Returns a dict suitable for ``SnapshotBuilder.set_price_context()``.
         """
-        if not self.available or not symbols:
+        if not symbols:
             return {}
+        if not self.available:
+            raise RuntimeError("Schwab client unavailable")
 
         per_symbol: dict[str, Any] = {}
         for sym in symbols:
@@ -421,9 +423,13 @@ class SchwabMarketClient:
             ctx["spy_net_pct_change"] = spy_quote.net_pct_change
 
         # VIX context
-        vix_quote = self.get_quote("$VIX")
-        if vix_quote:
-            ctx["vix_level"] = vix_quote.last_price
+        # VIX symbol support varies; don't crash if unavailable.
+        try:
+            vix_quote = self.get_quote("$VIX")
+            if vix_quote:
+                ctx["vix_level"] = vix_quote.last_price
+        except Exception:
+            pass
 
         return ctx
 
@@ -439,7 +445,7 @@ class SchwabMarketClient:
         """
         result: dict[str, Any] = {"symbol": symbol, "spike_detected": False}
         if not self.available:
-            return result
+            raise RuntimeError("Schwab client unavailable")
 
         candles = self.get_intraday_candles(symbol)
         if len(candles) < 5:
@@ -473,7 +479,7 @@ class SchwabMarketClient:
         """
         result: dict[str, Any] = {"symbol": symbol, "regime_shift": False}
         if not self.available:
-            return result
+            raise RuntimeError("Schwab client unavailable")
 
         candles = self.get_intraday_candles(symbol)
         if len(candles) < 20:

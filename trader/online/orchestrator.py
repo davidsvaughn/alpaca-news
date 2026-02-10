@@ -31,8 +31,9 @@ from trader.knowledge.store import KnowledgeStore
 from trader.llm.client import LLMClient
 from trader.llm.cost_tracker import CostTracker
 from trader.llm.mock import MockLLMClient
+from trader.market.schwab_client import SchwabMarketClient
 from trader.models.snapshot import SnapshotBuilder, Trigger, deterministic_snapshot_id
-from trader.online.explorer import explore_phase1
+from trader.online.explorer import explore_two_phase
 from trader.online.triage import run_triage
 
 DEBUG = os.getenv("DEBUG", "false").lower() in ("true", "1")
@@ -120,6 +121,7 @@ def process_news_file(
         max_cost_per_item=settings.max_cost_per_news_item,
         debug=settings.debug,
     )
+    cost_tracker.reset_item()
     if settings.mock_llm:
         llm: object = MockLLMClient()
     else:
@@ -154,21 +156,64 @@ def process_news_file(
         # Use triage-refined symbols (falls back to trigger symbols)
         symbols = triage.symbols if triage.symbols else trigger.symbols
 
-        explore = explore_phase1(
+        # Schwab context capture (optional via SCHWAB_DISABLED)
+        market: SchwabMarketClient | None = None
+        try:
+            market = SchwabMarketClient()
+        except Exception as e:
+            if DEBUG:
+                raise
+            print(f"WARN: Schwab init failed (set SCHWAB_DISABLED=true to disable): {e}")
+            market = None
+
+        if market is not None and market.available and symbols:
+            try:
+                market.start_stream(symbols)
+            except Exception as e:
+                if DEBUG:
+                    raise
+                print(f"WARN: Schwab stream start failed: {e}")
+
+        # Capture market/price context into the Snapshot
+        if market is not None and market.available:
+            try:
+                builder.set_market_context(market.build_market_context())
+                if symbols:
+                    builder.set_price_context(market.build_price_context(symbols))
+            except Exception as e:
+                if DEBUG:
+                    raise
+                print(f"WARN: Schwab context capture failed: {e}")
+
+        explore = explore_two_phase(
             llm=llm,  # type: ignore[arg-type]
-            provider=settings.research_provider,
-            model=settings.research_model,
+            market=market,
             news=news,
             symbols=symbols,
-            use_web_search_tool=True,
-            use_x_search_tool=(settings.research_provider == "grok"),
+            research_provider=settings.research_provider,
+            research_model=settings.research_model,
+            xsearch_provider=settings.xsearch_provider,
+            xsearch_model=settings.xsearch_model,
+            sentiment_provider=settings.sentiment_provider,
+            sentiment_model=settings.sentiment_model,
+            max_phase1_actions=settings.max_phase1_actions,
+            max_phase2_branches=settings.max_phase2_branches,
+            max_total_hops=settings.max_total_hops,
         )
         for trace in explore.traces:
             builder.add_tool_trace(trace)
 
+        if market is not None:
+            try:
+                market.stop_stream()
+            except Exception as e:
+                if DEBUG:
+                    raise
+                print(f"WARN: Schwab stop stream failed: {e}")
+
     # --- Seal snapshot ---
     # Override cost total with the tracker's authoritative figure
-    builder.set_cost_total(cost_tracker.daily_spent)
+    builder.set_cost_total(cost_tracker.item_spent)
     snapshot = builder.seal()
 
     # Persist to JSON file
