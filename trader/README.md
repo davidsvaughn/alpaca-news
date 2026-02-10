@@ -1,7 +1,14 @@
-# trader/ (Phase 2)
+# trader/
 
 This directory contains the first working slice of the system described in
 `cline/DESIGN_PLAN.md`.
+
+It implements the **online (real-time) loop**:
+
+> new Alpaca news JSON file → triage → two-phase exploration → seal an immutable Snapshot
+
+The long-term goal is that these Snapshots become the *atomic learning artifact*
+for offline labeling + policy learning.
 
 ## What works now
 
@@ -16,6 +23,93 @@ This directory contains the first working slice of the system described in
 - **Deterministic snapshot IDs** — backfill is idempotent (safe to re-run)
 - **Per-tool cost tracking** in both CostTracker and sealed Snapshots
 - **Pre-filter** catches obvious fluff headlines without an LLM call (saves money)
+
+## Phase 1 vs Phase 2 (important clarification)
+
+There are **two different “phase” concepts** used across the repo:
+
+1. **Project/roadmap phases** in `cline/DESIGN_PLAN.md` (Phase 1/2/3/...) — milestones for
+   building the system.
+2. **Explorer “two-phase exploration”** inside Stage 2 (**Phase 1** and **Phase 2**) — the
+   runtime behavior that happens *per news event*.
+
+When this README says **Phase 1/Phase 2** below, it is referring to **(2)**: the explorer
+runtime exploration phases.
+
+### Where the explorer phases run in the pipeline
+
+The runtime path is:
+
+1. `trader/online/orchestrator.py::run_watch_loop()` watches `output/alpaca/*.json`
+   (watchdog → queue → worker thread).
+2. The worker calls `trader/online/orchestrator.py::process_news_file(...)`.
+3. Stage 1 triage runs: `trader/online/triage.py::run_triage(...)`.
+4. If triage returns `action == "investigate"`, Stage 2 runs:
+   `trader/online/explorer.py::explore_two_phase(...)`.
+5. A `SnapshotBuilder` accumulates traces/context and then `.seal()` produces a frozen Snapshot
+   which is persisted to both JSON and SQLite.
+
+### Phase 1 (exploration): broad / cheap / shallow
+
+**Intent:** quickly gather a small amount of evidence and generate **2–5 competing hypotheses**.
+You are looking for *disagreement* (different plausible narratives), not volume.
+
+Implemented in `trader/online/explorer.py::explore_two_phase(...)` as:
+
+- Pick a small set of Phase 1 actions via `_choose_phase1_actions(...)`.
+  The candidates come from `trader/models/actions.py::PHASE1_ACTIONS` (examples:)
+  - `price_spike_check`, `volume_regime_shift` (market-only, if Schwab is available)
+  - `breaking_followup` (web)
+  - `google_broad_search` (Gemini grounding)
+  - `x_realtime_rumor` (Grok x_search)
+- Execute each selected action and record a **ToolTrace** hop (`trader/models/tool_trace.py`).
+- Deduplicate evidence and then ask the LLM to propose hypotheses using:
+  - prompt: `trader/prompts/explore_phase1.md`
+  - output schema: `Hypothesis` (`trader/models/actions.py::Hypothesis`)
+
+**Outputs of Phase 1:**
+- Tool traces for the Phase 1 actions
+- A hypothesis set (each with confidence + suggested follow-up actions)
+- A “fresh vs stale” assessment for the trigger news
+
+### Phase 2 (exploration): selective deepening (gated follow-ups)
+
+**Intent:** keep only the best hypotheses (top-K) and do **one targeted follow-up per hypothesis**,
+using different tools where possible to avoid redundant evidence.
+
+Implemented in `trader/online/explorer.py::explore_two_phase(...)` as:
+
+1. **Rank/select hypotheses and assign actions** (top-K = `MAX_PHASE2_BRANCHES`)
+   - prompt: `trader/prompts/hypothesis_rank.md`
+   - outputs: a list of `{hypothesis_id, assigned_action_id}`
+2. **Execute follow-ups**
+   - follow-up prompt: `trader/prompts/explore_phase2.md`
+   - action templates come from `trader/models/actions.py::PHASE2_ACTIONS`
+     (examples: `news_confirmation`, `filing_check`, `analyst_reaction`, `x_volume_alerts`, ...)
+   - basic orthogonality: the explorer tries not to reuse the same tool for multiple branches
+3. **Stop is explicit and logged**
+   - Phase 2 returns a `stop_signal` with a constrained reason:
+     `STOP_CONFIRMED | STOP_LOW_SIGNAL | STOP_BUDGET | STOP_REDUNDANT`
+   - enforced via `trader/models/actions.py::StopReason`
+
+**Outputs of Phase 2:**
+- Tool traces for the follow-up hops
+- Extracted signals (sentiment/novelty/confirmation strength)
+- Stop reason (why we quit)
+
+### Are Phase 1 and Phase 2 “real-time”, or is Phase 2 “after-hours”?
+
+**In the current architecture and code, BOTH Phase 1 and Phase 2 are part of the online (real-time)
+pipeline and run immediately per incoming news item.**
+
+The thing that is intended to run “after-hours” (offline/async) is **not** Phase 2 exploration.
+It is the separate offline loop described in `cline/DESIGN_PLAN.md`:
+
+- outcome labeling (+15m/+60m/+1d returns)
+- scoring hop/tool value
+- learning/updating action weights, stop thresholds, allow/deny lists
+
+(Those live conceptually under `trader/offline/` in the design plan; not implemented in this slice.)
 
 ## Architecture highlights
 
@@ -49,7 +143,35 @@ Snapshots will be written to:
 
 - `data/snapshots/*.json`
 
-## Backfill (process existing files)
+## Backfill (process existing Alpaca files)
+
+**Backfill** means: run the *same online pipeline* (triage → explore → seal Snapshot) over
+**already-existing** `output/alpaca/*.json` files.
+
+It’s useful for:
+
+- Bootstrapping a dataset of Snapshots without waiting for live news
+- Regression testing pipeline changes against a fixed set of articles
+- Re-processing after you change prompts/models (while still avoiding duplicates)
+- Catching up if the watcher was not running
+
+Backfill does **not** mean “after-hours Phase 2”. It’s simply a batch driver that feeds
+historical files through the *same* Stage 1 + Stage 2 code paths.
+
+### How backfill fits into idempotent storage
+
+This pipeline is designed so backfill can be safely re-run:
+
+- Snapshot IDs are deterministic (derived from Alpaca article id) via
+  `trader/models/snapshot.py::deterministic_snapshot_id(...)`.
+- Before processing a file, the orchestrator/backfill checks
+  `trader/db/database.py::snapshot_exists(...)`.
+- Inserts are idempotent (DB insert is effectively “insert or ignore”).
+
+Net effect: you can run backfill multiple times and it will skip files that already produced a
+Snapshot.
+
+### Running backfill
 
 ```bash
 MOCK_LLM=true uv run python -m trader.online.backfill --limit 10
@@ -57,6 +179,9 @@ MOCK_LLM=true uv run python -m trader.online.backfill --limit 10
 
 Re-running backfill on the same files is safe — duplicates are skipped via
 deterministic snapshot IDs derived from the Alpaca article ID.
+
+Tip: backfill is often easiest with `MOCK_LLM=true` and `SCHWAB_DISABLED=true` if you’re iterating
+on orchestration logic locally.
 
 ## Real LLM keys
 
