@@ -18,9 +18,8 @@ import json
 import os
 import queue
 import time
-from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 from watchdog.events import FileSystemEventHandler
 from watchdog.observers import Observer
@@ -35,39 +34,10 @@ from trader.market.schwab_client import SchwabMarketClient
 from trader.models.snapshot import SnapshotBuilder, Trigger, deterministic_snapshot_id
 from trader.online.explorer import explore_two_phase, summarize_cost_by_tool
 from trader.online.triage import run_triage
+from trader.online.event_bus import EventBus, PipelineEvent
+from trader.online.x_stream_service import XStreamService, build_rules_for_symbols
 
 DEBUG = os.getenv("DEBUG", "false").lower() in ("true", "1")
-
-
-# ---------------------------------------------------------------------------
-# SSE event bus
-# ---------------------------------------------------------------------------
-
-
-@dataclass(frozen=True)
-class PipelineEvent:
-    type: str
-    payload: dict[str, Any]
-
-
-class EventBus:
-    """Very small in-memory pub/sub for SSE."""
-
-    def __init__(self) -> None:
-        self._subscribers: list[Callable[[PipelineEvent], None]] = []
-
-    def publish(self, event: PipelineEvent) -> None:
-        for cb in list(self._subscribers):
-            cb(event)
-
-    def subscribe(self, cb: Callable[[PipelineEvent], None]) -> Callable[[], None]:
-        self._subscribers.append(cb)
-
-        def unsubscribe() -> None:
-            if cb in self._subscribers:
-                self._subscribers.remove(cb)
-
-        return unsubscribe
 
 
 # ---------------------------------------------------------------------------
@@ -90,6 +60,7 @@ def process_news_file(
     db: Database,
     knowledge: KnowledgeStore,
     bus: EventBus,
+    xstream: XStreamService | None = None,
 ) -> None:
     news = _load_news_json(path)
 
@@ -156,6 +127,24 @@ def process_news_file(
         # Use triage-refined symbols (falls back to trigger symbols)
         symbols = triage.symbols if triage.symbols else trigger.symbols
 
+        # Optional: start a conservative X stream burst (runs in background).
+        # This is intentionally gated to avoid runaway usage/cost.
+        if (
+            xstream is not None
+            and settings.x_stream_enabled
+            and settings.x_stream_mode == "burst"
+            and triage.confidence >= settings.x_min_triage_confidence_for_burst
+            and symbols
+        ):
+            try:
+                rules = build_rules_for_symbols(symbols=symbols)
+                if rules:
+                    xstream.start_burst(rules=rules, remove_rules_after=True)
+            except Exception as e:
+                if DEBUG:
+                    raise
+                bus.publish(PipelineEvent(type="x_burst_start_error", payload={"error": str(e), "symbols": symbols}))
+
         # Schwab context capture (optional via SCHWAB_DISABLED)
         market: SchwabMarketClient | None = None
         try:
@@ -206,6 +195,43 @@ def process_news_file(
         # Cost by tool from executed traces (more accurate than provider token accounting
         # when running mocks or when providers don't report tool-level token usage).
         builder.set_cost_by_tool(summarize_cost_by_tool(explore.traces))
+
+        # Optional: attach a small snapshot of X cache as evidence.
+        # Note: because the burst runs asynchronously, this may be empty. It's still useful
+        # for learning once we tune the timing/strategy.
+        if xstream is not None and settings.x_stream_enabled:
+            try:
+                x_items = xstream.get_recent_posts(key="_all", limit=10)
+                if x_items:
+                    from trader.models.tool_trace import TraceExecution, new_tool_trace, utc_now_iso
+
+                    builder.add_tool_trace(
+                        new_tool_trace(
+                            trace_id=f"trace_x_cache_{int(time.time())}",
+                            hop_index=len(builder.tool_traces) + 1,
+                            parent_trace_id=None,
+                            decision_context={
+                                "state_summary": "",
+                                "reason_for_action": "Attach recent X stream cache posts",
+                                "symbols": symbols,
+                            },
+                            action={
+                                "tool": "x_stream_cache",
+                                "provider": "xapi",
+                                "query_template": "x_stream_cache_recent",
+                                "query": "_all",
+                                "filters": {"limit": 10},
+                            },
+                            execution=TraceExecution(model="xapi", start_time=utc_now_iso(), end_time=utc_now_iso(), cost_usd=0.0),
+                            results=[{"source_type": "x_stream", "title": "x_post", "snippet": json.dumps(x, ensure_ascii=False)[:800]} for x in x_items],
+                            extracted_signals={"posts_included": len(x_items)},
+                            stop_signal={"should_stop": False, "reason": ""},
+                        )
+                    )
+            except Exception as e:
+                if DEBUG:
+                    raise
+                bus.publish(PipelineEvent(type="x_cache_attach_error", payload={"error": str(e)}))
 
         if market is not None:
             try:
@@ -264,6 +290,7 @@ def _worker_loop(
     db: Database,
     knowledge: KnowledgeStore,
     bus: EventBus,
+    xstream: XStreamService | None = None,
 ) -> None:
     """Pull paths from the queue and process them one at a time."""
     while True:
@@ -278,6 +305,7 @@ def _worker_loop(
                 db=db,
                 knowledge=knowledge,
                 bus=bus,
+                xstream=xstream,
             )
         except Exception as e:
             if DEBUG:
@@ -293,6 +321,7 @@ def run_watch_loop(
     db: Database,
     knowledge: KnowledgeStore,
     bus: EventBus,
+    xstream: XStreamService | None = None,
 ) -> None:
     """Start watchdog observer + worker thread, block forever."""
     import threading
@@ -311,6 +340,7 @@ def run_watch_loop(
             "db": db,
             "knowledge": knowledge,
             "bus": bus,
+            "xstream": xstream,
         },
         daemon=True,
     )

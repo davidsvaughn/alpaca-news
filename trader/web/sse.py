@@ -8,7 +8,7 @@ from typing import AsyncIterator
 
 from fastapi.responses import StreamingResponse
 
-from trader.online.orchestrator import EventBus, PipelineEvent
+from trader.online.event_bus import EventBus, PipelineEvent
 
 
 def sse_format(*, event: str, data: dict) -> str:

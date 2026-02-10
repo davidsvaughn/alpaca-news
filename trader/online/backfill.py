@@ -12,7 +12,8 @@ from pathlib import Path
 from trader.config import load_settings
 from trader.db.database import open_sqlite
 from trader.knowledge.store import KnowledgeStore
-from trader.online.orchestrator import EventBus, process_news_file
+from trader.online.event_bus import EventBus
+from trader.online.orchestrator import process_news_file
 
 
 def iter_news_files(root: Path) -> list[Path]:

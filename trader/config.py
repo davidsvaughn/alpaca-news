@@ -95,6 +95,15 @@ class Settings:
     backfill_on_start: bool
     backfill_limit: int
 
+    # X API stream (optional)
+    x_stream_enabled: bool
+    x_stream_mode: Literal["burst", "off"]
+    x_max_posts_per_day: int
+    x_max_bursts_per_day: int
+    x_burst_ttl_minutes: int
+    x_usage_poll_interval_s: int
+    x_min_triage_confidence_for_burst: float
+
 
 def load_settings(*, dotenv_path: str | None = None) -> Settings:
     """Load settings from environment.
@@ -149,6 +158,17 @@ def load_settings(*, dotenv_path: str | None = None) -> Settings:
     backfill_on_start = _env_bool("BACKFILL_ON_START", False)
     backfill_limit = _env_int("BACKFILL_LIMIT", 50)
 
+    # X stream (conservative defaults)
+    x_stream_enabled = _env_bool("X_STREAM_ENABLED", False)
+    x_stream_mode = (os.getenv("X_STREAM_MODE") or "burst").strip().lower()
+    if x_stream_mode not in ("burst", "off"):
+        raise ValueError("X_STREAM_MODE must be 'burst' or 'off'")
+    x_max_posts_per_day = _env_int("X_MAX_POSTS_PER_DAY", 1000)
+    x_max_bursts_per_day = _env_int("X_MAX_BURSTS_PER_DAY", 10)
+    x_burst_ttl_minutes = _env_int("X_BURST_TTL_MINUTES", 5)
+    x_usage_poll_interval_s = _env_int("X_USAGE_POLL_INTERVAL_S", 300)
+    x_min_triage_confidence_for_burst = _env_float("X_MIN_TRIAGE_CONFIDENCE_FOR_BURST", 0.75)
+
     return Settings(
         learning_mode=learning_mode,
         trading_mode=trading_mode,  # type: ignore[arg-type]
@@ -176,4 +196,12 @@ def load_settings(*, dotenv_path: str | None = None) -> Settings:
         mock_llm=mock_llm,
         backfill_on_start=backfill_on_start,
         backfill_limit=backfill_limit,
+
+        x_stream_enabled=x_stream_enabled,
+        x_stream_mode=x_stream_mode,  # type: ignore[arg-type]
+        x_max_posts_per_day=x_max_posts_per_day,
+        x_max_bursts_per_day=x_max_bursts_per_day,
+        x_burst_ttl_minutes=x_burst_ttl_minutes,
+        x_usage_poll_interval_s=x_usage_poll_interval_s,
+        x_min_triage_confidence_for_burst=x_min_triage_confidence_for_burst,
     )

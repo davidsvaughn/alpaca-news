@@ -18,7 +18,9 @@ import uvicorn
 from trader.config import load_settings
 from trader.db.database import open_sqlite
 from trader.knowledge.store import KnowledgeStore
-from trader.online.orchestrator import EventBus, process_news_file, run_watch_loop
+from trader.online.event_bus import EventBus, PipelineEvent
+from trader.online.orchestrator import process_news_file, run_watch_loop
+from trader.online.x_stream_service import XStreamGuards, XStreamService
 from trader.web.app import create_app
 
 
@@ -29,9 +31,36 @@ def main() -> None:
     knowledge.ensure_defaults()
 
     bus = EventBus()
+
+    xstream: XStreamService | None = None
+    if settings.x_stream_enabled and settings.x_stream_mode != "off":
+        # Conservative guardrails by default
+        xstream = XStreamService(
+            bus=bus,
+            data_dir=Path(settings.data_dir),
+            guards=XStreamGuards(
+                max_posts_per_day=settings.x_max_posts_per_day,
+                max_bursts_per_day=settings.x_max_bursts_per_day,
+                burst_ttl_minutes=settings.x_burst_ttl_minutes,
+                usage_poll_interval_s=settings.x_usage_poll_interval_s,
+            ),
+            enabled=True,
+        )
+        bus.publish(
+            PipelineEvent(
+                type="x_stream_configured",
+                payload={
+                    "enabled": True,
+                    "mode": settings.x_stream_mode,
+                    "burst_ttl_minutes": settings.x_burst_ttl_minutes,
+                    "max_bursts_per_day": settings.x_max_bursts_per_day,
+                    "max_posts_per_day": settings.x_max_posts_per_day,
+                },
+            )
+        )
     t = threading.Thread(
         target=run_watch_loop,
-        kwargs={"settings": settings, "db": db, "knowledge": knowledge, "bus": bus},
+        kwargs={"settings": settings, "db": db, "knowledge": knowledge, "bus": bus, "xstream": xstream},
         daemon=True,
     )
     t.start()
@@ -41,7 +70,7 @@ def main() -> None:
         root = Path(settings.alpaca_output_dir)
         files = sorted([p for p in root.glob("*.json") if p.is_file()])
         for p in files[-settings.backfill_limit :]:
-            process_news_file(path=p, settings=settings, db=db, knowledge=knowledge, bus=bus)
+            process_news_file(path=p, settings=settings, db=db, knowledge=knowledge, bus=bus, xstream=xstream)
 
     app = create_app(settings=settings, bus=bus)
     uvicorn.run(app, host="127.0.0.1", port=8000, log_level="info")

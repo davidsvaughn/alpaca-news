@@ -9,7 +9,7 @@ from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
 
 from trader.config import Settings
-from trader.online.orchestrator import EventBus
+from trader.online.event_bus import EventBus
 from trader.web.sse import sse_response
 
 

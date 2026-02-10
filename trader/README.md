@@ -97,7 +97,7 @@ Implemented in `trader/online/explorer.py::explore_two_phase(...)` as:
 - Extracted signals (sentiment/novelty/confirmation strength)
 - Stop reason (why we quit)
 
-### Are Phase 1 and Phase 2 “real-time”, or is Phase 2 “after-hours”?
+### Are Phase 1 and Phase 2 Run “real-time” (i.e. NOT after market close)?
 
 **In the current architecture and code, BOTH Phase 1 and Phase 2 are part of the online (real-time)
 pipeline and run immediately per incoming news item.**
