@@ -11,6 +11,28 @@ uv venv --python /usr/bin/python3.12
 source .venv/bin/activate
 uv sync
 
+---------------------------------------------------------------------------------------------------
+CLAUDE CODE COSTS
+
+[ https://claude.ai/share/0b3b1977-bbec-412d-a43b-b81935fa82e8 ]
+
+# View daily costs
+npx ccusage@latest daily
+
+# View monthly aggregated costs
+npx ccusage@latest monthly
+
+# Filter by date range
+npx ccusage@latest daily --since 2025-02-08 --until 2025-02-11
+
+# Show per-model cost breakdown
+npx ccusage@latest daily --breakdown
+
+
+The tool is lightweight and doesn't require installation - just run it with npx. 
+It analyzes your local usage data (stored in ~/.claude/projects/) to give you 
+comprehensive cost breakdowns by day, month, or session.
+
 ---------------------------------
 
 GROK x_search: https://docs.x.ai/developers/tools/x-search
