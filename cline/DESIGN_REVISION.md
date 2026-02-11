@@ -122,33 +122,86 @@ the situation calls for it (e.g., a truly novel event that doesn't match past pa
 
 ---
 
-## Two Layers of Learning
+## Knowledge Model: Flat Insights with Simple Scoring
 
-### Layer 1: Domain knowledge (what moves prices)
+### Why not categorize knowledge up front?
 
-Already partially implemented in `data/knowledge/`:
-- `signal_patterns.json` — patterns that preceded profitable trades
-- `anti_patterns.json` — patterns that preceded losses
-- `reliable_sources.json` — domains/URLs ranked by reliability
-- `skip_patterns.json` — headlines/keywords to auto-skip
+An earlier draft split knowledge into "Layer 1: domain knowledge" (what moves prices)
+and "Layer 2: strategy knowledge" (what exploration approaches work). But real insights
+are deeply intertwined:
 
-These answer: **"Given this news, is there likely a tradeable signal?"**
+> "When a rumor about NVDA supply constraints surfaces on X from semiconductor
+> insiders, fetching the original source URL and comparing it against the Reuters
+> wire is the most reliable confirmation path — and confirmed rumors at this level
+> typically move the stock 1-3% within an hour."
 
-### Layer 2: Strategy knowledge (what exploration approaches work) — NEW
+That's *simultaneously* domain knowledge, strategy knowledge, and source knowledge.
+Forcing it into predefined categories loses the connections and over-structures things
+before we know what shape the knowledge actually takes.
 
-A new knowledge file, e.g. `data/knowledge/exploration_strategies.json`, that captures:
+### The approach: one flat insights collection
 
-- Which tool sequences are productive for which types of news
-- Which tools are redundant with each other under certain conditions
-- Which tools are dead ends under certain conditions
-- When url_fetch adds value over LLM summarization
-- When X stream adds value over x_search (and vice versa)
-- Effective query patterns (not rigid templates, but learned heuristics)
+**Operational knowledge files stay as-is** — `skip_patterns.json` is mechanically
+used by the pre-filter to avoid LLM calls, so it has a specific code purpose. Same
+for `reliable_sources.json` if we use it for source ranking. These are tools, not
+"knowledge categories."
 
-These answer: **"Given this news, how should I investigate it?"**
+**All new learning goes into a single file**: `data/knowledge/insights.json` — a flat
+list of insight objects. Each insight can be about anything: markets, tools, strategies,
+sources, or (most likely) some blend of all of these.
 
-Both layers are injected into the exploration prompt. Both are updated by the offline
-reflection loop.
+### Insight schema
+
+```json
+{
+  "id": "ins_001",
+  "text": "When initial web_search finds conflicting sources about a supply chain rumor, url_fetch on each source followed by comparison yields much more reliable evidence than a second web_search",
+  "score": 3,
+  "created": "2026-02-15",
+  "last_touched": "2026-02-20",
+  "source_snapshots": ["snap_142", "snap_167", "snap_201"]
+}
+```
+
+- **`text`**: free-form insight. Can blend market knowledge, tool strategy, source
+  reliability — whatever the reflection loop found useful.
+- **`score`**: starts at 1 when first created. The offline reflection loop bumps +1
+  when new evidence reinforces the insight, -1 when new evidence contradicts it.
+  That's the entire scoring mechanism.
+- **`last_touched`**: when the score was last changed. Stale insights (not touched in
+  a long time) are candidates for re-testing, but we don't build formal re-testing
+  machinery — we just mention staleness in the prompt so the LLM can occasionally
+  act against an old guideline to check if it still holds.
+- **`source_snapshots`**: optional breadcrumbs for traceability.
+
+### How insights are used at prompt time
+
+When building the exploration prompt:
+1. Load all insights from `insights.json`
+2. Filter out insights with `score ≤ 0` (contradicted more than confirmed)
+3. Sort by score descending (strongest insights first)
+4. Cap at top N to keep the prompt reasonable
+5. Inject as a "Lessons from experience" block
+
+### How insights evolve over time
+
+The offline reflection loop (run periodically over batches of scored Snapshots):
+1. For each existing insight: does recent evidence support it (+1) or contradict it (-1)?
+2. Any new patterns? → add new insight with score=1
+3. Insights that drop to score ≤ 0 stop being injected (but aren't deleted — they
+   could recover if new evidence supports them later)
+
+Insights are **not written in stone**. They're more like "anecdotal guidelines with a
+running tally." Good ones float to the top; bad ones sink. The LLM can always choose
+to ignore them when the situation warrants it.
+
+### How knowledge organization itself can evolve
+
+We deliberately avoid imposing a taxonomy now. If a natural structure emerges after
+hundreds of snapshots (e.g., certain clusters of insights clearly relate to specific
+sectors, or to specific tool combinations), the reflection loop can *itself* propose
+how to reorganize — that's just another kind of meta-learning. But we don't pre-build
+categories we might never need.
 
 ---
 
@@ -160,8 +213,8 @@ reflection loop.
 │                                                    │
 │  System prompt includes:                           │
 │    - Tool definitions                              │
-│    - Domain knowledge (signal/anti patterns)       │
-│    - Strategy knowledge (exploration strategies)   │
+│    - Learned insights (sorted by score)            │
+│    - Operational knowledge (skip patterns, etc.)   │
 │    - Budget guardrails                             │
 │                                                    │
 │  LLM reasons freely, calls tools, stops when done │
@@ -187,21 +240,24 @@ reflection loop.
                    │
                    ▼
 ┌──────────────────────────────────────────────────┐
-│ OFFLINE: Reflection → update knowledge             │
+│ OFFLINE: Reflection → update insights              │
 │                                                    │
 │  LLM reviews batch of scored Snapshots:            │
 │    "Here are 50 recent Snapshots with outcomes     │
 │     and per-hop scores. What patterns do you see?" │
 │                                                    │
-│  Output: proposed updates to BOTH:                 │
-│    - Domain knowledge (signal_patterns, etc.)      │
-│    - Strategy knowledge (exploration_strategies)   │
+│  Output:                                           │
+│    - Reinforce existing insights (+1 score)        │
+│    - Weaken contradicted insights (-1 score)       │
+│    - Propose new insights (score=1)                │
+│    - Optionally update operational files           │
+│      (skip_patterns, reliable_sources, etc.)       │
 │                                                    │
 │  Human review → merge into knowledge store         │
 └──────────────────┬───────────────────────────────┘
                    │
                    ▼
-            (next event uses updated knowledge)
+            (next event uses updated insights)
 ```
 
 ### What "scoring action sequences" means concretely
@@ -232,7 +288,9 @@ The reflection LLM can then produce insights like:
 > "Anti-pattern: doing a second web_search with slightly different keywords after
 > x_search returned nothing — this is usually a dead end."
 
-These go into `exploration_strategies.json` and get injected into future prompts.
+These become new entries in `insights.json` (score=1) and get injected into future
+prompts. If they keep being reinforced by subsequent Snapshots, their score rises
+and they become more prominent in the prompt context.
 
 ---
 
@@ -257,10 +315,11 @@ These go into `exploration_strategies.json` and get injected into future prompts
   documentation / reference, but it no longer gates what the LLM can do.
 
 ### Add
-- **`data/knowledge/exploration_strategies.json`** — strategy knowledge file
-- **Offline hop scorer** — evaluates per-trace and per-sequence value
-- **Strategy reflection prompt** — generates exploration_strategies updates
-  (extends the existing reflection concept from DESIGN_PLAN.md §9c)
+- **`data/knowledge/insights.json`** — flat, scored insights collection (see
+  "Knowledge Model" section above)
+- **Offline hop scorer** (future) — evaluates per-trace and per-sequence value
+- **Reflection prompt** (future) — reviews scored Snapshots, proposes new insights
+  and score updates to existing ones (extends DESIGN_PLAN.md §9c)
 
 ### Drop (or deprioritize)
 - **Formal policy hook** (the LLM *is* the policy)
@@ -285,11 +344,12 @@ You are a financial research assistant investigating a breaking news event.
 - check_price(symbol): Get current price, bid/ask, volume, and recent 1-min candles.
 - check_volume(symbol): Get volume data and detect abnormal activity.
 
-## Exploration strategies (learned from experience)
-{inject exploration_strategies.json contents here}
+## Lessons from experience (scored insights, strongest first)
+{inject top-N insights from insights.json here, filtered to score > 0}
 
-## Market knowledge (learned from experience)
-{inject signal_patterns.json, anti_patterns.json, reliable_sources.json}
+Note: some of these insights may be stale (not tested recently). If the
+situation warrants it, you may act against a guideline to test whether it
+still holds.
 
 ## Budget for this event
 - Remaining cost: ${budget_remaining}
@@ -324,22 +384,23 @@ at each step.
    - Budget guardrails enforced after each call
    - Loop ends when LLM says "done" or budget exhausted
 
-2. **Add `exploration_strategies.json`** to knowledge store
-   - Initially seeded with common-sense strategies
-   - Updated by offline reflection
+2. **Create `data/knowledge/insights.json`**
+   - Start empty (or seed with a few common-sense insights)
+   - Updated by offline reflection loop over time
 
 3. **Update exploration prompt**
-   - Inject both domain + strategy knowledge
-   - Provide tool definitions
+   - Inject top-N scored insights from `insights.json`
+   - Provide tool definitions (not constrained templates)
    - Let LLM reason freely
 
 4. **Add offline hop scorer** (future, for learning)
    - Per-trace: did this hop add novel info? What was the cost/benefit?
    - Per-sequence: which chains of tools produced good outcomes?
 
-5. **Add strategy reflection prompt** (future, for learning)
+5. **Add reflection prompt** (future, for learning)
    - Reviews scored Snapshots in batches
-   - Proposes updates to exploration_strategies.json
+   - Proposes new insights (score=1) and score adjustments to existing ones
+   - Optionally updates operational files (skip_patterns, etc.)
    - Human-in-the-loop review before merging
 
 ---
