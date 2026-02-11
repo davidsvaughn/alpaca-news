@@ -379,6 +379,270 @@ and they become more prominent in the prompt context.
 
 ---
 
+## Position Lifecycle: Buy AND Sell (The Dual-Aspect Problem)
+
+### The gap
+
+The current system (both design and code) is **entry-only**. It asks "should I buy?"
+but never asks "when should I sell?" This is a critical gap:
+
+> **Profit isn't made or lost until you sell.** Buying is half the trade; the exit
+> decision is equally important and requires different reasoning, different data,
+> and different strategies.
+
+The DESIGN_PLAN §8 sketched a "Decision + Monitoring" phase in 5 bullet points, and
+listed a `monitor.py` in the project structure, but neither was ever implemented. The
+DESIGN_REVISION (until now) omitted it entirely. No code exists in the trader system
+for position tracking, exit strategy, or post-trade analysis.
+
+### The solution: Watch lifecycle with four phases
+
+When the entry explorer produces a signal that meets a configurable confidence
+threshold, the system creates a **Watch** — a monitored hypothetical position that
+progresses through four phases, each generating its own Snapshots for learning.
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                      WATCH LIFECYCLE                             │
+│                                                                  │
+│  Phase 1: ENTRY                                                  │
+│    News event → exploration → entry Snapshot                     │
+│    If confidence >= threshold → create Watch                     │
+│                                                                  │
+│  Phase 2: HOLDING (active monitoring)                            │
+│    Periodic check-ins → monitoring Snapshots                     │
+│    Each asks: "Should I still hold, or exit now? Why?"          │
+│    Uses all tools (price, options, news, X, order book...)       │
+│                                                                  │
+│  Phase 3: EXIT                                                   │
+│    Exit decision → exit Snapshot                                 │
+│    Records: exit price, exit reason, realized P&L                │
+│                                                                  │
+│  Phase 4: RETROSPECTIVE (post-exit learning)                     │
+│    Continue monitoring at lower frequency after exit              │
+│    Each asks: "Was the exit good? What happened next?            │
+│    What alternative strategy would have been better?"            │
+│                                                                  │
+│  Phase 5: CLOSED                                                 │
+│    Full lifecycle sealed → available for reflection loop          │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### Why post-exit monitoring matters
+
+Most trading systems stop paying attention after the exit. But the richest learning
+comes from asking **counterfactual questions** after the trade is done:
+
+- "I sold at +1.2% but the stock continued to +3.5% — what signals would have
+  told me to hold longer?"
+- "I sold at +0.5% and then the stock reversed to -2% — my exit was actually
+  excellent, and here's the signal I used that worked."
+- "I took a -0.8% loss, but if I'd held 10 more minutes it recovered — was my
+  stop-loss too tight?"
+
+Without post-exit snapshots, these questions can never be answered. With them, the
+reflection loop can generate exit-specific insights:
+
+> "For rumor-confirmation trades, taking profit at +1.5% is better than waiting
+> for +2% — the reversal typically happens around the +1.8% mark."
+
+> "IV collapse within 15 minutes of entry is a reliable exit signal — in 7/10
+> cases the price reversed within 5 minutes of IV dropping below entry-level IV."
+
+> "When X sentiment flips bearish (bear posts outnumber bull 2:1), the price
+> reversal follows within ~5 minutes. This is a reliable exit trigger."
+
+### Watch schema
+
+```json
+{
+  "watch_id": "watch_001",
+  "symbol": "NVDA",
+  "status": "holding",
+
+  "entry": {
+    "snapshot_id": "snap_142",
+    "price": 612.30,
+    "time": "2026-02-15T14:32:00Z",
+    "confidence": 0.82,
+    "direction": "up",
+    "thesis": "Supply constraint rumor confirmed by Reuters + Bloomberg"
+  },
+
+  "exit": {
+    "snapshot_id": "snap_148",
+    "price": 618.50,
+    "time": "2026-02-15T14:54:00Z",
+    "reason": "Momentum exhausting, IV collapsing, X sentiment turning bearish",
+    "realized_pnl_pct": 1.01
+  },
+
+  "monitoring_snapshot_ids": ["snap_143", "snap_144", "snap_145", "snap_146", "snap_147"],
+  "retrospective_snapshot_ids": ["snap_149", "snap_150", "snap_151"],
+
+  "config": {
+    "entry_confidence_threshold": 0.7,
+    "holding_check_schedule": [
+      {"from_min": 0,   "to_min": 10,  "interval_sec": 120, "depth": "lightweight"},
+      {"from_min": 10,  "to_min": 30,  "interval_sec": 300, "depth": "medium"},
+      {"from_min": 30,  "to_min": 60,  "interval_sec": 600, "depth": "medium"},
+      {"from_min": 60,  "to_min": 240, "interval_sec": 900, "depth": "full"},
+      {"from_min": 240, "to_min": null, "interval_sec": 0,  "depth": "force_exit"}
+    ],
+    "retrospective_check_schedule": [
+      {"from_min": 0,  "to_min": 15,  "interval_sec": 300,  "depth": "lightweight"},
+      {"from_min": 15, "to_min": 60,  "interval_sec": 900,  "depth": "medium"},
+      {"from_min": 60, "to_min": null, "interval_sec": 0,   "depth": "seal"}
+    ],
+    "monitoring_budget_usd": 0.50,
+    "retrospective_budget_usd": 0.20,
+    "max_hold_duration_min": 240,
+    "max_retrospective_duration_min": 60
+  },
+
+  "lifecycle_sealed_at": "2026-02-15T15:55:00Z"
+}
+```
+
+All config values are **configurable** (via `.env` or runtime config). The schedules
+above are defaults; the system should support overriding them per-watch or globally.
+
+### Check-in depth levels
+
+| Depth | What it does | Cost |
+|---|---|---|
+| `lightweight` | Price check only (Schwab quote + candles). No LLM call. | Free |
+| `medium` | Price + options IV + quick news scan. May use LLM for assessment. | ~$0.02–0.05 |
+| `full` | Full tool-use loop (same as entry exploration). All tools available. | ~$0.05–0.15 |
+| `force_exit` | Must produce an exit decision. Cannot choose "hold." | ~$0.05–0.15 |
+| `seal` | Seal the retrospective. Produce final assessment. | ~$0.02–0.05 |
+
+Lightweight check-ins are **free** (Schwab data only) and can run frequently without
+cost concerns. LLM-powered check-ins draw from the Watch's monitoring budget.
+
+### Monitoring Snapshot prompt (during hold)
+
+```markdown
+You are monitoring a hypothetical position that was entered based on
+a news-driven signal.
+
+## Current position
+- Symbol: {symbol}
+- Entry price: ${entry_price} at {entry_time}
+- Current price: ${current_price} ({unrealized_pnl_pct}% unrealized P&L)
+- Time held: {minutes_held} minutes
+- Entry thesis: {entry_thesis}
+- Entry confidence: {entry_confidence}
+
+## Current market data
+{inject price context, options IV, market context}
+
+## Recent developments since entry
+{any new news, X posts, or market events detected}
+
+## Tools available
+{same tool list as entry explorer}
+
+## Exit insights from experience
+{inject exit-relevant insights from insights.json}
+
+## Budget
+- Remaining monitoring budget: ${monitoring_budget_remaining}
+- Financial data tools are free.
+
+## Your task
+1. Has the entry thesis changed? Is there new information?
+2. Is momentum continuing or exhausting?
+3. Are there reversal signals (IV collapse, sentiment flip, volume drop)?
+4. DECISION: Hold or Exit?
+   - If Hold: what are you watching for next?
+   - If Exit: why now? What triggered it?
+```
+
+### Post-exit retrospective prompt
+
+```markdown
+You are reviewing a completed hypothetical trade to assess whether the
+exit decision was good and what could be learned.
+
+## Trade summary
+- Symbol: {symbol}
+- Entry: ${entry_price} at {entry_time} (thesis: {entry_thesis})
+- Exit: ${exit_price} at {exit_time} (reason: {exit_reason})
+- Realized P&L: {realized_pnl_pct}%
+- Hold duration: {hold_duration_min} minutes
+
+## What happened after the exit
+- Current price: ${current_price} ({time_since_exit} minutes after exit)
+- Price at exit+5m: ${price_5m}
+- Price at exit+15m: ${price_15m}
+- Would-have-been P&L if still holding: {counterfactual_pnl_pct}%
+- {any new developments since exit}
+
+## Your task
+1. Was the exit decision good in retrospect? Why or why not?
+2. What signals (if any) would have suggested a better exit strategy?
+3. If the exit was too early: what would you have watched for to hold longer?
+4. If the exit was too late: what warning signs did we miss?
+5. Propose any new insights about exit strategies.
+```
+
+### How Watches integrate with the learning pipeline
+
+```
+┌────────────────────────────┐
+│ Entry Snapshot              │ ← standard entry exploration
+│ (confidence >= threshold)   │
+└──────────┬─────────────────┘
+           │ creates Watch
+           ▼
+┌────────────────────────────┐
+│ Monitoring Snapshots        │ ← periodic check-ins during hold
+│ (lightweight/medium/full)   │     each recorded with ToolTraces
+└──────────┬─────────────────┘
+           │ exit decision
+           ▼
+┌────────────────────────────┐
+│ Exit Snapshot               │ ← the sell decision
+│ (exit reason + tool traces) │
+└──────────┬─────────────────┘
+           │ post-exit monitoring
+           ▼
+┌────────────────────────────┐
+│ Retrospective Snapshots     │ ← counterfactual analysis
+│ (was exit good? what next?) │     "what would have happened?"
+└──────────┬─────────────────┘
+           │ seal lifecycle
+           ▼
+┌────────────────────────────┐
+│ Sealed Watch                │ ← complete trade lifecycle
+│ (entry + hold + exit +      │     available for reflection loop
+│  retrospective + outcomes)  │
+└─────────────────────────────┘
+```
+
+The offline reflection loop receives **complete Watch lifecycles** — not just
+individual Snapshots — so it can learn from the full trajectory: what the entry
+thesis was, how the position evolved, what triggered the exit, and what happened
+afterward. This is far richer than just "we predicted up and the price went up."
+
+### Budget controls for monitoring
+
+| Control | Default | Configurable via |
+|---|---|---|
+| Monitoring budget per Watch | $0.50 | `WATCH_MONITORING_BUDGET` |
+| Retrospective budget per Watch | $0.20 | `WATCH_RETROSPECTIVE_BUDGET` |
+| Max concurrent Watches | 5 | `MAX_CONCURRENT_WATCHES` |
+| Max daily Watch monitoring spend | $5.00 | `MAX_DAILY_WATCH_COST` |
+| Entry confidence threshold to create Watch | 0.7 | `WATCH_CONFIDENCE_THRESHOLD` |
+| Max hold duration | 240 min | `WATCH_MAX_HOLD_MINUTES` |
+| Max retrospective duration | 60 min | `WATCH_MAX_RETRO_MINUTES` |
+
+Lightweight check-ins (price only) are **always free** and don't count against any
+budget. Only LLM-powered check-ins consume budget.
+
+---
+
 ## What Changes in the Codebase
 
 ### Keep (already built, still valuable)
@@ -402,9 +666,16 @@ and they become more prominent in the prompt context.
 ### Add
 - **`data/knowledge/insights.json`** — flat, scored insights collection (see
   "Knowledge Model" section above)
+- **`trader/models/watch.py`** — Watch schema (position lifecycle data model)
+- **`trader/online/watcher.py`** — Watch lifecycle manager (creates Watches from
+  high-confidence entry Snapshots, runs monitoring check-ins on schedule,
+  manages exit decisions, runs post-exit retrospective, seals lifecycle)
+- **`trader/prompts/monitor_hold.md`** — holding check-in prompt
+- **`trader/prompts/monitor_exit.md`** — exit evaluation prompt (force_exit depth)
+- **`trader/prompts/monitor_retrospective.md`** — post-exit retrospective prompt
 - **Offline hop scorer** (future) — evaluates per-trace and per-sequence value
-- **Reflection prompt** (future) — reviews scored Snapshots, proposes new insights
-  and score updates to existing ones (extends DESIGN_PLAN.md §9c)
+- **Reflection prompt** (future) — reviews scored Snapshots AND sealed Watch
+  lifecycles, proposes new insights and score updates (extends DESIGN_PLAN.md §9c)
 
 ### Drop (or deprioritize)
 - **Formal policy hook** (the LLM *is* the policy)
@@ -516,20 +787,34 @@ at each step.
    - Describe additional available data (Tier 3) for discovery
    - Let LLM reason freely
 
-5. **Add Tier 2 Schwab tools on demand**
+5. **Build Watch lifecycle** (`trader/models/watch.py` + `trader/online/watcher.py`)
+   - Watch data model with configurable schedules and budgets
+   - Watcher service: creates Watches from high-confidence entry Snapshots
+   - Holding phase: periodic check-ins (lightweight → medium → full → force_exit)
+   - Exit phase: records exit decision as an Exit Snapshot
+   - Retrospective phase: post-exit monitoring at lower frequency
+   - Lifecycle sealing: bundles entry + hold + exit + retrospective for reflection
+   - Budget enforcement: separate monitoring + retrospective budgets per Watch
+   - Concurrency limits: max concurrent Watches, daily monitoring spend cap
+   - Monitoring prompts: `monitor_hold.md`, `monitor_exit.md`,
+     `monitor_retrospective.md`
+
+6. **Add Tier 2 Schwab tools on demand**
    - `get_options_chain(symbol, ...)` — full chain when detailed analysis warranted
    - `get_price_history(symbol, period, frequency)` — flexible candle periods
    - `check_order_book(symbol)` — L2 depth
    - Build these when the LLM consistently requests them (or when we see value
      in Snapshots)
 
-6. **Add offline hop scorer** (future, for learning)
+7. **Add offline hop scorer** (future, for learning)
    - Per-trace: did this hop add novel info? What was the cost/benefit?
    - Per-sequence: which chains of tools produced good outcomes?
 
-7. **Add reflection prompt** (future, for learning)
-   - Reviews scored Snapshots in batches
+8. **Add reflection prompt** (future, for learning)
+   - Reviews scored Snapshots **and sealed Watch lifecycles** in batches
    - Proposes new insights (score=1) and score adjustments to existing ones
+   - Learns from both entry AND exit decisions (the full trade trajectory)
+   - Can generate insights about entry strategy, exit strategy, or both together
    - Optionally updates operational files (skip_patterns, etc.)
    - Human-in-the-loop review before merging
 
