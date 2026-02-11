@@ -70,17 +70,102 @@ strategy knowledge injected as prompt context**.
 
 ### The tools (available to the LLM during exploration)
 
+#### Web / social research tools
+
 | Tool | Description | Cost model |
 |---|---|---|
 | `web_search(query)` | Search via OpenAI / Gemini / Grok | Per-call LLM + tool fee |
 | `x_search(query)` | Search X via Grok | Per-call LLM + tool fee |
 | `x_stream(keywords, minutes)` | Start a live X filtered stream burst | X API credits |
 | `url_fetch(url)` | Fetch + extract full text of a web page | Free (compute only) |
-| `check_price(symbol)` | Current price + recent candles | Free (Schwab) |
-| `check_volume(symbol)` | Volume data + regime detection | Free (Schwab) |
+
+#### Financial data tools (via Schwab — all free, no LLM cost)
+
+| Tool | Description | What it reveals |
+|---|---|---|
+| `check_price(symbol)` | Real-time quote + recent 1-min candles | Current price, bid/ask, volume, recent trend |
+| `check_options_activity(symbol)` | ATM options IV, put/call ratio, unusual activity | Market's *expected* move size; hedge fund positioning |
+| `get_fundamentals(symbol)` | Market cap, P/E, EPS, sector, 52-week range, dividend yield | Size/context of the company; sensitivity to news |
+| `get_movers(index)` | Top movers by % change or volume for $DJI/$SPX/NASDAQ | What else is moving right now; sector-wide vs idiosyncratic |
+| `check_market_context()` | Market hours, SPY, VIX, /ES futures, broad market conditions | Is market open? Overall risk-on/off environment |
+| `get_price_history(symbol, period, frequency)` | Historical candles (1-min to monthly, any range) | Longer-term context, support/resistance, trend |
+| `get_options_chain(symbol, ...)` | Full chain with Greeks (delta, gamma, theta, vega, IV) | Detailed options analysis when warranted |
+| `check_order_book(symbol)` | Level 2 bid/ask depth (NYSE/NASDAQ book) | Institutional order stacking, supply/demand imbalance |
 
 The LLM decides *what queries to run*, *which tools to use*, *in what order*, and
 *when to stop*. We don't constrain it to templates.
+
+### The full financial data surface (Schwab via schwabdev)
+
+The `schwabdev` library provides access to far more data than just price and volume.
+Rather than pre-deciding which data matters, we **describe the full buffet** in the
+exploration prompt and let the LLM request what it needs.
+
+#### What schwabdev exposes (REST API)
+
+| schwabdev method | Data | Why it matters for news-driven research |
+|---|---|---|
+| `quote()` / `quotes()` | Real-time bid/ask/last/volume/mark | Core price data |
+| `price_history()` | Historical OHLCV candles (1-min → monthly) | Trend, support/resistance, context |
+| `option_chains()` | Full options chain with all Greeks + IV | IV = market's expected move; the single best "is this news real?" signal |
+| `option_expiration_chain()` | Available expiration dates | When are options concentrated? |
+| `movers()` | Top % gainers/losers, volume leaders by index | "Is the whole sector moving, or just this stock?" |
+| `instruments()` with `projection="fundamental"` | P/E, EPS, market cap, sector, 52-week range, dividend yield | Company context; how sensitive is this stock to this type of news? |
+| `market_hours()` | Exact session times (pre/regular/post, holidays) | Proper "is market open?" instead of rough EST offset |
+
+#### What schwabdev streams (WebSocket)
+
+| Stream type | Data | Why it matters |
+|---|---|---|
+| `level_one_equities` | Real-time L1 quotes | What we use now |
+| `nyse_book` / `nasdaq_book` | Level 2 order book depth | Institutional order stacking, supply/demand imbalance |
+| `options_book` | Options order book | Unusual options activity in real time |
+| `chart_equity` | Streaming chart candles | Live charting data |
+| `chart_futures` | Futures streaming (/ES, /NQ, etc.) | More liquid than SPY after hours; better gauge of where market is headed |
+| `screener_equity` | Real-time screener (e.g. NASDAQ_VOLUME_30) | Biggest movers right now across the market |
+| `screener_options` | Options activity screener | Unusual options flow across the market |
+
+#### Currently wrapped vs. not yet wrapped
+
+| Status | Tools |
+|---|---|
+| ✅ Wrapped | `quote`, `quotes`, `price_history` (1-min), `level_one_equities` stream |
+| ❌ Not yet | `option_chains`, `movers`, `instruments/fundamental`, `market_hours`, L2 books, futures, screeners |
+
+#### Tiered implementation approach
+
+**Tier 1 (build first — high value, frequently needed):**
+- `check_options_activity(symbol)` — ATM IV + put/call ratio. This is probably the
+  single most informative data point we're missing. The options market often "knows"
+  before the stock moves.
+- `get_fundamentals(symbol)` — one API call gives crucial company context.
+- `get_movers(index)` — sector/market-wide context.
+- Enhanced `check_market_context()` — proper market hours + /ES futures.
+
+**Tier 2 (build on demand — valuable but situational):**
+- `get_options_chain(symbol, ...)` — full chain for detailed analysis.
+- `get_price_history(symbol, period, frequency)` — flexible candle periods.
+- `check_order_book(symbol)` — L2 depth.
+
+**Tier 3 (describe in prompt, build when requested):**
+- Futures streaming, options screener, etc.
+- If the LLM requests data we haven't wrapped yet, that's a signal to add it.
+
+#### Baked-in data discovery
+
+The exploration prompt should describe the **full data surface** — not just the
+pre-built tools — so the LLM knows what to ask for. This means including a
+"Financial data available" block that lists everything accessible via Schwab, even
+if we haven't built a dedicated tool wrapper yet.
+
+When the LLM requests something we haven't built (e.g., "I want to see the options
+chain for NVDA"), the system can either:
+- Route it through a generic `schwab_query(method, params)` pass-through tool
+- Log the request so we know to build a dedicated tool
+- Both
+
+This "describe first, build on demand" approach avoids over-engineering tools nobody
+uses while ensuring the LLM is aware of the full capability.
 
 ### What stays in code (hard guardrails)
 
@@ -334,15 +419,43 @@ and they become more prominent in the prompt context.
 ```markdown
 You are a financial research assistant investigating a breaking news event.
 
-## Tools available
+## Web / social research tools
 - web_search(query): Search the web. Returns summaries + source URLs.
 - x_search(query): Search X/Twitter posts via Grok. Returns posts + metadata.
 - x_stream(keywords, minutes): Start a live X stream for the given keywords.
   Returns buffered posts after the stream completes.
 - url_fetch(url): Fetch and extract the full text of a web page. Use this when
   you need the actual article content rather than a search summary.
-- check_price(symbol): Get current price, bid/ask, volume, and recent 1-min candles.
-- check_volume(symbol): Get volume data and detect abnormal activity.
+
+## Financial data tools (free — no LLM cost)
+- check_price(symbol): Real-time quote (bid/ask/last/volume/mark) + recent
+  1-min candles.
+- check_options_activity(symbol): ATM implied volatility, put/call volume ratio,
+  and unusual options activity. IV is the market's expected move — one of the
+  strongest signals for whether news is being priced in.
+- get_fundamentals(symbol): Market cap, P/E, EPS, sector, 52-week range,
+  dividend yield. Essential context for assessing news sensitivity.
+- get_movers(index): Top gainers/losers and volume leaders for $DJI, $SPX, or
+  NASDAQ right now. Reveals whether a move is stock-specific or sector-wide.
+- check_market_context(): Market session (pre/regular/post), SPY, VIX, /ES
+  futures. Overall risk-on/risk-off environment.
+- get_price_history(symbol, period, frequency): Historical candles at any
+  granularity (1-min to monthly). For longer-term context, trends,
+  support/resistance.
+- get_options_chain(symbol, contractType, strikeCount, range): Full options chain
+  with all Greeks (delta, gamma, theta, vega, IV, open interest). Use when you
+  need detailed options analysis.
+- check_order_book(symbol): Level 2 bid/ask depth. Shows institutional order
+  stacking and supply/demand imbalance.
+
+## Additional financial data available (not yet dedicated tools)
+The system can also access via Schwab:
+- S&P 500 futures (/ES) and NASDAQ futures (/NQ) streaming
+- Real-time equity and options screeners (biggest movers across the market)
+- Options expiration dates for any symbol
+- NYSE and NASDAQ order book streaming
+If you need any of this data, describe what you want and the system will
+attempt to fetch it.
 
 ## Lessons from experience (scored insights, strongest first)
 {inject top-N insights from insights.json here, filtered to score > 0}
@@ -354,7 +467,9 @@ still holds.
 ## Budget for this event
 - Remaining cost: ${budget_remaining}
 - Remaining tool calls: {remaining_calls}
-- Stop when you have enough evidence OR when further exploration isn't worth the cost.
+- Financial data tools are free and don't count against your cost budget.
+- Stop when you have enough evidence OR when further exploration isn't worth
+  the cost.
 
 ## The news event
 Headline: {headline}
@@ -378,26 +493,41 @@ at each step.
 
 ## Implementation Plan (When Ready)
 
-1. **Simplify `explorer.py`** → free-form tool-use loop
+1. **Expand Schwab wrapper** (`trader/market/schwab_client.py`) — Tier 1 tools
+   - `check_options_activity(symbol)` — wraps `option_chains()`, extracts ATM IV +
+     put/call ratio + unusual activity signals
+   - `get_fundamentals(symbol)` — wraps `instruments(symbol, projection="fundamental")`
+   - `get_movers(index)` — wraps `movers()` for $DJI/$SPX/NASDAQ
+   - Enhanced `check_market_context()` — add `market_hours()` + /ES futures quote
+
+2. **Simplify `explorer.py`** → free-form tool-use loop
    - LLM calls tools via Responses API or function-calling
    - Each tool call recorded as a ToolTrace
-   - Budget guardrails enforced after each call
+   - Budget guardrails enforced after each call (financial data tools are free)
    - Loop ends when LLM says "done" or budget exhausted
 
-2. **Create `data/knowledge/insights.json`**
+3. **Create `data/knowledge/insights.json`**
    - Start empty (or seed with a few common-sense insights)
    - Updated by offline reflection loop over time
 
-3. **Update exploration prompt**
+4. **Update exploration prompt**
    - Inject top-N scored insights from `insights.json`
-   - Provide tool definitions (not constrained templates)
+   - Provide full tool definitions (web + financial data + evidence + X)
+   - Describe additional available data (Tier 3) for discovery
    - Let LLM reason freely
 
-4. **Add offline hop scorer** (future, for learning)
+5. **Add Tier 2 Schwab tools on demand**
+   - `get_options_chain(symbol, ...)` — full chain when detailed analysis warranted
+   - `get_price_history(symbol, period, frequency)` — flexible candle periods
+   - `check_order_book(symbol)` — L2 depth
+   - Build these when the LLM consistently requests them (or when we see value
+     in Snapshots)
+
+6. **Add offline hop scorer** (future, for learning)
    - Per-trace: did this hop add novel info? What was the cost/benefit?
    - Per-sequence: which chains of tools produced good outcomes?
 
-5. **Add reflection prompt** (future, for learning)
+7. **Add reflection prompt** (future, for learning)
    - Reviews scored Snapshots in batches
    - Proposes new insights (score=1) and score adjustments to existing ones
    - Optionally updates operational files (skip_patterns, etc.)
