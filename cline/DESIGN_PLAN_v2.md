@@ -56,6 +56,7 @@ their full lifecycle, and learns from outcomes.
 | **Offline loop** | TODO | Labeling, hop scoring, reflection |
 | **Bull/bear prompt pattern** | TODO | New — lightweight adversarial reasoning |
 | **Data vendor fallback** | TODO | New — Schwab → yfinance fallback |
+| **Training-ready data capture** | TODO | New — store ephemeral data for future SFT/RL |
 
 ---
 
@@ -450,33 +451,269 @@ that improves with every trade lifecycle.
 
 ---
 
-## 6. Snapshot & ToolTrace
+## 6. Snapshot & ToolTrace — Data Storage for Future Training
 
-**Status: DONE** — `trader/models/snapshot.py`, `trader/models/tool_trace.py`
+**Status: DONE (base), TODO (training-readiness enhancements)**
 
-### Snapshot — immutable learning artifact
+`trader/models/snapshot.py`, `trader/models/tool_trace.py`
+
+### Design principle: store raw ephemeral inputs at maximum fidelity
+
+The Snapshot is both an operational artifact (used for real-time decisions) and a
+**future training sample** (used for SFT and RL). The key insight from the
+Trading-R1 paper (see §6d) is that training pipelines need the complete
+information state at time T — and much of that state is **ephemeral**.
+
+**What's ephemeral (store NOW, can't reconstruct later):**
+
+| Data | Why it vanishes |
+|------|----------------|
+| Web search result lists (titles, snippets, URLs, ranking) | Search rankings change hourly; articles get added/removed |
+| X/Twitter posts (text, author, engagement) | Posts get deleted, accounts suspended, engagement changes |
+| Intraday options IV surface | No free historical source at minute granularity |
+| Level 2 order book state | Streaming data, not archived anywhere free |
+| Intraday price microstructure (1-min candles, spreads) | Daily OHLCV available later, but sub-minute reaction dynamics are not |
+| Full article text at time of publication | Articles get edited, paywalled, taken down |
+
+**What's reconstructable (useful context, but lower priority to store):**
+
+| Data | How to get it later |
+|------|-------------------|
+| Daily OHLCV prices | yfinance, any data vendor |
+| Fundamental data (balance sheets, etc.) | Quarterly filings, archived indefinitely |
+| Technical indicators | Computed from price data |
+| Macroeconomic data (VIX, SPY, rates) | Widely archived |
+| News headlines (not full text) | Historical news APIs (Finnhub, Alpha Vantage) |
+
+### Snapshot schema (v2 — training-ready)
 
 ```json
 {
   "snapshot_id": "uuid",
-  "version": "v1",
+  "version": "v2",
   "created_at": "2026-02-09T14:32:11Z",
-  "trigger": { "type": "alpaca_news", "headline": "...", "symbols": [...] },
-  "market_context": { "session": "market_open", "spy_return_15m": -0.12, "vix_level": 19.4 },
-  "price_context": { "per_symbol": { "NVDA": { "last_price": 612.30, "recent_candles_1m": [...] } } },
-  "exploration_budget": { "max_hops": 3, "max_cost_usd": 0.35 },
-  "tool_traces": [...],
-  "prediction": { "direction": "up", "confidence": 0.71, "horizon": "60m" },
+
+  "trigger": {
+    "type": "alpaca_news",
+    "alpaca_timestamp": "2026-02-09T14:31:58Z",
+    "headline": "...",
+    "summary": "...",
+    "source": "reuters",
+    "symbols": ["NVDA", "AMD"]
+  },
+
+  "data_modalities": {
+    "market_data": {
+      "per_symbol": {
+        "NVDA": {
+          "last_price": 612.30,
+          "bid": 612.25, "ask": 612.35,
+          "volume": 18234,
+          "options_iv": {
+            "atm_iv_nearest": 0.42,
+            "atm_iv_next": 0.38,
+            "put_call_ratio": 0.85,
+            "unusual_activity": false,
+            "timestamp": "2026-02-09T14:32:05Z"
+          },
+          "technicals": {
+            "rsi_14": 68.3,
+            "macd_signal": "bullish_crossover",
+            "bollinger_position": "upper_band"
+          }
+        }
+      }
+    },
+    "macro_context": {
+      "session": "market_open",
+      "spy_return_15m": -0.12,
+      "vix_level": 19.4,
+      "es_futures": 5123.50,
+      "market_hours": { "status": "regular", "close": "16:00 ET" }
+    },
+    "news": [
+      {
+        "source": "reuters",
+        "title": "...",
+        "text": "...",
+        "url": "https://...",
+        "published_at": "2026-02-09T14:28:00Z",
+        "fetched_at": "2026-02-09T14:32:10Z"
+      }
+    ],
+    "social_sentiment": [
+      {
+        "platform": "x",
+        "query": "NVDA supply constraint OR shortage",
+        "posts": [
+          {
+            "author": "@semianalyst",
+            "text": "Hearing from channel checks...",
+            "timestamp": "2026-02-09T14:20:11Z",
+            "engagement": { "likes": 142, "reposts": 38 }
+          }
+        ],
+        "fetched_at": "2026-02-09T14:32:15Z"
+      }
+    ],
+    "fundamentals": {
+      "NVDA": {
+        "market_cap": 1.5e12, "pe_ratio": 65.2, "sector": "Technology",
+        "insider_activity": [
+          { "actor": "CEO", "action": "buy", "shares": 50000, "date": "2026-02-01" }
+        ]
+      }
+    },
+    "web_search_results": [
+      {
+        "query": "NVDA supply shortage latest",
+        "provider": "openai",
+        "results": [
+          { "rank": 1, "title": "...", "snippet": "...", "url": "...", "date": "..." },
+          { "rank": 2, "title": "...", "snippet": "...", "url": "...", "date": "..." }
+        ],
+        "fetched_at": "2026-02-09T14:32:08Z"
+      }
+    ]
+  },
+
+  "price_reaction": {
+    "NVDA": {
+      "trigger_time": "2026-02-09T14:31:58Z",
+      "candles_before_15m": [ "...1-min candles..." ],
+      "candles_after_60m": [ "...1-min candles (filled progressively)..." ],
+      "vwap_at_trigger": 612.30,
+      "spread_at_trigger": { "bid": 612.25, "ask": 612.35 },
+      "volume_ratio_vs_20d_avg": 3.2
+    }
+  },
+
+  "exploration_budget": { "max_hops": 5, "max_cost_usd": 0.35 },
+  "tool_traces": [ "...see ToolTrace schema below..." ],
+
+  "prediction": {
+    "direction": "up",
+    "confidence": 0.82,
+    "horizon": "60m",
+    "magnitude_estimate": "0.5-1.5%",
+    "key_catalyst": "Supply constraint confirmed by Reuters + Bloomberg",
+    "bull_case": "...",
+    "bear_case": "..."
+  },
+
   "cost_summary": { "total_usd": 0.21, "by_tool": { "web_search": 0.12, "x_search": 0.09 } }
 }
 ```
 
-**Builder pattern:** `SnapshotBuilder` accumulates data → `.seal()` → frozen `Snapshot`.
+### Key differences from v1 schema
 
-### ToolTrace — one per hop
+| Change | Why |
+|--------|-----|
+| `data_modalities` section (grouped by type) | Enables categorical sampling for training — can randomly drop modalities to create training variety (à la Trading-R1) |
+| `web_search_results` with raw result lists | The raw search results at time T are ephemeral; LLM summaries can be regenerated later, raw results cannot |
+| `social_sentiment` with verbatim posts + engagement | X posts get deleted; the social signal at time T vanishes within hours |
+| `options_iv` snapshot per symbol | Intraday IV is the market's probability estimate; no free historical source exists |
+| `price_reaction` window (pre/post event) | 1-min microstructure around the event — ground truth for outcome labeling |
+| `fundamentals` with insider activity | Insider buys/sells are high-signal and time-sensitive |
+| `technicals` per symbol | Where the stock sits in its recent range (overbought? breakout?) |
 
-Records: state → action → observation → stop decision, with execution metadata
-and extracted signals. Supports parent trace linking for hierarchical reasoning.
+### ToolTrace schema (enhanced)
+
+Each hop records: state → action → observation → stop decision.
+
+```json
+{
+  "trace_id": "trace_2",
+  "hop_index": 2,
+  "parent_trace_id": "trace_1",
+  "decision_context": {
+    "state_summary": "Rumor of NVDA supply constraint; no confirmation yet",
+    "reason_for_action": "seek confirmation from social / insiders"
+  },
+  "action": {
+    "tool": "x_search",
+    "provider": "grok",
+    "query": "NVDA supply constraint OR shortage",
+    "params": {}
+  },
+  "execution": {
+    "model": "grok-4-1-fast",
+    "start_time": "2026-02-09T14:32:20Z",
+    "end_time": "2026-02-09T14:32:24Z",
+    "cost_usd": 0.045
+  },
+  "raw_tool_output": {
+    "type": "search_results",
+    "results": [ "...full API response, not just LLM summary..." ]
+  },
+  "extracted_signals": {
+    "sentiment": "bullish",
+    "novelty": "high",
+    "confirmation_strength": "weak"
+  },
+  "stop_signal": { "should_stop": false, "reason": "confirmation incomplete" }
+}
+```
+
+**Critical addition: `raw_tool_output`.** This stores the actual API response
+(search result lists, post data, etc.) before the LLM processes it. The LLM's
+interpretation is captured in `extracted_signals` and the overall reasoning.
+The raw output is the irreplaceable ingredient for future training — reasoning
+can be regenerated from raw inputs, but raw inputs cannot be regenerated from
+reasoning.
+
+### Builder pattern
+
+`SnapshotBuilder` accumulates data → `.seal()` → frozen `Snapshot`. (Existing
+pattern, unchanged.)
+
+### 6d. Future training pipeline (informed by Trading-R1)
+
+The Snapshot schema above is designed so that each sealed Snapshot can be
+converted to training data for SFT or RL without reformatting.
+
+**Supervised Fine-Tuning (SFT) via reverse reasoning distillation:**
+
+The real-time reasoning done during exploration is NOT gold-standard training
+data — it's the system's best guess, which may be wrong. The correct approach
+(from Trading-R1) is **reverse reasoning distillation**:
+
+1. Store raw inputs at maximum fidelity during exploration (the Snapshot)
+2. Determine actual outcomes via the offline labeler (what really happened)
+3. Use a strong model (o3, GPT-5, etc.) to generate "ideal" reasoning that
+   leads from the stored inputs to the correct conclusion
+4. Train on step 3's output, not the original exploration reasoning
+
+The raw inputs in the Snapshot are the irreplaceable ingredient. The reasoning
+traces are useful for debugging and reflection, but training targets should be
+regenerated after outcomes are known.
+
+**Reinforcement Learning (RL):**
+
+Each Snapshot provides a `(context, action, reward)` tuple:
+- **Context** = the `data_modalities` block (multi-modal financial state at time T)
+- **Action** = the trading decision (mapped to Trading-R1's 5-class scheme:
+  strong sell / sell / hold / buy / strong buy)
+- **Reward** = volatility-adjusted forward return (see §8a)
+
+**Categorical data sampling for training variety:**
+
+The `data_modalities` structure enables a key Trading-R1 technique: randomly
+dropping subsets of modalities when generating training samples. This teaches
+the model to reason well even with incomplete information (the real-world case).
+For example, a training sample might include market data + news but omit
+sentiment and fundamentals, forcing the model to reason from partial evidence.
+
+**What this means for implementation:**
+
+No training code needs to be built now. The design goal is simply to ensure that
+Snapshots contain the right data, in the right structure, at the right fidelity,
+so that when training pipelines are built later, the data is ready. The critical
+action items are:
+- Store raw tool outputs (not just LLM summaries)
+- Store ephemeral market data (options IV, order book, microstructure)
+- Tag data by modality
+- Capture the price reaction window around each event
 
 ---
 
@@ -589,14 +826,34 @@ Retrospective Snapshots feed the reflection loop with exit-specific insights.
 
 **Status: TODO** — design complete, no code exists
 
-### 8a. Outcome labeling
+### 8a. Outcome labeling (volatility-adjusted, multi-horizon)
 
-For each Snapshot, compute labels from market data:
-- Direction/return at horizons: +15m, +60m, +1d
-- Optional magnitude buckets (>0.5%, >1%)
-- Optional MFE/MAE (max favorable/adverse excursion)
+For each Snapshot, compute labels from market data. Inspired by Trading-R1's
+labeling scheme, which normalizes returns by volatility to make labels comparable
+across high-vol and low-vol stocks.
 
-Uses Schwab historical candles (or yfinance as free fallback for labeling).
+**Label computation:**
+1. Compute forward returns at multiple horizons: +15m, +60m, +4h (adapt from
+   Trading-R1's 3/7/15-day horizons to our shorter timeframes)
+2. Use EMA-smoothed returns (less noisy than raw close-to-close)
+3. Normalize each horizon's return by its rolling 20-period volatility
+   (produces a Sharpe-like signal — a +1% move on high-vol NVDA is scored
+   differently than +1% on low-vol JNJ)
+4. Combine horizons with weights emphasizing medium-term (e.g., 0.3, 0.5, 0.2)
+5. Discretize into 5 classes: strong sell / sell / hold / buy / strong buy
+   (using asymmetric quantile thresholds to handle market upward bias)
+
+**Also compute:**
+- MFE/MAE (max favorable/adverse excursion) — how far did the price go in
+  your favor vs. against you before the horizon?
+- Raw (non-normalized) returns for interpretability
+
+**Data source:** Schwab historical candles (primary) or yfinance (free fallback).
+
+**Why volatility-adjusted:** A +1% move on a stock that normally moves 3%/day
+is noise. A +1% move on a stock that normally moves 0.3%/day is a signal. Raw
+returns conflate these. Volatility normalization makes labels meaningful across
+the universe of stocks and creates better reward signals for RL.
 
 ### 8b. Hop scoring
 
@@ -763,9 +1020,10 @@ the explorer revision (the LLM needs tools to call).
    enhanced `check_market_context()`
 4. Vendor fallback: try Schwab → fall back to yfinance
 
-### Phase B: Explorer revision (free-form + knowledge injection)
+### Phase B: Explorer revision (free-form + training-ready data capture)
 
-Convert the explorer from rigid Phase 1/2 to free-form tool use.
+Convert the explorer from rigid Phase 1/2 to free-form tool use, with enhanced
+data capture for future training.
 
 1. Create `insights.json` (start empty or seed with a few common-sense insights)
 2. Implement BM25 situation memory (`trader/knowledge/memory.py`)
@@ -773,6 +1031,15 @@ Convert the explorer from rigid Phase 1/2 to free-form tool use.
    memory injection)
 4. Refactor `explorer.py` to use free-form tool-use loop with budget guardrails
 5. Add signal extraction step (cheap LLM call to distill structured signal)
+6. **Enhance data capture for training readiness:**
+   - Store `raw_tool_output` in every ToolTrace (full API responses, not just
+     LLM summaries)
+   - Capture `options_iv` snapshots when `check_options_activity()` is called
+   - Capture `price_reaction` window (15-min before, 60-min after trigger)
+   - Tag all captured data by modality in the `data_modalities` structure
+   - Store X posts verbatim with engagement metrics
+   - Store web search result lists (title, snippet, URL, rank) before LLM
+     processing
 
 ### Phase C: Watch lifecycle
 
@@ -829,7 +1096,7 @@ Close the learning feedback loop.
 
 ---
 
-## Appendix: Ideas Evaluated and Deferred (v2+)
+## Appendix A: Ideas Evaluated and Deferred (v2+)
 
 These ideas were evaluated (sourced from TradingAgents and design discussions)
 but deferred to keep v1 focused:
@@ -844,3 +1111,36 @@ but deferred to keep v1 focused:
 | Streamlit offline workbench | Original design | FastAPI dashboard is primary; add if offline analysis needs grow |
 | Formal policy learning (contextual bandit) | Original design | Insufficient data; prompt-injected insights are more practical |
 | LangGraph workflow orchestration | TradingAgents | Adds dependency and complexity; custom pipeline is more transparent |
+
+---
+
+## Appendix B: Reference Papers
+
+### Trading-R1 (Tauric Research, 2025)
+
+`docs/TradingR1.pdf` — "Training a Financially-Aware LLM via SFT + RL"
+
+**Key ideas adopted in this design:**
+
+| Concept | How we use it |
+|---------|--------------|
+| Multi-modal financial input (market + news + sentiment + fundamentals + macro) | Our `data_modalities` Snapshot structure mirrors this, enabling categorical sampling |
+| Volatility-adjusted multi-horizon labeling | Adopted in §8a — normalizes returns by rolling volatility for comparable labels across stocks |
+| Reverse reasoning distillation | We store raw inputs (not just LLM reasoning) so that "ideal" reasoning can be regenerated later by a strong model given the correct outcome |
+| 5-class decision scheme (strong sell → strong buy) | Adopted for RL reward signal; maps naturally to our prediction schema |
+| Curriculum training (structure → claims → decision) | Informs how we structure our Snapshot for future training — each section can be a training stage |
+
+**Key insight:** The real-time reasoning done during exploration is NOT the
+training target. It's the system's best guess, which may be wrong. The
+training target is generated AFTER outcomes are known, using reverse reasoning
+distillation: take the correct answer + the stored raw inputs → generate ideal
+reasoning. This is why storing raw, ephemeral inputs at maximum fidelity is
+critical — the reasoning can be regenerated, the inputs cannot.
+
+### TradingAgents (Tauric Research, 2024)
+
+`TradingAgents-main/` — Multi-agent LLM trading framework
+
+**Key ideas adopted:** yfinance data layer, BM25 situation memory, lightweight
+bull/bear prompt pattern, data vendor fallback, signal extraction step. See
+Appendix A for ideas evaluated and deferred.
