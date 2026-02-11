@@ -24,6 +24,8 @@ dependencies = [
   "sqlalchemy>=2.0.46",
   "uvicorn[standard]>=0.40.0",
   "watchdog>=6.0.0",
+  "yfinance>=0.2.0",
+  "stockstats>=0.6.0",
 ]
 
 # Optional dependency groups for uv
