@@ -4,6 +4,10 @@ Wraps ``schwabdev`` to provide:
 - Intraday price history (1-min candles) for snapshot context
 - Real-time quote snapshots
 - Real-time streaming (level-one equities)
+- Options activity (ATM IV, put/call ratios)
+- Company fundamentals (P/E, market cap, sector, etc.)
+- Market movers (top gainers/losers by index)
+- Market hours (real session times)
 
 Fail-loud philosophy:
 - If Schwab is enabled (default) but credentials are missing or calls fail,
@@ -71,6 +75,87 @@ class QuoteSnapshot:
             "net_pct_change": self.net_pct_change,
             "mark": self.mark,
             "timestamp_ms": self.timestamp_ms,
+        }
+
+
+@dataclass(frozen=True)
+class OptionsActivity:
+    """Summary of options activity for a symbol — derived from option chain."""
+    symbol: str
+    atm_iv_call: float | None       # ATM call implied volatility
+    atm_iv_put: float | None        # ATM put implied volatility
+    atm_iv_avg: float | None        # average of call + put ATM IV
+    put_call_volume_ratio: float | None
+    put_call_oi_ratio: float | None  # open interest ratio
+    total_call_volume: int
+    total_put_volume: int
+    total_call_oi: int
+    total_put_oi: int
+    nearest_expiry: str | None       # ISO date of the nearest expiration used
+    underlying_price: float | None
+    fetched_at: str
+
+    def to_dict(self) -> dict[str, Any]:
+        d: dict[str, Any] = {}
+        for k, v in self.__dict__.items():
+            if v is not None:
+                d[k] = v
+        return d
+
+
+@dataclass(frozen=True)
+class SchwabFundamentals:
+    """Company fundamentals from Schwab instruments API."""
+    symbol: str
+    name: str
+    sector: str
+    industry: str
+    market_cap: float | None
+    pe_ratio: float | None
+    forward_pe: float | None
+    eps: float | None
+    dividend_yield: float | None
+    dividend_amount: float | None
+    beta: float | None
+    week_52_high: float | None
+    week_52_low: float | None
+    avg_10d_volume: float | None
+    avg_1y_volume: float | None
+    pb_ratio: float | None        # price-to-book
+    net_profit_margin: float | None
+    return_on_equity: float | None
+    revenue: float | None
+    shares_outstanding: float | None
+    fetched_at: str
+
+    def to_dict(self) -> dict[str, Any]:
+        d: dict[str, Any] = {}
+        for k, v in self.__dict__.items():
+            if v is not None:
+                d[k] = v
+        return d
+
+
+@dataclass(frozen=True)
+class Mover:
+    """A single market mover entry."""
+    symbol: str
+    description: str
+    direction: str         # "up" or "down"
+    change: float          # absolute change
+    pct_change: float      # percent change
+    volume: int
+    last_price: float
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "symbol": self.symbol,
+            "description": self.description,
+            "direction": self.direction,
+            "change": self.change,
+            "pct_change": self.pct_change,
+            "volume": self.volume,
+            "last_price": self.last_price,
         }
 
 
@@ -399,21 +484,41 @@ class SchwabMarketClient:
         """Build market-level context (SPY, VIX, session info).
 
         Returns a dict suitable for ``SnapshotBuilder.set_market_context()``.
+        Uses the real market hours API when available, with a rough EST
+        fallback if the API call fails.
         """
         if not self.available:
             return {}
 
         ctx: dict[str, Any] = {}
 
-        # Determine market session
-        now = datetime.now(tz=timezone.utc)
-        hour_et = (now.hour - 5) % 24  # rough EST offset (not DST-aware)
-        if 4 <= hour_et < 9.5:
-            ctx["session"] = "premarket"
-        elif 9.5 <= hour_et < 16:
-            ctx["session"] = "market_open"
-        else:
-            ctx["session"] = "afterhours"
+        # Determine market session — try real API first, fall back to rough EST
+        try:
+            hours = self.get_market_hours("equity")
+            ctx["market_is_open"] = hours.get("is_open", False)
+            if hours.get("is_open"):
+                ctx["session"] = "market_open"
+            else:
+                # Check pre/post by rough EST if market is closed
+                now = datetime.now(tz=timezone.utc)
+                hour_et = (now.hour - 5) % 24
+                ctx["session"] = "premarket" if 4 <= hour_et < 9.5 else "afterhours"
+            # Include session times if available
+            for key in ("regularMarket_start", "regularMarket_end",
+                        "preMarket_start", "preMarket_end",
+                        "postMarket_start", "postMarket_end"):
+                if key in hours:
+                    ctx[key] = hours[key]
+        except Exception:
+            # Fallback: rough EST calculation
+            now = datetime.now(tz=timezone.utc)
+            hour_et = (now.hour - 5) % 24
+            if 4 <= hour_et < 9.5:
+                ctx["session"] = "premarket"
+            elif 9.5 <= hour_et < 16:
+                ctx["session"] = "market_open"
+            else:
+                ctx["session"] = "afterhours"
 
         # SPY context
         spy_quote = self.get_quote("SPY")
@@ -503,3 +608,327 @@ class SchwabMarketClient:
             result["description"] = f"Volume {ratio:.1f}x above session average"
 
         return result
+
+    # ------------------------------------------------------------------
+    # Options activity
+    # ------------------------------------------------------------------
+
+    def check_options_activity(self, symbol: str) -> dict[str, Any]:
+        """Check options activity for *symbol* — ATM IV, put/call ratios.
+
+        Fetches the option chain for the nearest expiry and computes:
+        - ATM implied volatility (call, put, average)
+        - Put/call volume ratio
+        - Put/call open interest ratio
+
+        Returns an OptionsActivity dict.
+        """
+        if not self.available:
+            raise RuntimeError("Schwab client unavailable")
+
+        now_iso = datetime.now(tz=timezone.utc).isoformat()
+
+        try:
+            resp = self._client.option_chains(
+                symbol,
+                contractType="ALL",
+                strikeCount=10,
+                includeUnderlyingQuote=True,
+            )
+            data = resp.json()
+
+            underlying_price = data.get("underlyingPrice") or data.get("underlying", {}).get("last")
+
+            call_map = data.get("callExpDateMap", {})
+            put_map = data.get("putExpDateMap", {})
+
+            if not call_map and not put_map:
+                return {"symbol": symbol, "error": "no option chain data", "fetched_at": now_iso}
+
+            # Find nearest expiry in call map
+            nearest_expiry = None
+            if call_map:
+                nearest_expiry = sorted(call_map.keys())[0]
+            elif put_map:
+                nearest_expiry = sorted(put_map.keys())[0]
+
+            # Aggregate across all expirations
+            total_call_vol = 0
+            total_put_vol = 0
+            total_call_oi = 0
+            total_put_oi = 0
+
+            for _exp, strikes in call_map.items():
+                for _strike, contracts in strikes.items():
+                    for c in contracts:
+                        total_call_vol += int(c.get("totalVolume", 0))
+                        total_call_oi += int(c.get("openInterest", 0))
+
+            for _exp, strikes in put_map.items():
+                for _strike, contracts in strikes.items():
+                    for c in contracts:
+                        total_put_vol += int(c.get("totalVolume", 0))
+                        total_put_oi += int(c.get("openInterest", 0))
+
+            # ATM IV — find strikes closest to underlying price in nearest expiry
+            atm_iv_call = _find_atm_iv(call_map, nearest_expiry, underlying_price)
+            atm_iv_put = _find_atm_iv(put_map, nearest_expiry, underlying_price)
+
+            atm_iv_avg = None
+            if atm_iv_call is not None and atm_iv_put is not None:
+                atm_iv_avg = round((atm_iv_call + atm_iv_put) / 2, 4)
+            elif atm_iv_call is not None:
+                atm_iv_avg = atm_iv_call
+            elif atm_iv_put is not None:
+                atm_iv_avg = atm_iv_put
+
+            pc_vol_ratio = round(total_put_vol / total_call_vol, 4) if total_call_vol > 0 else None
+            pc_oi_ratio = round(total_put_oi / total_call_oi, 4) if total_call_oi > 0 else None
+
+            # Clean up expiry key (Schwab format: "2026-02-21:5" → "2026-02-21")
+            expiry_clean = nearest_expiry.split(":")[0] if nearest_expiry else None
+
+            result = OptionsActivity(
+                symbol=symbol.upper(),
+                atm_iv_call=atm_iv_call,
+                atm_iv_put=atm_iv_put,
+                atm_iv_avg=atm_iv_avg,
+                put_call_volume_ratio=pc_vol_ratio,
+                put_call_oi_ratio=pc_oi_ratio,
+                total_call_volume=total_call_vol,
+                total_put_volume=total_put_vol,
+                total_call_oi=total_call_oi,
+                total_put_oi=total_put_oi,
+                nearest_expiry=expiry_clean,
+                underlying_price=float(underlying_price) if underlying_price else None,
+                fetched_at=now_iso,
+            )
+            return result.to_dict()
+
+        except Exception as e:
+            if DEBUG:
+                raise
+            return {"symbol": symbol, "error": str(e), "fetched_at": now_iso}
+
+    # ------------------------------------------------------------------
+    # Fundamentals
+    # ------------------------------------------------------------------
+
+    def get_fundamentals(self, symbol: str) -> dict[str, Any]:
+        """Get company fundamentals for *symbol* via Schwab instruments API.
+
+        Uses projection="fundamental" to get valuation, profitability,
+        and health metrics.
+        """
+        if not self.available:
+            raise RuntimeError("Schwab client unavailable")
+
+        now_iso = datetime.now(tz=timezone.utc).isoformat()
+
+        try:
+            resp = self._client.instruments(symbol, projection="fundamental")
+            data = resp.json()
+
+            # Response is {"instruments": [{"symbol": ..., "fundamental": {...}, ...}]}
+            instruments = data.get("instruments", [])
+            if not instruments:
+                return {"symbol": symbol, "error": "no instrument data", "fetched_at": now_iso}
+
+            inst = instruments[0]
+            fund = inst.get("fundamental", {})
+
+            result = SchwabFundamentals(
+                symbol=symbol.upper(),
+                name=inst.get("description", symbol.upper()),
+                sector=fund.get("declarationDate", ""),  # Schwab doesn't have sector in fundamental
+                industry="",  # Not available in Schwab fundamental projection
+                market_cap=_safe_float(fund.get("marketCap")),
+                pe_ratio=_safe_float(fund.get("peRatio")),
+                forward_pe=_safe_float(fund.get("forwardPeRatio")),  # not always present
+                eps=_safe_float(fund.get("epsTTM")),
+                dividend_yield=_safe_float(fund.get("dividendYield")),
+                dividend_amount=_safe_float(fund.get("dividendAmount")),
+                beta=_safe_float(fund.get("beta")),
+                week_52_high=_safe_float(fund.get("high52")),
+                week_52_low=_safe_float(fund.get("low52")),
+                avg_10d_volume=_safe_float(fund.get("vol10DayAvg")),
+                avg_1y_volume=_safe_float(fund.get("vol1YrAvg")),
+                pb_ratio=_safe_float(fund.get("pbRatio")),
+                net_profit_margin=_safe_float(fund.get("netProfitMarginTTM")),
+                return_on_equity=_safe_float(fund.get("returnOnEquity")),
+                revenue=_safe_float(fund.get("revenueTTM")),
+                shares_outstanding=_safe_float(fund.get("sharesOutstanding")),
+                fetched_at=now_iso,
+            )
+            return result.to_dict()
+
+        except Exception as e:
+            if DEBUG:
+                raise
+            return {"symbol": symbol, "error": str(e), "fetched_at": now_iso}
+
+    # ------------------------------------------------------------------
+    # Market movers
+    # ------------------------------------------------------------------
+
+    def get_movers(
+        self,
+        index: str = "$SPX",
+        direction: str = "up",
+        max_results: int = 10,
+    ) -> dict[str, Any]:
+        """Get top market movers for an index.
+
+        Args:
+            index: Index symbol — "$DJI", "$SPX", "$COMPX", "NYSE", "NASDAQ".
+            direction: "up" for gainers, "down" for losers.
+            max_results: Max movers to return.
+
+        Returns dict with movers list. Must be called during market hours.
+        """
+        if not self.available:
+            raise RuntimeError("Schwab client unavailable")
+
+        now_iso = datetime.now(tz=timezone.utc).isoformat()
+        sort_key = "PERCENT_CHANGE_UP" if direction == "up" else "PERCENT_CHANGE_DOWN"
+
+        try:
+            resp = self._client.movers(index, sort=sort_key)
+            data = resp.json()
+
+            screeners = data.get("screeners", [])
+            movers: list[dict[str, Any]] = []
+
+            for entry in screeners[:max_results]:
+                m = Mover(
+                    symbol=entry.get("symbol", ""),
+                    description=entry.get("description", ""),
+                    direction=direction,
+                    change=float(entry.get("netChange", 0)),
+                    pct_change=float(entry.get("netPercentChange", 0)),
+                    volume=int(entry.get("volume", 0)),
+                    last_price=float(entry.get("lastPrice", 0)),
+                )
+                movers.append(m.to_dict())
+
+            return {
+                "index": index,
+                "direction": direction,
+                "movers": movers,
+                "count": len(movers),
+                "fetched_at": now_iso,
+            }
+
+        except Exception as e:
+            if DEBUG:
+                raise
+            return {"index": index, "error": str(e), "fetched_at": now_iso}
+
+    # ------------------------------------------------------------------
+    # Market hours
+    # ------------------------------------------------------------------
+
+    def get_market_hours(self, market: str = "equity") -> dict[str, Any]:
+        """Get today's market hours for *market* type.
+
+        Args:
+            market: "equity", "option", "bond", "future", "forex".
+
+        Returns dict with session times and open/closed status.
+        """
+        if not self.available:
+            raise RuntimeError("Schwab client unavailable")
+
+        now_iso = datetime.now(tz=timezone.utc).isoformat()
+
+        try:
+            resp = self._client.market_hour(market)
+            data = resp.json()
+
+            # Response structure: {"equity": {"EQ": {"date": ..., "marketType": ..., ...}}}
+            market_data = data.get(market, {})
+            if not market_data:
+                return {"market": market, "error": "no data", "fetched_at": now_iso}
+
+            # Get first entry (e.g. "EQ" for equity)
+            first_key = next(iter(market_data))
+            info = market_data[first_key]
+
+            result: dict[str, Any] = {
+                "market": market,
+                "date": info.get("date", ""),
+                "is_open": info.get("isOpen", False),
+                "market_type": info.get("marketType", ""),
+            }
+
+            # Extract session hours
+            sessions = info.get("sessionHours", {})
+            for session_name, hours_list in sessions.items():
+                if hours_list:
+                    h = hours_list[0]
+                    result[f"{session_name}_start"] = h.get("start", "")
+                    result[f"{session_name}_end"] = h.get("end", "")
+
+            result["fetched_at"] = now_iso
+            return result
+
+        except Exception as e:
+            if DEBUG:
+                raise
+            return {"market": market, "error": str(e), "fetched_at": now_iso}
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+
+def _safe_float(val: Any) -> float | None:
+    """Convert to float, returning None for missing/invalid values."""
+    if val is None:
+        return None
+    try:
+        f = float(val)
+        import math
+        return None if math.isnan(f) else f
+    except (ValueError, TypeError):
+        return None
+
+
+def _find_atm_iv(
+    exp_date_map: dict[str, Any],
+    target_expiry: str | None,
+    underlying_price: float | None,
+) -> float | None:
+    """Find ATM implied volatility in an option chain expiration map.
+
+    Looks up the strike closest to *underlying_price* in *target_expiry*
+    and returns its implied volatility.
+    """
+    if not exp_date_map or not target_expiry or not underlying_price:
+        return None
+
+    strikes = exp_date_map.get(target_expiry, {})
+    if not strikes:
+        return None
+
+    # Strike keys are strings like "150.0"
+    best_strike = None
+    best_diff = float("inf")
+
+    for strike_str, contracts in strikes.items():
+        try:
+            strike_val = float(strike_str)
+        except (ValueError, TypeError):
+            continue
+        diff = abs(strike_val - underlying_price)
+        if diff < best_diff:
+            best_diff = diff
+            best_strike = contracts
+
+    if best_strike and len(best_strike) > 0:
+        iv = best_strike[0].get("volatility")
+        if iv is not None:
+            return round(float(iv), 4)
+
+    return None

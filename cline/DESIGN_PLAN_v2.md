@@ -43,19 +43,19 @@ their full lifecycle, and learns from outcomes.
 | **X API stream** | DONE | Filtered stream, burst mode, rules |
 | **Database (SQLite)** | DONE | Snapshots table, idempotent inserts |
 | **Dashboard (FastAPI + SSE)** | DONE | Live feed, event bus |
-| **Schwab market data** | PARTIAL | Quotes, candles, streaming done; Tier 1 expansion TODO |
+| **Schwab market data** | DONE | Quotes, candles, streaming, options, fundamentals, movers, market hours |
 | **Knowledge store** | PARTIAL | skip_patterns, reliable_sources exist; insights.json TODO |
 | **Action menu / weights** | DONE | 12 finite actions — will be deprioritized (see Explorer revision) |
 | **Explorer (free-form tool use)** | TODO | Replaces rigid Phase 1/2 |
-| **yfinance data layer** | TODO | New — free data for fundamentals, insider tx, technicals |
+| **yfinance data layer** | DONE | Free data: fundamentals, insider tx, price history, news, technicals |
 | **BM25 situation memory** | TODO | New — learned from TradingAgents |
-| **Schwab Tier 1 expansion** | TODO | Options IV, fundamentals, movers, enhanced market context |
+| **Schwab Tier 1 expansion** | DONE | Options IV, fundamentals, movers, market hours, enhanced context |
 | **insights.json** | TODO | Flat scored insights for prompt injection |
 | **Watch lifecycle** | TODO | Entry → hold → exit → retrospective → sealed |
 | **Signal extraction step** | TODO | New — distill verbose output to clean signal |
 | **Offline loop** | TODO | Labeling, hop scoring, reflection |
 | **Bull/bear prompt pattern** | TODO | New — lightweight adversarial reasoning |
-| **Data vendor fallback** | TODO | New — Schwab → yfinance fallback |
+| **Data vendor fallback** | DONE | Schwab → yfinance fallback via MarketDataService |
 | **Training-ready data capture** | TODO | New — store ephemeral data for future SFT/RL |
 
 ---
@@ -170,10 +170,11 @@ limited data. Prompt-injected knowledge compounds with model upgrades.
 | Tool | Status | What it reveals |
 |------|--------|-----------------|
 | `check_price(symbol)` | DONE | Real-time quote + recent 1-min candles |
-| `check_market_context()` | PARTIAL | SPY, VIX, session. TODO: /ES futures, market_hours() |
-| `check_options_activity(symbol)` | TODO | ATM IV, put/call ratio, unusual activity |
-| `get_fundamentals(symbol)` | TODO | Market cap, P/E, EPS, sector, 52-week range |
-| `get_movers(index)` | TODO | Top gainers/losers by % change or volume |
+| `check_market_context()` | DONE | SPY, VIX, session, real market hours |
+| `check_options_activity(symbol)` | DONE | ATM IV, put/call ratio, volume/OI totals |
+| `get_fundamentals(symbol)` | DONE | Market cap, P/E, EPS, beta, 52-week range |
+| `get_movers(index)` | DONE | Top gainers/losers by % change |
+| `get_market_hours(market)` | DONE | Real session times, open/closed status |
 | `get_price_history(symbol, period, freq)` | TODO | Historical candles (any granularity) |
 | `get_options_chain(symbol, ...)` | TODO | Full chain with Greeks |
 | `check_order_book(symbol)` | TODO | Level 2 bid/ask depth |
@@ -182,16 +183,16 @@ limited data. Prompt-injected knowledge compounds with model upgrades.
 
 | Tool | Status | What it reveals |
 |------|--------|-----------------|
-| `check_insider_activity(symbol)` | TODO | Recent insider buys/sells — high-signal confirmation |
-| `get_fundamentals_yf(symbol)` | TODO | P/E, market cap, debt ratios — free fallback for Schwab |
-| `get_price_history_yf(symbol, period)` | TODO | Historical OHLCV — free, no API key needed |
-| `get_company_news_yf(symbol)` | TODO | Recent news articles per ticker |
+| `check_insider_activity(symbol)` | DONE | Recent insider buys/sells — high-signal confirmation |
+| `get_fundamentals_yf(symbol)` | DONE | P/E, market cap, debt ratios — free fallback for Schwab |
+| `get_price_history_yf(symbol, period)` | DONE | Historical OHLCV — free, no API key needed |
+| `get_company_news_yf(symbol)` | DONE | Recent news articles per ticker |
 
 #### Technical indicators — stockstats (NEW — computed locally, free)
 
 | Tool | Status | What it reveals |
 |------|--------|-----------------|
-| `get_technical_indicators(symbol, indicators)` | TODO | RSI, MACD, Bollinger Bands, ATR, VWMA, MFI |
+| `get_technical_indicators(symbol, indicators)` | DONE | RSI, MACD, Bollinger Bands, ATR, VWMA, MFI |
 
 Computed from yfinance OHLCV data. The LLM chooses which indicators are relevant
 for the current situation (no need to compute all of them every time).
