@@ -46,7 +46,7 @@ their full lifecycle, and learns from outcomes.
 | **Schwab market data** | DONE | Quotes, candles, streaming, options, fundamentals, movers, market hours |
 | **Knowledge store** | PARTIAL | skip_patterns, reliable_sources exist; insights.json TODO |
 | **Action menu / weights** | DONE | 12 finite actions — will be deprioritized (see Explorer revision) |
-| **Explorer (multi-agent pipeline)** | TODO | Sequential Grok→OpenAI→Claude pipeline — replaces rigid Phase 1/2 |
+| **Explorer (multi-agent pipeline)** | IN PROGRESS | Sequential Grok→OpenAI→Gemini pipeline — tools + tests done, wiring TODO |
 | **yfinance data layer** | DONE | Free data: fundamentals, insider tx, price history, news, technicals |
 | **BM25 situation memory** | TODO | New — learned from TradingAgents |
 | **Schwab Tier 1 expansion** | DONE | Options IV, fundamentals, movers, market hours, enhanced context |
@@ -57,6 +57,7 @@ their full lifecycle, and learns from outcomes.
 | **Bull/bear prompt pattern** | TODO | New — lightweight adversarial reasoning |
 | **Data vendor fallback** | DONE | Schwab → yfinance fallback via MarketDataService |
 | **Training-ready data capture** | TODO | New — store ephemeral data for future SFT/RL |
+| **Contextual bandits** | TODO (Phase D+) | Online learning for orchestrator config — §5d |
 
 ---
 
@@ -545,6 +546,94 @@ API calls, no embeddings) to match current situations against past ones.
 This is cheap (no API calls), lightweight, and provides contextual learning
 that improves with every trade lifecycle.
 
+### 5d. Online Learning via Contextual Bandits — TODO (Phase D+)
+
+**Contextual bandits** are a lightweight form of RL that learn in real-time:
+observe context → pick action → observe reward. No sequential state modeling,
+no trajectory optimization — just single-step decisions with immediate (or
+near-immediate) feedback. Much more sample-efficient than full RL: useful
+signals emerge after ~50-200 examples rather than thousands.
+
+**Why this complements trajectory RL and offline reflection:**
+- **Trajectory RL** (§6d): optimizes *how the agent investigates* — which tools
+  to call, what queries to use, when to stop. Needs lots of data, runs offline.
+- **Offline reflection** (§8c): distills general insights from batches of
+  completed trades. Runs periodically, human-reviewed.
+- **Contextual bandits**: optimize the *orchestrator's configuration decisions*
+  — meta-level choices made before/around the LLM investigation loop. Learns
+  online, updates after every event.
+
+#### Application points
+
+| Decision | Context features | Actions | Reward signal | Est. data needed |
+|----------|-----------------|---------|---------------|-----------------|
+| **Triage threshold** | News source, sector, symbol count, time-of-day, market session | Confidence cutoff for investigate vs. skip | Signal quality vs. cost saved | ~50-100 events |
+| **Pipeline configuration** | News type (earnings, M&A, regulatory, rumor), triage confidence | Which agents to run, agent order, skip Agent 2? | Signal quality / cost ratio | ~100-200 events |
+| **Model routing** | News type, complexity, sector | Which LLM for each pipeline slot | Per-slot accuracy, cost | ~50 per model pair |
+| **Budget allocation** | Triage confidence, news type, market session, volatility | Tool call limit, token budget per agent | Marginal value of last tool call | ~100+ events |
+| **Parameter tuning** | Historical performance by news type, time-of-day, market regime | Confidence threshold, max rounds, hold duration limits, cost caps | Trade outcome quality at different settings | ~200+ events |
+
+The last row is important: contextual bandits can **tune operational parameters**
+(thresholds, limits, caps) that are currently hardcoded as env vars. Instead of
+manually experimenting with `WATCH_CONFIDENCE_THRESHOLD=0.7` vs `0.8`, a bandit
+learns the optimal threshold conditioned on context (e.g., higher threshold
+during low-volatility markets, lower during earnings season).
+
+#### Thompson Sampling for insights.json
+
+The current insights.json design uses flat +1/-1 scoring. Thompson Sampling
+is a drop-in improvement that naturally handles exploration-exploitation:
+
+```python
+# Current: flat score
+{"id": "ins_001", "text": "...", "score": 3}
+
+# Thompson Sampling: Beta distribution
+{"id": "ins_001", "text": "...", "successes": 5, "failures": 2}
+
+# At prompt injection time:
+#   sample = Beta(successes, failures).sample()
+#   → new/uncertain insights get explored (wide distribution)
+#   → validated insights converge to true value
+#   → failed insights get suppressed but can recover
+```
+
+This is ~20 lines of code on top of the existing design and gives principled
+exploration of which insights are actually useful.
+
+#### Implementation approach
+
+**Phase 1 (data capture, no bandits yet):** Log the orchestrator's configuration
+decisions alongside outcomes in each Snapshot. Fields to add:
+
+```json
+{
+  "orchestrator_config": {
+    "pipeline_agents": ["grok", "openai", "gemini"],
+    "triage_confidence": 0.82,
+    "budget_per_agent": {"request_limit": 15, "tool_calls_limit": 25},
+    "confidence_threshold": 0.7,
+    "max_rounds": 2
+  }
+}
+```
+
+This costs nothing and creates the dataset needed for future bandit learning.
+
+**Phase 2 (simple bandits):** After ~100-200 labeled events, implement Thompson
+Sampling for 1-2 decisions (e.g., triage threshold, insight selection). Use
+`scipy.stats.beta` — no new dependencies needed.
+
+**Phase 3 (contextual bandits):** Once enough context-conditioned data exists,
+add feature-based bandits (e.g., LinUCB or neural contextual bandits) for
+model routing and budget allocation. Consider `vowpalwabbit` or a lightweight
+custom implementation.
+
+**Why not start with bandits now:** The system needs to run for a few weeks to
+build a baseline dataset with labeled outcomes. Starting with fixed configs and
+good telemetry is the right first step — bandits need reward signals to learn
+from.
+
 ---
 
 ## 6. Snapshot & ToolTrace — Data Storage for Future Training
@@ -792,6 +881,38 @@ Each Snapshot provides a `(context, action, reward)` tuple:
   strong sell / sell / hold / buy / strong buy)
 - **Reward** = volatility-adjusted forward return (see §8a)
 
+**Key difference from Trading-R1: RL over tool-call trajectories.**
+
+Trading-R1's RL surface is narrow: inputs are pre-assembled, and RL only
+optimizes the reasoning chain from fixed inputs → classification. The model
+never learns *how to investigate* — only how to *conclude*.
+
+Our system stores the **full tool-call trajectory** — which tools were called,
+in what order, with what arguments, what they returned, and the reasoning
+between calls. This means RL can potentially optimize over a much richer
+policy space:
+
+1. **What to investigate** — which tools to call given what's known so far
+2. **How to investigate** — what queries/parameters to use (e.g. "$NVDA
+   earnings" vs "NVIDIA supply shortage" for x_search)
+3. **When to stop** — the optimal point where more investigation isn't worth
+   the cost or time
+4. **What to conclude** — the final signal given everything gathered
+
+In RL terms, each Snapshot is a complete **episode**:
+- **Initial state:** news event (headline, summary, symbols)
+- **Trajectory:** sequence of `(observation, tool_call)` pairs, with reasoning
+  tokens between each step
+- **Terminal action:** `TradingSignal` (direction, confidence, horizon, etc.)
+- **Reward:** volatility-adjusted forward return (delayed, from offline labeler)
+
+The `TracingToolset` data — tool name, arguments, raw output, ordering — is
+exactly the trajectory data needed. The action space (which tool × which
+arguments × when to stop) is much larger than a 5-class classification, so
+sample efficiency will be the practical challenge. But the data foundation is
+correct: every Snapshot captures the complete decision trajectory at full
+fidelity, enabling future RL over both reasoning *and* tool use.
+
 **Categorical data sampling for training variety:**
 
 The `data_modalities` structure enables a key Trading-R1 technique: randomly
@@ -810,6 +931,9 @@ action items are:
 - Store ephemeral market data (options IV, order book, microstructure)
 - Tag data by modality
 - Capture the price reaction window around each event
+- **Store complete tool-call trajectories** (tool name, args, output, ordering,
+  inter-step reasoning) — enables RL over investigation strategies, not just
+  final conclusions
 
 ---
 
@@ -1009,7 +1133,7 @@ and `pgvector` for similarity search. Not needed for v1.
 
 Future pages (when needed): trade log, cost monitor, knowledge viewer, config panel.
 
-### 9c. Cost Control — DONE
+### 9c. Cost Control — PARTIAL (gap in new pipeline)
 
 `trader/llm/cost_tracker.py`
 
@@ -1023,6 +1147,53 @@ MAX_DAILY_COST=5.00
 MAX_COST_PER_NEWS_ITEM=0.50
 MAX_TOTAL_HOPS=3
 ```
+
+**Gap: new agent pipeline not yet wired into CostTracker.**
+
+The old explorer uses `CostTracker` for dollar-cost estimation and daily budget
+enforcement. The new multi-agent pipeline (`agent_pipeline.py`) tracks tokens
+comprehensively via PydanticAI's `RunUsage` (input/output/total tokens, requests,
+tool calls) but does NOT yet:
+
+1. **Convert tokens → dollars** — needs provider-specific pricing tables
+   (different $/token for Grok, OpenAI, Gemini)
+2. **Enforce daily budget** — `MAX_DAILY_COST` hard cap not checked
+3. **Enforce per-item budget** — `MAX_COST_PER_NEWS_ITEM` not checked
+4. **Estimate cost for non-LLM tool calls** — `x_search` makes a separate
+   Grok API call whose tokens aren't captured by the driving agent's `RunUsage`
+
+**What IS tracked in the new pipeline:**
+- Per-agent: input_tokens, output_tokens, total_tokens, requests, tool_calls
+- Per-pipeline: accumulated totals across all agents in `PipelineResult.total_usage`
+- Per-tool-call: `TracingToolset` records every invocation with tool name + args + output
+
+**TODO when wiring into orchestrator (Phase B Step 6):**
+- Add pricing tables for each provider ($/1K input tokens, $/1K output tokens)
+- Compute `cost_usd` from `PipelineResult.total_usage` per agent
+- Feed into `CostTracker` for daily/per-item budget enforcement
+- Estimate `x_search` cost separately (it makes its own Grok API call)
+
+### 9e. Watch Concurrency & Budget Controls
+
+**Status: TODO** — designed but not implemented.
+
+When the system begins tracking (watching) stocks it considers buying, resource
+consumption becomes ongoing rather than one-shot. Controls needed:
+
+| Control | Default | Env var | Purpose |
+|---------|---------|---------|---------|
+| Max concurrent Watches | 5 | `MAX_CONCURRENT_WATCHES` | Bound simultaneous monitoring cost |
+| Max daily Watch cost | $5.00 | `MAX_DAILY_WATCH_COST` | Hard cap on total monitoring spend |
+| Max daily explorations | 50 | `MAX_DAILY_EXPLORATIONS` | Limit how many news items get full pipeline |
+| Monitoring budget per Watch | $0.50 | `WATCH_MONITORING_BUDGET` | Per-position monitoring cap |
+| Retrospective budget per Watch | $0.20 | `WATCH_RETROSPECTIVE_BUDGET` | Post-exit analysis cap |
+| Max daily total cost | $10.00 | `MAX_DAILY_COST` | Hard cap across all activities |
+
+**Finding optimal limits:** The exact numbers above are starting guesses. Plan
+to run the system for 2-3 weeks with conservative limits and real cost telemetry,
+then adjust based on observed cost-per-exploration, cost-per-watch, and
+signal quality at different budget levels. All limits are env-configurable —
+no code changes needed to experiment.
 
 ### 9d. Backfill — DONE
 
@@ -1226,7 +1397,7 @@ but deferred to keep v1 focused:
 | LLM-selected indicator subsets | TradingAgents | Interesting optimization but premature; start by making all indicators available |
 | Postgres / Supabase | Original design | SQLite sufficient for single-process v1; upgrade path clear |
 | Streamlit offline workbench | Original design | FastAPI dashboard is primary; add if offline analysis needs grow |
-| Formal policy learning (contextual bandit) | Original design | Insufficient data; prompt-injected insights are more practical |
+| ~~Formal policy learning (contextual bandit)~~ | Original design | **PLANNED (Phase D+)** — see §5d. Applies at orchestrator meta-level (triage threshold, pipeline config, model routing, budget allocation, parameter tuning). Thompson Sampling for insights.json. Data capture starts in Phase B. |
 | LangGraph workflow orchestration | TradingAgents | Custom sequential orchestrator is simpler and more transparent |
 
 ---
