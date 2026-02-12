@@ -1,14 +1,15 @@
-"""PydanticAI-based explorer agent for free-form tool-use investigation.
+"""PydanticAI-based explorer agent with market data + research tools.
 
-Replaces the rigid Phase 1/2 explorer with a single PydanticAI agent that:
-- Receives a news event + context
-- Decides which tools to call and in what order
-- Records every tool call as a ToolTrace (via TracingToolset)
-- Stops when it has enough evidence
-- Produces a structured TradingSignal as output
+Provides:
+- TradingSignal structured output model
+- ExplorerDeps dependency container
+- TracingToolset for ToolTrace recording
+- Function toolset with market data tools + research tools
+  (x_search, url_fetch, x_stream_cache)
+- Agent factory and explore() entry point
 
-The agent loop, message threading, tool dispatch, and budget enforcement
-are all handled by PydanticAI.
+Used by the multi-agent orchestrator (orchestrator.py) which runs
+multiple agents sequentially with different LLM providers.
 """
 
 from __future__ import annotations
@@ -24,6 +25,8 @@ from pydantic import BaseModel, Field
 from pydantic_ai import Agent, FunctionToolset, RunContext, UsageLimits, WrapperToolset
 from pydantic_ai.toolsets import ToolsetTool
 
+from trader.evidence.extract import extract_article
+from trader.evidence.fetch import fetch_url
 from trader.market.data_service import MarketDataService
 
 DEBUG = os.getenv("DEBUG", "false").lower() in ("true", "1")
@@ -57,6 +60,9 @@ class ExplorerDeps:
     market: MarketDataService
     news: dict[str, Any]
     symbols: list[str]
+    # Optional services (injected by orchestrator when available)
+    x_stream_service: Any = None       # XStreamService instance for cached X posts
+    xai_api_key: str | None = None     # For x_search function tool
     # Mutable trace accumulator
     tool_traces: list[dict[str, Any]] = field(default_factory=list)
     hop_index: int = 0
@@ -227,19 +233,152 @@ def check_volume_regime(ctx: RunContext[ExplorerDeps], symbol: str) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Research tools — web/social/evidence
+# ---------------------------------------------------------------------------
+
+
+@market_toolset.tool
+def url_fetch(ctx: RunContext[ExplorerDeps], url: str) -> str:
+    """Fetch a web page and extract its article text. Free (local).
+    Use this to read the full content of a URL found via web_search or news.
+    Returns extracted article text (via trafilatura), NOT raw HTML.
+
+    Args:
+        url: The full URL to fetch and extract text from.
+    """
+    try:
+        fetch_result = fetch_url(url=url)
+        content_type = fetch_result.content_type or ""
+        if "html" not in content_type and "text" not in content_type:
+            return json.dumps({
+                "url": url,
+                "error": f"Non-text content type: {content_type}",
+                "status_code": fetch_result.status_code,
+            })
+        article = extract_article(html=fetch_result.content, url=url)
+        # Truncate to avoid blowing up context
+        text = article.text[:5000]
+        return json.dumps({
+            "url": url,
+            "final_url": fetch_result.final_url,
+            "text": text,
+            "title": article.metadata.get("title", ""),
+            "author": article.metadata.get("author", ""),
+            "date": article.metadata.get("date", ""),
+            "truncated": len(article.text) > 5000,
+        })
+    except Exception as e:
+        return json.dumps({"url": url, "error": str(e)})
+
+
+@market_toolset.tool
+def x_search(ctx: RunContext[ExplorerDeps], query: str) -> str:
+    """Search X/Twitter for posts related to a query. Uses Grok (xAI) under the hood.
+    Costs per call (xAI API). Use this to check social media sentiment and chatter.
+
+    Good queries include cashtags ($NVDA), company names, and specific news terms.
+    You can call this multiple times with different queries to refine your search.
+
+    Args:
+        query: Search query (e.g. '$NVDA earnings sentiment', 'NVIDIA supply shortage')
+    """
+    api_key = ctx.deps.xai_api_key or os.getenv("XAI_API_KEY")
+    if not api_key:
+        return json.dumps({"error": "XAI_API_KEY not configured — x_search unavailable"})
+
+    try:
+        import httpx as _httpx
+
+        resp = _httpx.post(
+            "https://api.x.ai/v1/responses",
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+            },
+            json={
+                "model": os.getenv("XSEARCH_MODEL", "grok-4-1-fast-reasoning"),
+                "tools": [{"type": "x_search"}],
+                "input": [{"role": "user", "content": query}],
+            },
+            timeout=60.0,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+
+        # Extract text output + citations from the response
+        for item in data.get("output", []):
+            if item.get("type") == "message":
+                for content in item.get("content", []):
+                    if content.get("type") == "output_text":
+                        citations = [
+                            a["url"]
+                            for a in content.get("annotations", [])
+                            if a.get("type") == "url_citation" and a.get("url")
+                        ]
+                        return json.dumps({
+                            "query": query,
+                            "answer": content["text"],
+                            "citations": citations,
+                            "source": "x_search",
+                        })
+        return json.dumps({"query": query, "error": "No output in x_search response"})
+    except Exception as e:
+        return json.dumps({"query": query, "error": str(e), "source": "x_search"})
+
+
+@market_toolset.tool
+def x_stream_cache(ctx: RunContext[ExplorerDeps], symbol: str, limit: int = 20) -> str:
+    """Get cached recent X/Twitter posts from the live filtered stream for a symbol.
+    Free (reads from in-memory cache, no API call). The stream must be running
+    for there to be cached posts.
+
+    Args:
+        symbol: Stock ticker to look up in the cache (e.g. 'NVDA')
+        limit: Maximum number of posts to return (default 20)
+    """
+    svc = ctx.deps.x_stream_service
+    if svc is None:
+        return json.dumps({
+            "symbol": symbol,
+            "posts": [],
+            "note": "X stream service not available",
+        })
+
+    try:
+        posts = svc.get_recent_posts(key=symbol.upper(), limit=limit)
+        # Also check the "_all" bucket
+        if not posts:
+            posts = svc.get_recent_posts(key="_all", limit=limit)
+        return json.dumps({
+            "symbol": symbol,
+            "posts": posts,
+            "count": len(posts),
+            "source": "x_stream_cache",
+        })
+    except Exception as e:
+        return json.dumps({"symbol": symbol, "error": str(e), "source": "x_stream_cache"})
+
+
+# ---------------------------------------------------------------------------
 # System prompt
 # ---------------------------------------------------------------------------
 
 
-EXPLORER_SYSTEM_PROMPT = """You are a financial research assistant investigating a breaking news event.
+EXPLORER_SYSTEM_PROMPT = """You are a financial research analyst investigating a breaking news event.
 
 ## Your tools
-You have access to real-time market data, company fundamentals, insider activity,
-technical indicators, and price history. All financial data tools are FREE — use
-them liberally. The more data you gather, the better your analysis will be.
+You have access to:
+- **Market data** (free): real-time quotes, fundamentals, insider activity,
+  technicals, options, price history, volume analysis
+- **Web search** (native, iterative): search the web for related information,
+  verify claims, find additional context
+- **X/Twitter search** (x_search): check social media sentiment and chatter
+- **URL fetch** (free): read the full text of any article or webpage
+- **X stream cache** (free): get cached posts from the live X filtered stream
 
-## Budget
-Financial data tools are free and unlimited. Use as many as needed.
+## Cost awareness
+- Financial data tools, url_fetch, and x_stream_cache are **free** — use liberally.
+- web_search and x_search cost per call — use purposefully, not wastefully.
 
 ## Your task
 Investigate the news event provided to determine:
@@ -250,15 +389,17 @@ Investigate the news event provided to determine:
 ## How to investigate
 Think step by step. A good investigation typically includes:
 - Check the current price and recent price action (has the market already reacted?)
+- Search the web for more context about the news event
+- Check X/Twitter for trader sentiment and chatter
 - Look at volume (are people actually trading on this?)
 - Check fundamentals (is this stock expensive/cheap? what's the context?)
 - Check insider activity (are insiders buying or selling?)
 - Look at options activity (what's the options market pricing in?)
 - Check technical indicators (is the stock overbought/oversold?)
-- Look at recent news (is this truly new information?)
+- Fetch and read key articles for detailed information
 
-You don't need to use ALL tools every time. Focus on what's relevant to THIS
-specific news event. Stop when you have enough evidence to make a judgment.
+Focus on what's relevant to THIS specific news event. Stop when you have
+enough evidence to make a judgment.
 
 ## Before your final assessment
 Consider both sides:

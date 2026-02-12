@@ -43,6 +43,12 @@ classify = [
   "pydantic>=2.0.0",
 ]
 
+# Dev / testing dependencies
+dev = [
+  "pytest>=8.0.0",
+  "pytest-asyncio>=0.25.0",
+]
+
 # Dependencies for the ft/ fine-tuning workflows
 ft = [
   "datasets",

@@ -20,6 +20,8 @@ subl ~/.claude/CLAUDE.md
  # install context7 mcp globally
 claude mcp add --transport stdio --scope user context7 -- npx -y @upstash/context7-mcp --api-key API_KEY
 
+# install playwright-cli skill
+https://github.com/microsoft/playwright-cli
 
 SHOW COSTS
 
