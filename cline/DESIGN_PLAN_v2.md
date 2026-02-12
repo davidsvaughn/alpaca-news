@@ -56,7 +56,7 @@ their full lifecycle, and learns from outcomes.
 | **Offline loop** | TODO | Labeling, hop scoring, reflection |
 | **Bull/bear prompt pattern** | TODO | New — lightweight adversarial reasoning |
 | **Data vendor fallback** | DONE | Schwab → yfinance fallback via MarketDataService |
-| **Training-ready data capture** | TODO | New — store ephemeral data for future SFT/RL |
+| **Training-ready data capture** | DONE | Modality tags, rounds in snapshot, data_modalities index, richer x_search |
 | **Contextual bandits** | TODO (Phase D+) | Online learning for orchestrator config — §5d |
 
 ---
@@ -1356,11 +1356,13 @@ using PydanticAI, with enhanced data capture for future training.
    - Stores `TradingSignal` as snapshot prediction via `model_dump()`
    - Mock mode uses PydanticAI `TestModel` (3-agent pipeline, no API calls)
    - Added `exploration_complete` event to event bus
-7. **Enhance data capture for training readiness:**
-   - Store `raw_tool_output` in every ToolTrace via TracingToolset interception
-   - Capture web search results (title, snippet, URL, rank) before LLM processing
-   - Store X search/stream posts verbatim with engagement metrics
-   - Tag all captured data by modality in the `data_modalities` structure
+7. **DONE** — Enhance data capture for training readiness:
+   - `TOOL_MODALITY` map classifies each tool by data category (market_data, macro, fundamentals, news, web_research, social)
+   - `modality` field added to every TracingToolset trace
+   - `x_search` enhanced to store full annotation objects (title, URL, indices) + usage info, not just bare URL list
+   - `rounds` field added to Snapshot — stores per-agent findings, model, usage, elapsed time
+   - `data_modalities` index built at seal time: `{modality: [trace_indices]}` for categorical sampling
+   - Known gap: native `WebSearchTool` (Grok/OpenAI builtin) results are server-side; agent findings text with citations is our best proxy
 8. **(Future)** Create `insights.json` + BM25 situation memory for prompt injection
 
 ### Phase C: Watch lifecycle

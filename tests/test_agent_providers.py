@@ -302,10 +302,81 @@ async def test_full_pipeline_with_test_model(mock_market):
     assert len(result.rounds) == 3
     assert result.rounds_completed == 1
 
-    # Traces should be sequentially numbered
+    # Traces should be sequentially numbered and have modality tags
     for i, trace in enumerate(result.all_tool_traces):
         assert trace["hop_index"] == i
+        assert "modality" in trace, f"Trace {i} missing 'modality' field"
+        assert isinstance(trace["modality"], str)
 
     print(f"\n[Pipeline] Signal: {result.signal.direction}")
     print(f"[Pipeline] Total traces: {len(result.all_tool_traces)}")
     print(f"[Pipeline] Total usage: {result.total_usage}")
+
+    # Verify that traces have valid modality values
+    valid_modalities = {"market_data", "macro", "fundamentals", "news", "web_research", "social", "other"}
+    modalities_seen = {t["modality"] for t in result.all_tool_traces}
+    assert modalities_seen <= valid_modalities, f"Unexpected modalities: {modalities_seen - valid_modalities}"
+    print(f"[Pipeline] Modalities seen: {modalities_seen}")
+
+
+@pytest.mark.asyncio
+async def test_snapshot_captures_rounds_and_modalities(mock_market):
+    """Verify that Snapshot stores rounds and builds data_modalities index."""
+    from pydantic_ai.models.test import TestModel
+    from trader.online.agent_pipeline import (
+        AgentSpec,
+        PipelineConfig,
+        run_pipeline,
+    )
+    from trader.models.snapshot import SnapshotBuilder, Trigger
+
+    config = PipelineConfig(
+        agents=[
+            AgentSpec(name="agent1", model=TestModel(), builtin_tools=[],
+                      role_description="First investigator."),
+            AgentSpec(name="final", model=TestModel(), builtin_tools=[],
+                      role_description="Final analyst.", is_final=True),
+        ],
+        max_rounds=1,
+        request_limit=10,
+        tool_calls_limit=20,
+    )
+
+    result = await run_pipeline(
+        news={"headline": "AAPL drops 5%", "summary": "iPhone sales decline"},
+        symbols=["AAPL"],
+        market=mock_market,
+        config=config,
+    )
+
+    # Build a snapshot from pipeline results
+    trigger = Trigger(
+        type="test",
+        alpaca_timestamp=None,
+        headline="AAPL drops 5%",
+        summary="iPhone sales decline",
+        source="test",
+        symbols=["AAPL"],
+    )
+    builder = SnapshotBuilder(trigger=trigger, snapshot_id="test-snap-001")
+    for trace in result.all_tool_traces:
+        builder.add_tool_trace(trace)
+    for rnd in result.rounds:
+        builder.add_round(rnd)
+    builder.prediction = result.signal.model_dump()
+
+    snapshot = builder.seal()
+
+    # Rounds are stored
+    assert len(snapshot.rounds) == 2
+    for rnd in snapshot.rounds:
+        assert "agent" in rnd
+        assert "findings" in rnd
+
+    # data_modalities index is built from traces
+    assert isinstance(snapshot.data_modalities, dict)
+    total_indexed = sum(len(v) for v in snapshot.data_modalities.values())
+    assert total_indexed == len(snapshot.tool_traces)
+    print(f"\n[Snapshot] Rounds: {len(snapshot.rounds)}")
+    print(f"[Snapshot] Modalities: {dict(snapshot.data_modalities)}")
+    print(f"[Snapshot] Traces: {len(snapshot.tool_traces)}")

@@ -222,6 +222,10 @@ def process_news_file(
         for trace in pipeline_result.all_tool_traces:
             builder.add_tool_trace(trace)
 
+        # Store agent rounds (findings, usage, model) for training data
+        for rnd in pipeline_result.rounds:
+            builder.add_round(rnd)
+
         # Compute dollar cost from token usage and feed to CostTracker
         for rnd in pipeline_result.rounds:
             agent_name = rnd["agent"]

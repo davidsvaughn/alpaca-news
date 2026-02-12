@@ -57,6 +57,8 @@ class Snapshot:
     price_context: dict[str, Any]
     exploration_budget: ExplorationBudget
     tool_traces: list[dict[str, Any]]
+    rounds: list[dict[str, Any]]
+    data_modalities: dict[str, list[int]]
     prediction: dict[str, Any]
     cost_summary: CostSummary
 
@@ -118,6 +120,7 @@ class SnapshotBuilder:
         self.price_context: dict[str, Any] = {}
         self.exploration_budget = exploration_budget or ExplorationBudget()
         self.tool_traces: list[dict[str, Any]] = []
+        self.rounds: list[dict[str, Any]] = []
         self.prediction: dict[str, Any] = {}
         self._cost_by_tool: dict[str, float] = {}
         self._cost_total: float = 0.0
@@ -133,6 +136,9 @@ class SnapshotBuilder:
         tool_name = (trace.get("action") or {}).get("tool", "unknown")
         self._cost_total += cost
         self._cost_by_tool[tool_name] = self._cost_by_tool.get(tool_name, 0.0) + cost
+
+    def add_round(self, round_dict: dict[str, Any]) -> None:
+        self.rounds.append(round_dict)
 
     def set_market_context(self, ctx: dict[str, Any]) -> None:
         self.market_context = ctx
@@ -162,6 +168,12 @@ class SnapshotBuilder:
 
     def seal(self) -> Snapshot:
         """Produce a frozen Snapshot from accumulated state."""
+        # Build data_modalities index from tool trace modality tags
+        modalities: dict[str, list[int]] = {}
+        for i, trace in enumerate(self.tool_traces):
+            modality = trace.get("modality", "other")
+            modalities.setdefault(modality, []).append(i)
+
         return Snapshot(
             snapshot_id=self.snapshot_id,
             version=self.version,
@@ -171,6 +183,8 @@ class SnapshotBuilder:
             price_context=self.price_context,
             exploration_budget=self.exploration_budget,
             tool_traces=list(self.tool_traces),
+            rounds=list(self.rounds),
+            data_modalities=modalities,
             prediction=self.prediction,
             cost_summary=CostSummary(
                 total_usd=round(self._cost_total, 6),

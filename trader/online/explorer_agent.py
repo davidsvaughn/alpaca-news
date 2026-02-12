@@ -69,6 +69,27 @@ class ExplorerDeps:
 
 
 # ---------------------------------------------------------------------------
+# Modality classification — maps tool names to data categories
+# ---------------------------------------------------------------------------
+
+TOOL_MODALITY: dict[str, str] = {
+    "check_price": "market_data",
+    "get_price_history": "market_data",
+    "check_price_spike": "market_data",
+    "check_volume_regime": "market_data",
+    "check_market_context": "macro",
+    "check_options_activity": "market_data",
+    "get_fundamentals": "fundamentals",
+    "get_movers": "market_data",
+    "get_technical_indicators": "market_data",
+    "check_insider_activity": "fundamentals",
+    "get_company_news": "news",
+    "url_fetch": "web_research",
+    "x_search": "social",
+    "x_stream_cache": "social",
+}
+
+# ---------------------------------------------------------------------------
 # Tool tracing — intercepts every tool call for ToolTrace recording
 # ---------------------------------------------------------------------------
 
@@ -102,6 +123,7 @@ class TracingToolset(WrapperToolset):
                 "trace_id": f"trace_{hop}",
                 "hop_index": hop,
                 "timestamp": datetime.now(tz=timezone.utc).isoformat(),
+                "modality": TOOL_MODALITY.get(name, "other"),
                 "action": {
                     "tool": name,
                     "args": tool_args,
@@ -310,17 +332,24 @@ def x_search(ctx: RunContext[ExplorerDeps], query: str) -> str:
             if item.get("type") == "message":
                 for content in item.get("content", []):
                     if content.get("type") == "output_text":
+                        annotations = content.get("annotations", [])
                         citations = [
                             a["url"]
-                            for a in content.get("annotations", [])
+                            for a in annotations
                             if a.get("type") == "url_citation" and a.get("url")
                         ]
-                        return json.dumps({
+                        result: dict[str, Any] = {
                             "query": query,
                             "answer": content["text"],
                             "citations": citations,
                             "source": "x_search",
-                        })
+                            # Richer data for training — stored via raw_tool_output
+                            "annotations": annotations,
+                        }
+                        usage = data.get("usage")
+                        if usage:
+                            result["usage"] = usage
+                        return json.dumps(result)
         return json.dumps({"query": query, "error": "No output in x_search response"})
     except Exception as e:
         return json.dumps({"query": query, "error": str(e), "source": "x_search"})
