@@ -8,7 +8,7 @@ prior agents.
 Architecture:
     Agent 1 (Grok)   → web_search + x_search + all function tools
     Agent 2 (OpenAI) → web_search + all function tools
-    Agent 3 (Claude) → web_search + all function tools → TradingSignal
+    Agent 3 (Gemini) → all function tools (no web search) → TradingSignal
 
 The orchestrator passes context between agents and optionally loops
 if the final agent's confidence is below a threshold.
@@ -124,14 +124,18 @@ def build_default_pipeline() -> PipelineConfig:
             ),
         ))
 
-    # Agent 3: Claude (web_search + synthesis)
-    anthropic_key = os.getenv("ANTHROPIC_API_KEY")
-    if anthropic_key:
-        claude_model = os.getenv("SYNTHESIS_MODEL", "claude-sonnet-4-5-20250929")
+    # Agent 3: Gemini (function tools only — no WebSearchTool)
+    # Gemini cannot mix Google grounding with function tools, so it runs
+    # with function tools only.  Prior agents' web search findings are
+    # passed in the accumulated context, so Gemini can still synthesize
+    # web evidence without calling web_search itself.
+    google_key = os.getenv("GOOGLE_API_KEY")
+    if google_key:
+        gemini_model = os.getenv("SYNTHESIS_MODEL", "gemini-2.5-flash")
         agents.append(AgentSpec(
-            name="claude",
-            model=f"anthropic:{claude_model}",
-            builtin_tools=[WebSearchTool()],
+            name="gemini",
+            model=f"google-gla:{gemini_model}",
+            builtin_tools=[],
             role_description=(
                 "You are the FINAL analyst. Review ALL evidence gathered by "
                 "previous investigators. You may use any tool to verify or "
@@ -145,7 +149,7 @@ def build_default_pipeline() -> PipelineConfig:
     if not agents:
         raise RuntimeError(
             "No LLM API keys configured. Set at least one of: "
-            "XAI_API_KEY, OPENAI_API_KEY, ANTHROPIC_API_KEY"
+            "XAI_API_KEY, OPENAI_API_KEY, GOOGLE_API_KEY"
         )
 
     # Mark the last agent as final (in case some were skipped)

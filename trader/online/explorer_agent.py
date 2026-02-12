@@ -247,7 +247,7 @@ def url_fetch(ctx: RunContext[ExplorerDeps], url: str) -> str:
         url: The full URL to fetch and extract text from.
     """
     try:
-        fetch_result = fetch_url(url=url)
+        fetch_result = fetch_url(url=url, user_agent="Mozilla/5.0 (compatible; alpaca-news/0.1)")
         content_type = fetch_result.content_type or ""
         if "html" not in content_type and "text" not in content_type:
             return json.dumps({

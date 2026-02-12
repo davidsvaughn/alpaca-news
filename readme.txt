@@ -12,7 +12,10 @@ source .venv/bin/activate
 uv sync
 
 ---------------------------------------------------------------------------------------------------
-CLAUDE CODE 
+CLAUDE CODE
+
+MEMORY.md:
+/home/david/.claude/projects/-home-david-code-davidsvaughn-alpaca-news/memory/MEMORY.md
 
 subl .claude/settings.json
 subl ~/.claude/CLAUDE.md

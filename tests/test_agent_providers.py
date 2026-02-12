@@ -224,23 +224,22 @@ async def test_openai_with_websearch_and_tools(deps):
 
 
 # ---------------------------------------------------------------------------
-# Claude (Anthropic) — WebSearchTool + function tools
+# Gemini (Google) — function tools only (no WebSearchTool)
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.skipif(not os.getenv("ANTHROPIC_API_KEY"), reason="ANTHROPIC_API_KEY not set")
+@pytest.mark.skipif(not os.getenv("GOOGLE_API_KEY"), reason="GOOGLE_API_KEY not set")
 @pytest.mark.asyncio
-async def test_claude_with_websearch_and_tools(deps):
-    """Claude (Anthropic): WebSearchTool + function tools."""
-    model_name = os.getenv("SYNTHESIS_MODEL", "claude-sonnet-4-5-20250929")
+async def test_gemini_with_function_tools(deps):
+    """Gemini: function tools only (cannot mix with Google grounding)."""
+    model_name = os.getenv("SYNTHESIS_MODEL", "gemini-2.5-flash")
 
     tracing = TracingToolset(market_toolset)
     agent = Agent(
-        f"anthropic:{model_name}",
+        f"google-gla:{model_name}",
         deps_type=ExplorerDeps,
         output_type=TradingSignal,
         system_prompt="You are a financial analyst. Investigate briefly, use a few tools, then produce a trading signal.",
-        builtin_tools=[WebSearchTool()],
         toolsets=[tracing],
     )
 
@@ -249,15 +248,15 @@ async def test_claude_with_websearch_and_tools(deps):
     signal = result.output
     assert isinstance(signal, TradingSignal)
     assert signal.direction in ("bullish", "bearish", "neutral")
-    print(f"\n[Claude] Signal: {signal.direction} @ {signal.confidence}")
-    print(f"[Claude] Catalyst: {signal.key_catalyst}")
+    print(f"\n[Gemini] Signal: {signal.direction} @ {signal.confidence}")
+    print(f"[Gemini] Catalyst: {signal.key_catalyst}")
 
     traces = deps.tool_traces
     tool_names = [t["action"]["tool"] for t in traces]
-    print(f"[Claude] Tools called: {tool_names}")
+    print(f"[Gemini] Tools called: {tool_names}")
 
     usage = result.usage()
-    print(f"[Claude] Usage: {usage.requests} requests, {usage.total_tokens} tokens")
+    print(f"[Gemini] Usage: {usage.requests} requests, {usage.total_tokens} tokens")
     assert usage.requests > 0
 
 

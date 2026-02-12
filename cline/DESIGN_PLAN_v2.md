@@ -165,7 +165,7 @@ extend what prior agents found.
 │  Round 1:                                                    │
 │    Agent 1 (Grok)   ──→ web_search + x_search + all tools   │
 │    Agent 2 (OpenAI) ──→ web_search + all tools               │
-│    Agent 3 (Claude) ──→ web_search + all tools               │
+│    Agent 3 (Gemini) ──→ all function tools (no web search)   │
 │      each agent sees full context from prior agents          │
 │      Agent 3 produces TradingSignal (structured output)      │
 │                                                              │
@@ -190,7 +190,7 @@ All agents share:
 | Grok (xAI) | `OpenAIResponsesModel` + xAI base_url | `WebSearchTool(search_context_size=None)` | Function tool wrapper (calls xAI Responses API) | Yes |
 | OpenAI | `openai-responses:` | `WebSearchTool()` | N/A | Yes |
 | Claude (Anthropic) | `anthropic:` | `WebSearchTool()` | N/A | Yes |
-| Gemini (Google) | `google-gla:` | Google grounding | N/A | **No** — cannot mix built-in + function tools |
+| Gemini (Google) | `google-gla:` | Google grounding | N/A | **No** — cannot mix built-in + function tools (see workaround below) |
 
 **Key findings from testing:**
 - Grok's Responses API at `https://api.x.ai/v1/` works through PydanticAI's
@@ -200,7 +200,11 @@ All agents share:
   a single combined toolset automatically
 - `x_search` has no PydanticAI builtin, but as a function tool the agent CAN
   call it multiple times with different queries (agent-driven iteration)
-- Gemini excluded from pipeline (can't mix search + function tools)
+- Gemini **cannot** mix Google grounding with function tools in a single agent,
+  but can participate via a **two-instance approach**: one Gemini with Google
+  grounding only (web search), one with function tools only (market data, etc.).
+  Both gemini-2.5-flash and gemini-3-flash-preview tested and working with
+  function tools alone.
 
 #### Context flow between agents
 
@@ -261,6 +265,21 @@ refines queries, and searches again — all within PydanticAI's tool loop.
 can call it multiple times with different queries (agent-driven iteration), but
 each individual call is a one-shot to Grok. This is a pragmatic compromise —
 Grok's internal agentic search refinement is lost, but the agent loop compensates.
+
+#### Pre-fetch optimization (TODO)
+
+When a news trigger includes a URL (e.g. the original article link), the
+orchestrator can **pre-fetch and extract** the article text before the LLM loop
+starts, then inject the full text into the initial prompt. Benefits:
+- Saves a tool call (agents don't need to spend a turn calling `url_fetch`)
+- Reduces latency (fetch happens while the agent is being constructed)
+- The trigger article is almost always worth reading — no LLM judgment needed
+
+Implementation: in the orchestrator, before building the first agent's prompt,
+call `fetch_url()` + `extract_article()` on the trigger URL. Append the
+extracted text to the user message under a `## Source article` heading.
+`url_fetch` remains available as a tool for any *other* URLs the agent discovers
+during investigation.
 
 #### Financial data tools — via MarketDataService (Schwab → yfinance fallback)
 
@@ -360,7 +379,7 @@ For the explorer pipeline, agents use PydanticAI's native provider support
 | Grok (xAI) | `OpenAIResponsesModel` + xAI base_url | `WebSearchTool(search_context_size=None)` | Function tool wrapper | Yes |
 | OpenAI | `openai-responses:gpt-5-mini` | `WebSearchTool()` | N/A | Yes |
 | Claude | `anthropic:claude-sonnet-4-0` | `WebSearchTool()` | N/A | Yes |
-| Gemini | `google-gla:gemini-3-flash` | Google grounding | N/A | **No** — excluded from pipeline |
+| Gemini | `google-gla:gemini-3-flash` | Google grounding | N/A | **No** — requires two-instance workaround |
 
 Per-stage model configuration via `.env` (subject to change):
 ```env
