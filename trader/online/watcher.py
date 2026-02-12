@@ -1,8 +1,9 @@
 """Watch monitoring scheduler.
 
-Periodically checks on holding watches:
-- Lightweight check-ins: price-only, no LLM
-- Agent check-ins: single LLM with market tools, produces hold/exit decision
+Periodically checks on all active watches:
+- Holding: lightweight or agent check-ins (price, LLM hold/exit decision)
+- Exited: immediate transition to retrospective phase
+- Retrospective: lightweight price tracking (MFE/MAE), auto-seal after max duration
 
 Runs as a daemon thread alongside the news processing worker.
 """
@@ -43,6 +44,13 @@ CHECKIN_SCHEDULE: list[tuple[int, int, str]] = [
 ]
 # After 240 min → force_exit
 
+# Retrospective schedule: (max_minutes_since_exit, interval_minutes)
+RETRO_SCHEDULE: list[tuple[int, int]] = [
+    (15, 5),    # 0-15 min after exit: every 5 min
+    (60, 15),   # 15-60 min after exit: every 15 min
+]
+# After max_retro_minutes → auto-seal
+
 
 def _minutes_since(iso_time: str) -> float:
     """Minutes elapsed since an ISO timestamp."""
@@ -58,6 +66,14 @@ def _get_schedule(minutes_since_entry: float) -> tuple[int, str]:
         if minutes_since_entry < max_min:
             return interval, depth
     return 0, "force_exit"
+
+
+def _get_retro_interval(minutes_since_exit: float) -> int:
+    """Return interval_minutes for retrospective phase, or 0 if past schedule."""
+    for max_min, interval in RETRO_SCHEDULE:
+        if minutes_since_exit < max_min:
+            return interval
+    return 0  # past schedule → seal
 
 
 def compute_pnl(entry_price: float, current_price: float, direction: str) -> float:
@@ -109,7 +125,7 @@ FORCE_EXIT_NOTE = (
 
 
 class WatchMonitor:
-    """Monitors holding watches with periodic check-ins."""
+    """Monitors active watches across all lifecycle phases."""
 
     def __init__(
         self,
@@ -125,14 +141,19 @@ class WatchMonitor:
         self.market = market
 
     def run_check_cycle(self) -> None:
-        """Run one check cycle across all holding watches."""
+        """Run one check cycle across all active (non-sealed) watches."""
         watches = get_active_watches(self.db)
-        holding = [w for w in watches if w.get("status") == "holding"]
 
-        for watch_dict in holding:
+        for watch_dict in watches:
+            status = watch_dict.get("status")
             try:
-                if self._is_due(watch_dict):
-                    self._run_checkin(watch_dict)
+                if status == "holding":
+                    if self._is_due(watch_dict):
+                        self._run_checkin(watch_dict)
+                elif status == "exited":
+                    self._transition_to_retrospective(watch_dict)
+                elif status == "retrospective":
+                    self._retrospective_cycle(watch_dict)
             except Exception as e:
                 if DEBUG:
                     raise
@@ -235,6 +256,14 @@ class WatchMonitor:
 
         decision = asyncio.run(self._run_agent(watch_dict, depth, minutes_held))
 
+        # Hard override: force_exit must always exit, even if agent says hold
+        if depth == "force_exit" and decision.action != "exit":
+            decision = CheckinDecision(
+                action="exit",
+                reason=f"Force exit override (agent wanted hold: {decision.reason})",
+                unrealized_pnl_pct=decision.unrealized_pnl_pct,
+            )
+
         builder = WatchBuilder.from_dict(watch_dict)
         builder.last_checkin_at = _utc_now()
 
@@ -319,6 +348,141 @@ class WatchMonitor:
             ),
         )
         return result.output
+
+    # ------------------------------------------------------------------
+    # Retrospective phase (post-exit price tracking)
+    # ------------------------------------------------------------------
+
+    def _transition_to_retrospective(self, watch_dict: dict[str, Any]) -> None:
+        """Move an exited watch into retrospective phase."""
+        wid = watch_dict["watch_id"]
+        symbol = watch_dict["symbol"]
+        exit_data = watch_dict.get("exit", {})
+        exit_price = exit_data.get("price", 0.0)
+
+        builder = WatchBuilder.from_dict(watch_dict)
+        builder.start_retrospective(exit_price)
+        updated = builder.to_watch()
+        update_watch(self.db, wid, updated.to_dict())
+
+        self.bus.publish(PipelineEvent(
+            type="watch_retrospective_started",
+            payload={"watch_id": wid, "symbol": symbol, "exit_price": exit_price},
+        ))
+
+    def _retrospective_cycle(self, watch_dict: dict[str, Any]) -> None:
+        """Check if retrospective is due for a price check or should be sealed."""
+        retro = watch_dict.get("retrospective_data") or {}
+        started_at = retro.get("started_at")
+        if not started_at:
+            # Malformed — seal immediately
+            self._seal_watch(watch_dict)
+            return
+
+        minutes_since_exit = _minutes_since(started_at)
+        max_retro = self.settings.watch_max_retro_minutes
+
+        if minutes_since_exit >= max_retro:
+            self._seal_watch(watch_dict)
+            return
+
+        if self._is_retro_due(watch_dict, minutes_since_exit):
+            self._retrospective_price_check(watch_dict)
+
+    def _is_retro_due(
+        self, watch_dict: dict[str, Any], minutes_since_exit: float
+    ) -> bool:
+        """Check if a retrospective price check is due."""
+        interval = _get_retro_interval(minutes_since_exit)
+        if interval == 0:
+            return False  # past schedule, will be sealed
+        last = watch_dict.get("last_checkin_at")
+        if last is None:
+            return True
+        return _minutes_since(last) >= interval
+
+    def _retrospective_price_check(self, watch_dict: dict[str, Any]) -> None:
+        """Lightweight price check during retrospective. Updates MFE/MAE."""
+        symbol = watch_dict["symbol"]
+        wid = watch_dict["watch_id"]
+        entry = watch_dict["entry"]
+
+        current_price = self._get_current_price(symbol)
+        if current_price is None:
+            return
+
+        builder = WatchBuilder.from_dict(watch_dict)
+        builder.last_checkin_at = _utc_now()
+
+        retro = builder.retrospective_data or {}
+        exit_price = retro.get("exit_price", entry["price"])
+
+        # P&L since exit (direction-aware)
+        pnl_since_exit = compute_pnl(exit_price, current_price, entry["direction"])
+
+        # Append price checkpoint
+        checks = retro.get("price_checks", [])
+        checks.append({
+            "time": _utc_now(),
+            "price": current_price,
+            "pnl_since_exit_pct": pnl_since_exit,
+        })
+        retro["price_checks"] = checks
+
+        # Update MFE/MAE
+        retro["mfe_pct"] = max(retro.get("mfe_pct", 0.0), pnl_since_exit)
+        retro["mae_pct"] = min(retro.get("mae_pct", 0.0), pnl_since_exit)
+        builder.retrospective_data = retro
+
+        updated = builder.to_watch()
+        update_watch(self.db, wid, updated.to_dict())
+
+        self.bus.publish(PipelineEvent(
+            type="watch_retrospective_checkin",
+            payload={
+                "watch_id": wid, "symbol": symbol,
+                "current_price": current_price,
+                "pnl_since_exit_pct": pnl_since_exit,
+                "mfe_pct": retro["mfe_pct"],
+                "mae_pct": retro["mae_pct"],
+            },
+        ))
+
+    def _seal_watch(self, watch_dict: dict[str, Any]) -> None:
+        """Seal a watch — final lifecycle state, no more processing."""
+        wid = watch_dict["watch_id"]
+        symbol = watch_dict["symbol"]
+        entry = watch_dict["entry"]
+
+        builder = WatchBuilder.from_dict(watch_dict)
+
+        # Record final price if available
+        retro = builder.retrospective_data or {}
+        current_price = self._get_current_price(symbol)
+        if current_price is not None:
+            retro["final_price"] = current_price
+            pnl_since_exit = compute_pnl(
+                retro.get("exit_price", entry["price"]),
+                current_price,
+                entry["direction"],
+            )
+            retro["mfe_pct"] = max(retro.get("mfe_pct", 0.0), pnl_since_exit)
+            retro["mae_pct"] = min(retro.get("mae_pct", 0.0), pnl_since_exit)
+        builder.retrospective_data = retro
+
+        builder.seal()
+        updated = builder.to_watch()
+        update_watch(self.db, wid, updated.to_dict())
+
+        self.bus.publish(PipelineEvent(
+            type="watch_sealed",
+            payload={
+                "watch_id": wid, "symbol": symbol,
+                "mfe_pct": retro.get("mfe_pct", 0.0),
+                "mae_pct": retro.get("mae_pct", 0.0),
+                "final_price": retro.get("final_price"),
+            },
+        ))
 
     # ------------------------------------------------------------------
     # Helpers

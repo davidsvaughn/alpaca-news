@@ -59,6 +59,7 @@ class Watch:
     created_at: str
     last_checkin_at: str | None
     lifecycle_sealed_at: str | None
+    retrospective_data: dict[str, Any] | None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -107,6 +108,7 @@ class WatchBuilder:
         self.created_at = _utc_now()
         self.last_checkin_at: str | None = None
         self.lifecycle_sealed_at: str | None = None
+        self.retrospective_data: dict[str, Any] | None = None
 
     @classmethod
     def create_from_signal(
@@ -140,6 +142,7 @@ class WatchBuilder:
         builder.monitoring_snapshot_ids = list(d.get("monitoring_snapshot_ids", []))
         builder.retrospective_snapshot_ids = list(d.get("retrospective_snapshot_ids", []))
         builder.lifecycle_sealed_at = d.get("lifecycle_sealed_at")
+        builder.retrospective_data = d.get("retrospective_data")
         if d.get("exit"):
             builder.exit = WatchExit(**d["exit"])
         return builder
@@ -170,6 +173,17 @@ class WatchBuilder:
         )
         self.status = "exited"
 
+    def start_retrospective(self, exit_price: float) -> None:
+        """Transition from exited to retrospective phase."""
+        self.status = "retrospective"
+        self.retrospective_data = {
+            "exit_price": exit_price,
+            "started_at": _utc_now(),
+            "price_checks": [],
+            "mfe_pct": 0.0,
+            "mae_pct": 0.0,
+        }
+
     def add_retrospective_snapshot(self, snapshot_id: str) -> None:
         self.retrospective_snapshot_ids.append(snapshot_id)
 
@@ -193,4 +207,5 @@ class WatchBuilder:
             created_at=self.created_at,
             last_checkin_at=self.last_checkin_at,
             lifecycle_sealed_at=self.lifecycle_sealed_at,
+            retrospective_data=self.retrospective_data,
         )

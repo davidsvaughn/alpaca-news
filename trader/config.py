@@ -115,6 +115,7 @@ class Settings:
     watch_max_concurrent: int
     watch_monitoring_budget: float
     watch_max_hold_minutes: int
+    watch_max_retro_minutes: int
     watch_checkin_model: str
 
 
@@ -194,6 +195,7 @@ def load_settings(*, dotenv_path: str | None = None) -> Settings:
     watch_max_concurrent = _env_int("MAX_CONCURRENT_WATCHES", 5)
     watch_monitoring_budget = _env_float("WATCH_MONITORING_BUDGET", 0.50)
     watch_max_hold_minutes = _env_int("WATCH_MAX_HOLD_MINUTES", 240)
+    watch_max_retro_minutes = _env_int("WATCH_MAX_RETRO_MINUTES", 60)
     watch_checkin_model = _env_str("WATCH_CHECKIN_MODEL", "gemini-3-flash") or "gemini-3-flash"
 
     return Settings(
@@ -241,5 +243,6 @@ def load_settings(*, dotenv_path: str | None = None) -> Settings:
         watch_max_concurrent=watch_max_concurrent,
         watch_monitoring_budget=watch_monitoring_budget,
         watch_max_hold_minutes=watch_max_hold_minutes,
+        watch_max_retro_minutes=watch_max_retro_minutes,
         watch_checkin_model=watch_checkin_model,
     )

@@ -29,7 +29,7 @@
 | **BM25 situation memory** | TODO | New — learned from TradingAgents |
 | **Schwab Tier 1 expansion** | DONE | Options IV, fundamentals, movers, market hours, enhanced context |
 | **insights.json** | TODO | Flat scored insights for prompt injection |
-| **Watch lifecycle** | IN PROGRESS | Steps 1-2 DONE (model + DB + creation + monitoring scheduler); Steps 3-5 TODO |
+| **Watch lifecycle** | DONE | Full lifecycle: model, DB, creation, monitoring scheduler, retrospective, sealing |
 | **Signal extraction step** | DONE (by design) | Built into PydanticAI output_type=TradingSignal |
 | **Offline loop** | TODO | Labeling, hop scoring, reflection |
 | **Bull/bear prompt pattern** | TODO | New — lightweight adversarial reasoning |
@@ -62,7 +62,7 @@
    TOOL_MODALITY map, modality tags, richer x_search, rounds in snapshot, data_modalities index
 8. **(Future)** Create insights.json + BM25 situation memory
 
-## Phase C: Watch lifecycle — IN PROGRESS
+## Phase C: Watch lifecycle — DONE
 
 Full position management from entry to retrospective.
 
@@ -85,9 +85,14 @@ Full position management from entry to retrospective.
    - Daemon monitoring thread in orchestrator's `run_watch_loop()` (60s cycles)
    - 12 tests covering scheduling, timing, P&L, is_due logic, lightweight check-ins, WatchBuilder roundtrip
 
-3. TODO — Exit decision logic + retrospective phase
-4. TODO — Retrospective snapshots (post-exit counterfactual analysis)
-5. TODO — Watch sealing
+3. **DONE** — Exit logic, retrospective phase, and watch sealing:
+   - `run_check_cycle()` now handles all active statuses: holding, exited, retrospective
+   - Exited → retrospective transition: immediate, initializes `retrospective_data` with MFE/MAE tracking
+   - Retrospective phase: lightweight price checks (5-15 min intervals), records post-exit price movement
+   - Auto-seal after `WATCH_MAX_RETRO_MINUTES` (default 60), records final_price
+   - Force exit hardened: agent "hold" override to "exit" when depth=="force_exit"
+   - Full lifecycle test: holding → exited → retrospective → sealed via consecutive check cycles
+   - 20 watcher tests total (8 new for retrospective + sealing)
 
 ## Phase D: Offline loop — TODO
 
