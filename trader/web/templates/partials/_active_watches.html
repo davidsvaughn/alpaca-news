@@ -1,0 +1,48 @@
+{% if watches %}
+<div class="table-responsive">
+  <table class="table table-sm table-hover align-middle mb-0">
+    <thead class="table-light">
+      <tr>
+        <th>Symbol</th>
+        <th>Direction</th>
+        <th>Entry Price</th>
+        <th>Status</th>
+        <th>Thesis</th>
+        <th>Created</th>
+        <th></th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for w in watches %}
+      <tr>
+        <td><a href="/watches/{{ w.watch_id }}"><strong>{{ w.symbol }}</strong></a></td>
+        <td>
+          {% if w.entry.direction == 'bullish' %}
+            <span class="text-success">&#9650; bullish</span>
+          {% elif w.entry.direction == 'bearish' %}
+            <span class="text-danger">&#9660; bearish</span>
+          {% else %}
+            <span class="text-muted">&#8212; neutral</span>
+          {% endif %}
+        </td>
+        <td>${{ "%.2f"|format(w.entry.price) }}</td>
+        <td><span class="badge badge-{{ w.status }}">{{ w.status }}</span></td>
+        <td class="text-truncate" style="max-width: 250px;">{{ w.entry.thesis }}</td>
+        <td class="small text-muted">{{ w.created_at[:16] }}</td>
+        <td>
+          {% if w.status == 'holding' %}
+          <button class="btn btn-outline-danger btn-sm"
+                  hx-post="/api/watches/{{ w.watch_id }}/exit"
+                  hx-target="closest tr"
+                  hx-swap="outerHTML"
+                  hx-confirm="Force exit {{ w.symbol }}?">Exit</button>
+          {% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% else %}
+<p class="text-muted mb-0">No active watches.</p>
+{% endif %}

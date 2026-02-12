@@ -408,7 +408,25 @@ reinforce/weaken/propose insights, update BM25 memory. Human review before merge
 
 ### 9b. Dashboard — DONE
 
-`trader/web/` — FastAPI + SSE live feed.
+`trader/web/` — FastAPI + HTMX + Bootstrap 5 + Chart.js. Server-side rendered,
+no build step.
+
+| Page | URL | Features |
+|------|-----|----------|
+| Dashboard | `/` | Stats cards (HTMX polling), active watches, manual explore form, live SSE event feed |
+| Watches | `/watches` | Filterable table by status, force-exit buttons, detail pages with full lifecycle view |
+| Snapshots | `/snapshots` | Filterable table by symbol, detail pages with collapsible agent rounds + tool traces |
+| Costs | `/costs` | Budget progress bar, Chart.js daily trend + tool breakdown doughnut, history table |
+| Config | `/config` | Read-only grouped settings display (9 categories, 46 fields) |
+| Knowledge | `/knowledge` | JSON file viewer/editor with Save/Cancel for 7 knowledge files |
+
+**Control actions (POST):**
+- Force exit watch at current market price
+- Manual exploration trigger (headline + symbols → full pipeline in background thread)
+- Knowledge file editing (JSON validation, whitelist-guarded)
+
+**Real-time:** SSE connection with green/red indicator, toast notifications for key events
+(watch created/exited, snapshot sealed, explore complete/error), HTMX auto-refresh panels.
 
 ### 9c. Cost Control — DONE
 
@@ -454,7 +472,10 @@ trader/
 ├── xapi/                           # X API v2 client + stream
 ├── db/
 │   └── database.py                 # SQLite persistence
-├── web/                            # FastAPI dashboard
+├── web/                            # FastAPI dashboard (HTMX + Bootstrap 5)
+│   ├── app.py                     # Routes (pages, API fragments, control actions)
+│   ├── sse.py                     # SSE helpers
+│   └── templates/                 # Jinja2: base, 6 pages, 6 partials
 └── data/                           # Runtime data (gitignored)
     ├── snapshots/                  # Sealed Snapshot JSON files
     ├── watches/                    # Watch JSON files

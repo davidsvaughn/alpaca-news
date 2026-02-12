@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+
+{% block title %}alpaca-news | Watches{% endblock %}
+
+{% block content %}
+<div class="d-flex align-items-center mb-3">
+  <h2 class="mb-0 me-3">Watches</h2>
+  <span class="text-muted">{{ total }} total</span>
+</div>
+
+<!-- Status filter -->
+<div class="mb-3">
+  <div class="btn-group btn-group-sm" role="group">
+    <a href="/watches" class="btn btn-outline-secondary{% if not status_filter %} active{% endif %}">All</a>
+    <a href="/watches?status=holding" class="btn btn-outline-primary{% if status_filter == 'holding' %} active{% endif %}">Holding</a>
+    <a href="/watches?status=exited" class="btn btn-outline-warning{% if status_filter == 'exited' %} active{% endif %}">Exited</a>
+    <a href="/watches?status=retrospective" class="btn btn-outline-info{% if status_filter == 'retrospective' %} active{% endif %}">Retrospective</a>
+    <a href="/watches?status=sealed" class="btn btn-outline-secondary{% if status_filter == 'sealed' %} active{% endif %}">Sealed</a>
+  </div>
+</div>
+
+<!-- Watches table -->
+<div id="watches-table"
+     hx-get="/api/watches?status={{ status_filter or '' }}"
+     hx-trigger="load, sse-refresh from:body"
+     hx-swap="innerHTML">
+  <div class="text-center text-muted py-3">Loading...</div>
+</div>
+{% endblock %}

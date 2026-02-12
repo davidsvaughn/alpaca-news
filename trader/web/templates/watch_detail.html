@@ -1,0 +1,173 @@
+{% extends "base.html" %}
+
+{% block title %}alpaca-news | Watch {{ w.symbol }}{% endblock %}
+
+{% block content %}
+<nav aria-label="breadcrumb" class="mb-3">
+  <ol class="breadcrumb mb-0">
+    <li class="breadcrumb-item"><a href="/watches">Watches</a></li>
+    <li class="breadcrumb-item active">{{ w.symbol }} ({{ w.watch_id[:12] }})</li>
+  </ol>
+</nav>
+
+<div class="d-flex align-items-center mb-3">
+  <h2 class="mb-0 me-2">{{ w.symbol }}</h2>
+  <span class="badge badge-{{ w.status }} fs-6">{{ w.status }}</span>
+  {% if w.entry.direction == 'bullish' %}
+    <span class="text-success ms-2 fs-5">&#9650;</span>
+  {% elif w.entry.direction == 'bearish' %}
+    <span class="text-danger ms-2 fs-5">&#9660;</span>
+  {% endif %}
+  {% if w.status == 'holding' %}
+  <form class="ms-auto" hx-post="/api/watches/{{ w.watch_id }}/exit" hx-target="#exit-result"
+        hx-confirm="Force exit this watch at current market price?">
+    <button type="submit" class="btn btn-danger btn-sm">Force Exit</button>
+  </form>
+  {% endif %}
+</div>
+<div id="exit-result"></div>
+
+<!-- Entry info -->
+<div class="row g-3 mb-4">
+  <div class="col-md-6">
+    <div class="card">
+      <div class="card-header">Entry</div>
+      <div class="card-body">
+        <dl class="row mb-0">
+          <dt class="col-sm-5">Price</dt>
+          <dd class="col-sm-7">${{ "%.2f"|format(w.entry.price) }}</dd>
+          <dt class="col-sm-5">Time</dt>
+          <dd class="col-sm-7">{{ w.entry.time[:19] }}</dd>
+          <dt class="col-sm-5">Confidence</dt>
+          <dd class="col-sm-7">{{ "%.0f"|format(w.entry.confidence * 100) }}%</dd>
+          <dt class="col-sm-5">Direction</dt>
+          <dd class="col-sm-7">{{ w.entry.direction }}</dd>
+          <dt class="col-sm-5">Horizon</dt>
+          <dd class="col-sm-7">{{ w.entry.horizon }}</dd>
+          <dt class="col-sm-5">Thesis</dt>
+          <dd class="col-sm-7">{{ w.entry.thesis }}</dd>
+          <dt class="col-sm-5">Snapshot</dt>
+          <dd class="col-sm-7"><a href="/snapshots/{{ w.entry.snapshot_id }}">{{ w.entry.snapshot_id[:12] }}...</a></dd>
+        </dl>
+      </div>
+    </div>
+  </div>
+
+  {% if w.exit %}
+  <div class="col-md-6">
+    <div class="card">
+      <div class="card-header">Exit</div>
+      <div class="card-body">
+        <dl class="row mb-0">
+          <dt class="col-sm-5">Price</dt>
+          <dd class="col-sm-7">${{ "%.2f"|format(w.exit.price) }}</dd>
+          <dt class="col-sm-5">Time</dt>
+          <dd class="col-sm-7">{{ w.exit.time[:19] }}</dd>
+          <dt class="col-sm-5">Reason</dt>
+          <dd class="col-sm-7">{{ w.exit.reason }}</dd>
+          <dt class="col-sm-5">P&L</dt>
+          <dd class="col-sm-7">
+            <span class="{% if w.exit.realized_pnl_pct >= 0 %}pnl-positive{% else %}pnl-negative{% endif %} fs-5">
+              {{ "%+.2f"|format(w.exit.realized_pnl_pct) }}%
+            </span>
+          </dd>
+          {% if w.exit.snapshot_id %}
+          <dt class="col-sm-5">Snapshot</dt>
+          <dd class="col-sm-7"><a href="/snapshots/{{ w.exit.snapshot_id }}">{{ w.exit.snapshot_id[:12] }}...</a></dd>
+          {% endif %}
+        </dl>
+      </div>
+    </div>
+  </div>
+  {% endif %}
+</div>
+
+<!-- Retrospective data -->
+{% if w.retrospective_data %}
+<div class="card mb-4">
+  <div class="card-header">Retrospective</div>
+  <div class="card-body">
+    <div class="row mb-3">
+      <div class="col-auto">
+        <span class="badge bg-success fs-6">MFE {{ "%+.2f"|format(w.retrospective_data.mfe_pct) }}%</span>
+      </div>
+      <div class="col-auto">
+        <span class="badge bg-danger fs-6">MAE {{ "%+.2f"|format(w.retrospective_data.mae_pct) }}%</span>
+      </div>
+      {% if w.retrospective_data.final_price is defined and w.retrospective_data.final_price %}
+      <div class="col-auto">
+        <span class="badge bg-secondary fs-6">Final ${{ "%.2f"|format(w.retrospective_data.final_price) }}</span>
+      </div>
+      {% endif %}
+    </div>
+
+    {% if w.retrospective_data.price_checks %}
+    <table class="table table-sm table-bordered">
+      <thead class="table-light">
+        <tr>
+          <th>Time</th>
+          <th>Price</th>
+          <th>Since Exit</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for pc in w.retrospective_data.price_checks %}
+        <tr>
+          <td class="small">{{ pc.time[:19] }}</td>
+          <td>${{ "%.2f"|format(pc.price) }}</td>
+          <td>
+            <span class="{% if pc.pnl_since_exit_pct >= 0 %}pnl-positive{% else %}pnl-negative{% endif %}">
+              {{ "%+.2f"|format(pc.pnl_since_exit_pct) }}%
+            </span>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% endif %}
+  </div>
+</div>
+{% endif %}
+
+<!-- Linked snapshots -->
+{% if w.monitoring_snapshot_ids or w.retrospective_snapshot_ids %}
+<div class="card mb-4">
+  <div class="card-header">Linked Snapshots</div>
+  <div class="card-body">
+    {% if w.monitoring_snapshot_ids %}
+    <h6>Monitoring</h6>
+    <ul class="list-inline">
+      {% for sid in w.monitoring_snapshot_ids %}
+      <li class="list-inline-item"><a href="/snapshots/{{ sid }}" class="badge bg-light text-dark border">{{ sid[:12] }}</a></li>
+      {% endfor %}
+    </ul>
+    {% endif %}
+    {% if w.retrospective_snapshot_ids %}
+    <h6>Retrospective</h6>
+    <ul class="list-inline">
+      {% for sid in w.retrospective_snapshot_ids %}
+      <li class="list-inline-item"><a href="/snapshots/{{ sid }}" class="badge bg-light text-dark border">{{ sid[:12] }}</a></li>
+      {% endfor %}
+    </ul>
+    {% endif %}
+  </div>
+</div>
+{% endif %}
+
+<!-- Metadata -->
+<div class="card">
+  <div class="card-header">Metadata</div>
+  <div class="card-body">
+    <dl class="row mb-0">
+      <dt class="col-sm-3">Watch ID</dt>
+      <dd class="col-sm-9"><code>{{ w.watch_id }}</code></dd>
+      <dt class="col-sm-3">Created</dt>
+      <dd class="col-sm-9">{{ w.created_at }}</dd>
+      <dt class="col-sm-3">Last Check-in</dt>
+      <dd class="col-sm-9">{{ w.last_checkin_at or 'None' }}</dd>
+      <dt class="col-sm-3">Sealed</dt>
+      <dd class="col-sm-9">{{ w.lifecycle_sealed_at or 'Not yet' }}</dd>
+    </dl>
+  </div>
+</div>
+{% endblock %}

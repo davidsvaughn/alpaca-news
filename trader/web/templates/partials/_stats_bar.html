@@ -1,0 +1,5 @@
+<span class="badge bg-primary">{{ holding_count }} holding</span>
+<span class="badge bg-info text-dark">{{ snapshots_today }} items today</span>
+<span class="badge {% if daily_cost > max_daily_cost * 0.8 %}bg-danger{% else %}bg-secondary{% endif %}">
+  ${{ "%.4f"|format(daily_cost) }} / ${{ "%.2f"|format(max_daily_cost) }}
+</span>

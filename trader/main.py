@@ -72,7 +72,7 @@ def main() -> None:
         for p in files[-settings.backfill_limit :]:
             process_news_file(path=p, settings=settings, db=db, knowledge=knowledge, bus=bus, xstream=xstream)
 
-    app = create_app(settings=settings, bus=bus)
+    app = create_app(settings=settings, bus=bus, db=db, knowledge=knowledge)
     uvicorn.run(app, host="127.0.0.1", port=8000, log_level="info")
 
 

@@ -175,3 +175,158 @@ def get_active_watches(db: Database) -> list[dict[str, Any]]:
         raw = row[0]
         result.append(json.loads(raw) if isinstance(raw, str) else raw)
     return result
+
+
+def count_watches_by_status(db: Database) -> dict[str, int]:
+    """Return watch counts grouped by status, e.g. {'holding': 2, 'sealed': 5}."""
+    with db.engine.connect() as conn:
+        rows = conn.execute(
+            text("SELECT status, COUNT(*) FROM watches GROUP BY status"),
+        ).fetchall()
+    return {row[0]: row[1] for row in rows}
+
+
+def count_snapshots_today(db: Database) -> int:
+    """Count snapshots created today (UTC)."""
+    with db.engine.connect() as conn:
+        row = conn.execute(
+            text("SELECT COUNT(*) FROM snapshots WHERE date(created_at) = date('now')"),
+        ).fetchone()
+    return row[0] if row else 0
+
+
+def get_daily_cost_today(db: Database) -> float:
+    """Sum cost_summary.total_usd from today's snapshots."""
+    with db.engine.connect() as conn:
+        rows = conn.execute(
+            text("SELECT snapshot_json FROM snapshots WHERE date(created_at) = date('now')"),
+        ).fetchall()
+    total = 0.0
+    for row in rows:
+        raw = row[0]
+        snap = json.loads(raw) if isinstance(raw, str) else raw
+        cost = snap.get("cost_summary", {})
+        total += float(cost.get("total_usd", 0.0))
+    return total
+
+
+def get_daily_cost_history(db: Database, *, days: int = 30) -> list[dict[str, Any]]:
+    """Return daily cost summary for the last N days.
+
+    Returns list of dicts: [{"date": "2026-02-10", "total_usd": 1.23, "count": 5, "by_tool": {...}}]
+    """
+    with db.engine.connect() as conn:
+        rows = conn.execute(
+            text(
+                "SELECT date(created_at) as day, snapshot_json FROM snapshots "
+                "WHERE date(created_at) >= date('now', :offset) "
+                "ORDER BY day"
+            ),
+            {"offset": f"-{days} days"},
+        ).fetchall()
+
+    daily: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        day = row[0]
+        raw = row[1]
+        snap = json.loads(raw) if isinstance(raw, str) else raw
+        cost = snap.get("cost_summary", {})
+
+        if day not in daily:
+            daily[day] = {"date": day, "total_usd": 0.0, "count": 0, "by_tool": {}}
+        entry = daily[day]
+        entry["total_usd"] += float(cost.get("total_usd", 0.0))
+        entry["count"] += 1
+        for tool, amt in cost.get("by_tool", {}).items():
+            entry["by_tool"][tool] = entry["by_tool"].get(tool, 0.0) + float(amt)
+
+    return list(daily.values())
+
+
+# ---------------------------------------------------------------------------
+# Dashboard listing queries
+# ---------------------------------------------------------------------------
+
+
+def _parse_rows(rows: list, col: int = 0) -> list[dict[str, Any]]:
+    """Parse JSON blobs from a list of rows."""
+    result = []
+    for row in rows:
+        raw = row[col]
+        result.append(json.loads(raw) if isinstance(raw, str) else raw)
+    return result
+
+
+def get_all_watches(
+    db: Database, *, status: str | None = None, limit: int = 50, offset: int = 0
+) -> list[dict[str, Any]]:
+    """Fetch watches ordered by created_at DESC, with optional status filter."""
+    if status:
+        sql = (
+            "SELECT watch_json FROM watches WHERE status = :status "
+            "ORDER BY created_at DESC LIMIT :lim OFFSET :off"
+        )
+        params: dict[str, Any] = {"status": status, "lim": limit, "off": offset}
+    else:
+        sql = "SELECT watch_json FROM watches ORDER BY created_at DESC LIMIT :lim OFFSET :off"
+        params = {"lim": limit, "off": offset}
+    with db.engine.connect() as conn:
+        rows = conn.execute(text(sql), params).fetchall()
+    return _parse_rows(rows)
+
+
+def count_all_watches(db: Database, *, status: str | None = None) -> int:
+    """Count watches, optionally filtered by status."""
+    if status:
+        sql = "SELECT COUNT(*) FROM watches WHERE status = :status"
+        params: dict[str, Any] = {"status": status}
+    else:
+        sql = "SELECT COUNT(*) FROM watches"
+        params = {}
+    with db.engine.connect() as conn:
+        row = conn.execute(text(sql), params).fetchone()
+    return row[0] if row else 0
+
+
+def get_all_snapshots(
+    db: Database, *, symbol: str | None = None, limit: int = 50, offset: int = 0
+) -> list[dict[str, Any]]:
+    """Fetch snapshots ordered by created_at DESC, with optional symbol filter."""
+    if symbol:
+        sql = (
+            "SELECT snapshot_json FROM snapshots WHERE symbols LIKE :sym "
+            "ORDER BY created_at DESC LIMIT :lim OFFSET :off"
+        )
+        params: dict[str, Any] = {"sym": f"%{symbol}%", "lim": limit, "off": offset}
+    else:
+        sql = "SELECT snapshot_json FROM snapshots ORDER BY created_at DESC LIMIT :lim OFFSET :off"
+        params = {"lim": limit, "off": offset}
+    with db.engine.connect() as conn:
+        rows = conn.execute(text(sql), params).fetchall()
+    return _parse_rows(rows)
+
+
+def count_snapshots(db: Database, *, symbol: str | None = None) -> int:
+    """Count snapshots, optionally filtered by symbol."""
+    if symbol:
+        sql = "SELECT COUNT(*) FROM snapshots WHERE symbols LIKE :sym"
+        params: dict[str, Any] = {"sym": f"%{symbol}%"}
+    else:
+        sql = "SELECT COUNT(*) FROM snapshots"
+        params = {}
+    with db.engine.connect() as conn:
+        row = conn.execute(text(sql), params).fetchone()
+    return row[0] if row else 0
+
+
+def get_snapshot(db: Database, snapshot_id: str) -> dict[str, Any] | None:
+    """Fetch a single snapshot by ID. Returns parsed JSON or None."""
+    with db.engine.connect() as conn:
+        row = conn.execute(
+            text("SELECT snapshot_json FROM snapshots WHERE snapshot_id = :sid"),
+            {"sid": snapshot_id},
+        ).fetchone()
+    if row is None:
+        return None
+    raw = row[0]
+    return json.loads(raw) if isinstance(raw, str) else raw

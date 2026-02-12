@@ -1,0 +1,60 @@
+{% if snapshots %}
+<div class="table-responsive">
+  <table class="table table-sm table-hover align-middle">
+    <thead class="table-light">
+      <tr>
+        <th>Created</th>
+        <th>Headline</th>
+        <th>Symbols</th>
+        <th>Direction</th>
+        <th>Confidence</th>
+        <th>Cost</th>
+        <th></th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for s in snapshots %}
+      <tr>
+        <td class="small text-muted text-nowrap">{{ s.created_at[:16] }}</td>
+        <td class="text-truncate" style="max-width: 300px;">{{ s.trigger.headline }}</td>
+        <td>
+          {% for sym in s.trigger.symbols %}
+          <span class="badge bg-light text-dark border">{{ sym }}</span>
+          {% endfor %}
+        </td>
+        <td>
+          {% if s.prediction and s.prediction.direction %}
+            {% if s.prediction.direction == 'bullish' %}
+              <span class="text-success">&#9650; bullish</span>
+            {% elif s.prediction.direction == 'bearish' %}
+              <span class="text-danger">&#9660; bearish</span>
+            {% else %}
+              <span class="text-muted">&#8212; neutral</span>
+            {% endif %}
+          {% else %}
+            <span class="text-muted">&mdash;</span>
+          {% endif %}
+        </td>
+        <td>
+          {% if s.prediction and s.prediction.confidence is defined %}
+            {{ "%.0f"|format(s.prediction.confidence * 100) }}%
+          {% else %}
+            <span class="text-muted">&mdash;</span>
+          {% endif %}
+        </td>
+        <td class="small">
+          {% if s.cost_summary and s.cost_summary.total_usd is defined %}
+            ${{ "%.4f"|format(s.cost_summary.total_usd) }}
+          {% else %}
+            <span class="text-muted">&mdash;</span>
+          {% endif %}
+        </td>
+        <td><a href="/snapshots/{{ s.snapshot_id }}" class="btn btn-sm btn-outline-secondary">Detail</a></td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% else %}
+<p class="text-muted">No snapshots found.</p>
+{% endif %}

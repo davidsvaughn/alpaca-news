@@ -1,0 +1,138 @@
+{% extends "base.html" %}
+
+{% block title %}alpaca-news | Dashboard{% endblock %}
+
+{% block content %}
+<h2 class="mb-3">Dashboard</h2>
+
+<!-- Stats cards (HTMX-loaded) -->
+<div id="stats-cards"
+     hx-get="/api/stats"
+     hx-trigger="load, every 30s, sse-refresh from:body"
+     hx-swap="innerHTML">
+  <div class="text-center text-muted py-3">Loading stats...</div>
+</div>
+
+<!-- Active Watches -->
+<div class="d-flex align-items-center mb-2 mt-2">
+  <h5 class="mb-0">Active Watches</h5>
+</div>
+<div id="active-watches"
+     hx-get="/api/watches/active"
+     hx-trigger="load, every 15s, sse-refresh from:body"
+     hx-swap="innerHTML">
+  <div class="text-center text-muted py-3">Loading watches...</div>
+</div>
+
+<!-- Manual Explore -->
+<div class="card mt-4 mb-4">
+  <div class="card-header">Manual Exploration</div>
+  <div class="card-body">
+    <form hx-post="/api/explore" hx-target="#explore-result" hx-swap="innerHTML">
+      <div class="row g-2 align-items-end">
+        <div class="col-md-6">
+          <label class="form-label small">Headline</label>
+          <input type="text" name="headline" class="form-control form-control-sm"
+                 placeholder="e.g. NVIDIA Reports Record Earnings" required>
+        </div>
+        <div class="col-md-3">
+          <label class="form-label small">Symbols (comma-separated)</label>
+          <input type="text" name="symbols" class="form-control form-control-sm"
+                 placeholder="e.g. NVDA, AMD">
+        </div>
+        <div class="col-md-3">
+          <button type="submit" class="btn btn-primary btn-sm w-100">Explore</button>
+        </div>
+      </div>
+    </form>
+    <div id="explore-result" class="mt-2"></div>
+  </div>
+</div>
+
+<!-- Live Event Feed -->
+<h5 class="mt-4 mb-2">Live Event Feed</h5>
+<div id="event-feed" class="bg-dark text-light p-3 rounded"></div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function() {
+  var feed = document.getElementById('event-feed');
+  var MAX_ENTRIES = 200;
+
+  var EVENT_COLORS = {
+    snapshot_sealed: 'success',
+    watch_created: 'primary',
+    watch_exited: 'warning',
+    watch_checkin: 'secondary',
+    watch_sealed: 'secondary',
+    watch_retrospective_started: 'info',
+    watch_retrospective_checkin: 'secondary',
+    triage_decision: 'info',
+    exploration_complete: 'success',
+    news_received: 'light',
+    watching: 'light',
+    monitoring_started: 'light',
+    x_stream_configured: 'info',
+    x_burst_start: 'info',
+    x_post: 'info',
+    x_usage: 'secondary',
+    manual_explore_started: 'primary',
+    manual_explore_complete: 'success',
+    manual_explore_error: 'danger',
+    knowledge_updated: 'info'
+  };
+
+  function fmt(type, p) {
+    switch(type) {
+      case 'triage_decision':
+        return (p.symbols || []).join(',') + ' \u2192 ' + p.action + ' (' + ((p.confidence||0)*100).toFixed(0) + '%)';
+      case 'snapshot_sealed':
+        return 'Snapshot ' + (p.snapshot_id || '').slice(0, 12);
+      case 'watch_created':
+        return p.symbol + ' ' + p.direction + ' @ $' + (p.entry_price||0).toFixed(2) + ' (conf ' + ((p.confidence||0)*100).toFixed(0) + '%)';
+      case 'watch_checkin':
+        return p.symbol + ' P&L: ' + (p.pnl_pct||0).toFixed(2) + '% (' + p.depth + ')';
+      case 'watch_exited':
+        return p.symbol + ' exited: ' + p.reason + ' (' + (p.pnl_pct||0).toFixed(2) + '%)';
+      case 'watch_sealed':
+        return p.symbol + ' sealed (MFE ' + (p.mfe_pct||0).toFixed(2) + '% / MAE ' + (p.mae_pct||0).toFixed(2) + '%)';
+      case 'watch_retrospective_started':
+        return p.symbol + ' retro started @ $' + (p.exit_price||0).toFixed(2);
+      case 'watch_retrospective_checkin':
+        return p.symbol + ' $' + (p.current_price||0).toFixed(2) + ' (since exit ' + (p.pnl_since_exit_pct||0).toFixed(2) + '%)';
+      case 'news_received':
+        return (p.snapshot_id || '').slice(0, 12) + ' from ' + (p.path || '').split('/').pop();
+      case 'exploration_complete':
+        return (p.snapshot_id || '').slice(0, 12) + ' \u2192 ' + (p.direction || '?') + ' (conf ' + ((p.confidence||0)*100).toFixed(0) + '%, ' + (p.rounds_completed||0) + ' rounds)';
+      case 'watching':
+        return 'Watching ' + (p.dir || '');
+      case 'manual_explore_started':
+        return (p.headline || '').slice(0, 60) + ' [' + (p.symbols || []).join(',') + ']';
+      case 'manual_explore_complete':
+        return (p.headline || '').slice(0, 60) + ' done';
+      case 'manual_explore_error':
+        return (p.headline || '').slice(0, 40) + ' ERROR: ' + (p.error || '').slice(0, 60);
+      case 'knowledge_updated':
+        return p.filename + ' saved';
+      default:
+        return JSON.stringify(p).slice(0, 120);
+    }
+  }
+
+  document.body.addEventListener('sse:any', function(e) {
+    var type = e.detail.type;
+    var payload = e.detail.payload;
+    var color = EVENT_COLORS[type] || 'secondary';
+    var time = new Date().toLocaleTimeString();
+    var row = document.createElement('div');
+    row.className = 'mb-1';
+    row.innerHTML = '<small class="text-muted">' + time + '</small> '
+      + '<span class="badge bg-' + color + '">' + type + '</span> '
+      + fmt(type, payload);
+    feed.prepend(row);
+    while (feed.children.length > MAX_ENTRIES) feed.lastChild.remove();
+  });
+})();
+</script>
+{% endblock %}

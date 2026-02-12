@@ -1,0 +1,213 @@
+{% extends "base.html" %}
+
+{% block title %}alpaca-news | Snapshot {{ s.snapshot_id[:12] }}{% endblock %}
+
+{% block content %}
+<nav aria-label="breadcrumb" class="mb-3">
+  <ol class="breadcrumb mb-0">
+    <li class="breadcrumb-item"><a href="/snapshots">Snapshots</a></li>
+    <li class="breadcrumb-item active">{{ s.snapshot_id[:12] }}...</li>
+  </ol>
+</nav>
+
+<!-- Trigger info -->
+<div class="card mb-4">
+  <div class="card-header">Trigger</div>
+  <div class="card-body">
+    <h5>{{ s.trigger.headline }}</h5>
+    {% if s.trigger.summary %}
+    <p class="text-muted">{{ s.trigger.summary }}</p>
+    {% endif %}
+    <div class="d-flex gap-2 flex-wrap mb-2">
+      {% for sym in s.trigger.symbols %}
+      <span class="badge bg-primary">{{ sym }}</span>
+      {% endfor %}
+    </div>
+    <dl class="row mb-0 small">
+      <dt class="col-sm-2">Source</dt>
+      <dd class="col-sm-10">{{ s.trigger.source or 'Unknown' }}</dd>
+      <dt class="col-sm-2">Type</dt>
+      <dd class="col-sm-10">{{ s.trigger.type }}</dd>
+      {% if s.trigger.alpaca_timestamp %}
+      <dt class="col-sm-2">Timestamp</dt>
+      <dd class="col-sm-10">{{ s.trigger.alpaca_timestamp }}</dd>
+      {% endif %}
+    </dl>
+  </div>
+</div>
+
+<!-- Prediction -->
+{% if s.prediction %}
+<div class="card mb-4">
+  <div class="card-header">Prediction</div>
+  <div class="card-body">
+    <div class="row mb-3">
+      <div class="col-auto">
+        {% if s.prediction.direction == 'bullish' %}
+          <span class="badge bg-success fs-5">&#9650; Bullish</span>
+        {% elif s.prediction.direction == 'bearish' %}
+          <span class="badge bg-danger fs-5">&#9660; Bearish</span>
+        {% else %}
+          <span class="badge bg-secondary fs-5">&#8212; Neutral</span>
+        {% endif %}
+      </div>
+      {% if s.prediction.confidence is defined %}
+      <div class="col-auto">
+        <span class="badge bg-info fs-5">{{ "%.0f"|format(s.prediction.confidence * 100) }}% confidence</span>
+      </div>
+      {% endif %}
+      {% if s.prediction.horizon is defined %}
+      <div class="col-auto">
+        <span class="badge bg-light text-dark border fs-6">{{ s.prediction.horizon }}</span>
+      </div>
+      {% endif %}
+    </div>
+
+    <dl class="row">
+      {% if s.prediction.key_catalyst is defined %}
+      <dt class="col-sm-2">Catalyst</dt>
+      <dd class="col-sm-10">{{ s.prediction.key_catalyst }}</dd>
+      {% endif %}
+      {% if s.prediction.magnitude_estimate is defined %}
+      <dt class="col-sm-2">Magnitude</dt>
+      <dd class="col-sm-10">{{ s.prediction.magnitude_estimate }}</dd>
+      {% endif %}
+      {% if s.prediction.bull_case is defined %}
+      <dt class="col-sm-2">Bull case</dt>
+      <dd class="col-sm-10">{{ s.prediction.bull_case }}</dd>
+      {% endif %}
+      {% if s.prediction.bear_case is defined %}
+      <dt class="col-sm-2">Bear case</dt>
+      <dd class="col-sm-10">{{ s.prediction.bear_case }}</dd>
+      {% endif %}
+      {% if s.prediction.risk_factors is defined and s.prediction.risk_factors %}
+      <dt class="col-sm-2">Risks</dt>
+      <dd class="col-sm-10">
+        <ul class="mb-0">
+          {% for r in s.prediction.risk_factors %}
+          <li>{{ r }}</li>
+          {% endfor %}
+        </ul>
+      </dd>
+      {% endif %}
+    </dl>
+  </div>
+</div>
+{% endif %}
+
+<!-- Agent Rounds -->
+{% if s.rounds %}
+<div class="card mb-4">
+  <div class="card-header">Agent Rounds ({{ s.rounds|length }})</div>
+  <div class="card-body p-0">
+    <div class="accordion" id="rounds-accordion">
+      {% for round in s.rounds %}
+      <div class="accordion-item">
+        <h2 class="accordion-header">
+          <button class="accordion-button collapsed" type="button"
+                  data-bs-toggle="collapse" data-bs-target="#round-{{ loop.index }}">
+            <strong class="me-2">{{ round.agent or 'Agent ' ~ loop.index }}</strong>
+            <span class="text-muted small">{{ round.model or '' }}</span>
+            {% if round.usage %}
+            <span class="badge bg-light text-dark border ms-2">{{ round.usage.get('total_tokens', '?') }} tokens</span>
+            {% endif %}
+          </button>
+        </h2>
+        <div id="round-{{ loop.index }}" class="accordion-collapse collapse" data-bs-parent="#rounds-accordion">
+          <div class="accordion-body">
+            {% if round.findings %}
+            <div class="mb-2" style="white-space: pre-wrap; font-family: monospace; font-size: 0.85rem; max-height: 400px; overflow-y: auto;">{{ round.findings }}</div>
+            {% endif %}
+            {% if round.usage %}
+            <div class="small text-muted">
+              Usage: {{ round.usage.get('input_tokens', 0) }} in / {{ round.usage.get('output_tokens', 0) }} out / {{ round.usage.get('tool_calls', 0) }} tool calls
+            </div>
+            {% endif %}
+          </div>
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+</div>
+{% endif %}
+
+<!-- Tool Traces -->
+{% if s.tool_traces %}
+<div class="card mb-4">
+  <div class="card-header">Tool Traces ({{ s.tool_traces|length }})</div>
+  <div class="card-body p-0">
+    <div class="accordion" id="traces-accordion">
+      {% for trace in s.tool_traces %}
+      <div class="accordion-item">
+        <h2 class="accordion-header">
+          <button class="accordion-button collapsed py-2" type="button"
+                  data-bs-toggle="collapse" data-bs-target="#trace-{{ loop.index }}">
+            <span class="badge bg-secondary me-2">{{ trace.get('hop_index', loop.index0) }}</span>
+            <strong class="me-2">{{ trace.get('action', {}).get('tool', '?') }}</strong>
+            <span class="text-muted small me-2">{{ trace.get('action', {}).get('query', '') }}</span>
+            {% if trace.get('execution') and trace.execution.get('model') %}
+            <span class="badge bg-light text-dark border">{{ trace.execution.model }}</span>
+            {% endif %}
+          </button>
+        </h2>
+        <div id="trace-{{ loop.index }}" class="accordion-collapse collapse" data-bs-parent="#traces-accordion">
+          <div class="accordion-body">
+            <pre class="mb-0" style="max-height: 300px; overflow-y: auto; font-size: 0.8rem;">{{ trace.to_dict()|tojson(indent=2) }}</pre>
+          </div>
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+</div>
+{% endif %}
+
+<!-- Cost & Metadata -->
+<div class="row g-3 mb-4">
+  {% if s.cost_summary %}
+  <div class="col-md-6">
+    <div class="card">
+      <div class="card-header">Cost Summary</div>
+      <div class="card-body">
+        <h4 class="mb-3">${{ "%.4f"|format(s.cost_summary.total_usd) }}</h4>
+        {% if s.cost_summary.by_tool %}
+        <table class="table table-sm mb-0">
+          <thead class="table-light"><tr><th>Tool</th><th>Cost</th></tr></thead>
+          <tbody>
+            {% for tool, cost in s.cost_summary.by_tool.items() %}
+            <tr><td>{{ tool }}</td><td>${{ "%.4f"|format(cost) }}</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+  {% endif %}
+
+  <div class="col-md-6">
+    <div class="card">
+      <div class="card-header">Metadata</div>
+      <div class="card-body">
+        <dl class="row mb-0 small">
+          <dt class="col-sm-4">Snapshot ID</dt>
+          <dd class="col-sm-8"><code>{{ s.snapshot_id }}</code></dd>
+          <dt class="col-sm-4">Version</dt>
+          <dd class="col-sm-8">{{ s.version }}</dd>
+          <dt class="col-sm-4">Created</dt>
+          <dd class="col-sm-8">{{ s.created_at }}</dd>
+          {% if s.data_modalities %}
+          <dt class="col-sm-4">Modalities</dt>
+          <dd class="col-sm-8">
+            {% for mod in s.data_modalities.keys() %}
+            <span class="badge bg-light text-dark border">{{ mod }}</span>
+            {% endfor %}
+          </dd>
+          {% endif %}
+        </dl>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

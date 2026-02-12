@@ -1,0 +1,38 @@
+<div class="row g-3 mb-4">
+  <div class="col-md-4">
+    <div class="card border-primary">
+      <div class="card-body">
+        <h6 class="card-subtitle mb-2 text-muted">Active Watches</h6>
+        <h3 class="card-title mb-1">{{ holding_count + exited_count + retro_count }}</h3>
+        <div class="small text-muted">
+          <span class="badge badge-holding">{{ holding_count }} holding</span>
+          <span class="badge badge-exited">{{ exited_count }} exited</span>
+          <span class="badge badge-retrospective">{{ retro_count }} retro</span>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="col-md-4">
+    <div class="card border-info">
+      <div class="card-body">
+        <h6 class="card-subtitle mb-2 text-muted">Items Processed Today</h6>
+        <h3 class="card-title mb-0">{{ snapshots_today }}</h3>
+      </div>
+    </div>
+  </div>
+  <div class="col-md-4">
+    <div class="card border-warning">
+      <div class="card-body">
+        <h6 class="card-subtitle mb-2 text-muted">Daily Cost</h6>
+        <h3 class="card-title mb-1">${{ "%.4f"|format(daily_cost) }}</h3>
+        <div class="progress" style="height: 6px;">
+          {% set pct = (daily_cost / max_daily_cost * 100) if max_daily_cost > 0 else 0 %}
+          {% set pct_clamped = pct if pct < 100 else 100 %}
+          <div class="progress-bar {% if pct > 80 %}bg-danger{% elif pct > 50 %}bg-warning{% else %}bg-success{% endif %}"
+               style="width: {{ pct_clamped }}%"></div>
+        </div>
+        <div class="small text-muted mt-1">${{ "%.2f"|format(max_daily_cost) }} budget</div>
+      </div>
+    </div>
+  </div>
+</div>

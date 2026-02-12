@@ -1,0 +1,49 @@
+{% extends "base.html" %}
+
+{% block title %}alpaca-news | Knowledge{% endblock %}
+
+{% block content %}
+<h2 class="mb-4">Knowledge Store</h2>
+<p class="text-muted small mb-4">JSON files in <code>{{ knowledge_dir }}</code>. These guide the pipeline's behaviour.</p>
+
+<div class="accordion" id="knowledge-accordion">
+  {% for filename, data in files %}
+  <div class="accordion-item">
+    <h2 class="accordion-header">
+      <button class="accordion-button collapsed" type="button"
+              data-bs-toggle="collapse" data-bs-target="#kf-{{ loop.index }}">
+        <strong class="me-2">{{ filename }}</strong>
+        {% if data.last_updated is defined %}
+        <span class="text-muted small">updated {{ data.last_updated[:19] }}</span>
+        {% endif %}
+      </button>
+    </h2>
+    <div id="kf-{{ loop.index }}" class="accordion-collapse collapse" data-bs-parent="#knowledge-accordion">
+      <div class="accordion-body">
+        <div id="view-{{ loop.index }}">
+          <pre class="mb-2 p-3" style="max-height: 500px; overflow-y: auto; font-size: 0.8rem; background: #f8f9fa;">{{ data|tojson(indent=2) }}</pre>
+          <button class="btn btn-sm btn-outline-primary"
+                  onclick="document.getElementById('view-{{ loop.index }}').style.display='none'; document.getElementById('edit-{{ loop.index }}').style.display='block';">
+            Edit
+          </button>
+        </div>
+        <div id="edit-{{ loop.index }}" style="display: none;">
+          <form hx-post="/api/knowledge/{{ filename }}" hx-target="#save-result-{{ loop.index }}" hx-swap="innerHTML">
+            <textarea name="content" class="form-control font-monospace mb-2"
+                      rows="15" style="font-size: 0.8rem;">{{ data|tojson(indent=2) }}</textarea>
+            <div class="d-flex gap-2">
+              <button type="submit" class="btn btn-sm btn-primary">Save</button>
+              <button type="button" class="btn btn-sm btn-secondary"
+                      onclick="document.getElementById('edit-{{ loop.index }}').style.display='none'; document.getElementById('view-{{ loop.index }}').style.display='block';">
+                Cancel
+              </button>
+            </div>
+          </form>
+          <div id="save-result-{{ loop.index }}" class="mt-2"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+  {% endfor %}
+</div>
+{% endblock %}

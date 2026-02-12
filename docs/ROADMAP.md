@@ -21,7 +21,7 @@
 | **Evidence acquirer** | DONE | URL extraction, trafilatura |
 | **X API stream** | DONE | Filtered stream, burst mode, rules |
 | **Database (SQLite)** | DONE | Snapshots + watches tables, idempotent inserts |
-| **Dashboard (FastAPI + SSE)** | DONE | Live feed, event bus |
+| **Dashboard (FastAPI + SSE + HTMX)** | DONE | Full monitoring + control UI (6 pages, charts, editor) |
 | **Schwab market data** | DONE | Quotes, candles, streaming, options, fundamentals, movers, market hours |
 | **Knowledge store** | PARTIAL | skip_patterns, reliable_sources exist; insights.json TODO |
 | **Explorer (multi-agent pipeline)** | DONE | Sequential Grok→OpenAI→Gemini pipeline — wired into orchestrator |

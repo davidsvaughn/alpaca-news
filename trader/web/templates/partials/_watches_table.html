@@ -1,0 +1,58 @@
+{% if watches %}
+<div class="table-responsive">
+  <table class="table table-sm table-hover align-middle">
+    <thead class="table-light">
+      <tr>
+        <th>Symbol</th>
+        <th>Direction</th>
+        <th>Status</th>
+        <th>Entry Price</th>
+        <th>Exit Price</th>
+        <th>P&L %</th>
+        <th>Thesis</th>
+        <th>Created</th>
+        <th></th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for w in watches %}
+      <tr>
+        <td><strong>{{ w.symbol }}</strong></td>
+        <td>
+          {% if w.entry.direction == 'bullish' %}
+            <span class="text-success">&#9650; bullish</span>
+          {% elif w.entry.direction == 'bearish' %}
+            <span class="text-danger">&#9660; bearish</span>
+          {% else %}
+            <span class="text-muted">&#8212; neutral</span>
+          {% endif %}
+        </td>
+        <td><span class="badge badge-{{ w.status }}">{{ w.status }}</span></td>
+        <td>${{ "%.2f"|format(w.entry.price) }}</td>
+        <td>
+          {% if w.exit %}
+            ${{ "%.2f"|format(w.exit.price) }}
+          {% else %}
+            <span class="text-muted">&mdash;</span>
+          {% endif %}
+        </td>
+        <td>
+          {% if w.exit %}
+            <span class="{% if w.exit.realized_pnl_pct >= 0 %}pnl-positive{% else %}pnl-negative{% endif %}">
+              {{ "%+.2f"|format(w.exit.realized_pnl_pct) }}%
+            </span>
+          {% else %}
+            <span class="text-muted">&mdash;</span>
+          {% endif %}
+        </td>
+        <td class="text-truncate" style="max-width: 200px;">{{ w.entry.thesis }}</td>
+        <td class="small text-muted">{{ w.created_at[:16] }}</td>
+        <td><a href="/watches/{{ w.watch_id }}" class="btn btn-sm btn-outline-secondary">Detail</a></td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% else %}
+<p class="text-muted">No watches found.</p>
+{% endif %}

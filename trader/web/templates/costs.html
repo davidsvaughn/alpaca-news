@@ -1,0 +1,185 @@
+{% extends "base.html" %}
+
+{% block title %}alpaca-news | Costs{% endblock %}
+
+{% block content %}
+<!-- Today's budget -->
+<div class="card mb-4">
+  <div class="card-header">Today's Spending</div>
+  <div class="card-body">
+    <div class="row align-items-center">
+      <div class="col-auto">
+        <h3 class="mb-0">${{ "%.4f"|format(today_cost) }} <span class="text-muted fs-6">/ ${{ "%.2f"|format(max_daily) }}</span></h3>
+      </div>
+      <div class="col">
+        {% set pct = (today_cost / max_daily * 100) if max_daily > 0 else 0 %}
+        {% set pct_clamped = pct if pct < 100 else 100 %}
+        <div class="progress" style="height: 24px;">
+          <div class="progress-bar {{ 'bg-success' if pct < 50 else ('bg-warning' if pct < 80 else 'bg-danger') }}"
+               style="width: {{ pct_clamped }}%">
+            {{ "%.1f"|format(pct) }}%
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="small text-muted mt-2">{{ today_count }} snapshots processed today</div>
+  </div>
+</div>
+
+<!-- Cost trend chart -->
+{% if daily_history %}
+<div class="row mb-4">
+  <div class="col-md-8">
+    <div class="card">
+      <div class="card-header">Daily Cost Trend</div>
+      <div class="card-body">
+        <canvas id="cost-chart" height="200"></canvas>
+      </div>
+    </div>
+  </div>
+  <div class="col-md-4">
+    <div class="card h-100">
+      <div class="card-header">Tool Breakdown (All Time)</div>
+      <div class="card-body d-flex align-items-center justify-content-center">
+        <canvas id="tool-chart" height="200"></canvas>
+      </div>
+    </div>
+  </div>
+</div>
+{% endif %}
+
+<!-- Today's tool breakdown -->
+{% if today_by_tool %}
+<div class="card mb-4">
+  <div class="card-header">Today's Cost by Tool</div>
+  <div class="card-body">
+    <table class="table table-sm mb-0">
+      <thead class="table-light">
+        <tr><th>Tool</th><th>Cost</th></tr>
+      </thead>
+      <tbody>
+        {% for tool, cost in today_by_tool.items()|sort(attribute='0') %}
+        <tr>
+          <td>{{ tool }}</td>
+          <td>${{ "%.4f"|format(cost) }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endif %}
+
+<!-- Daily history -->
+<div class="card mb-4">
+  <div class="card-header">Daily Cost History (last 30 days)</div>
+  <div class="card-body">
+    {% if daily_history %}
+    <div class="table-responsive">
+      <table class="table table-sm table-hover align-middle">
+        <thead class="table-light">
+          <tr>
+            <th>Date</th>
+            <th>Total Cost</th>
+            <th>Snapshots</th>
+            <th>Tools</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for day in daily_history|reverse %}
+          <tr>
+            <td>{{ day.date }}</td>
+            <td>${{ "%.4f"|format(day.total_usd) }}</td>
+            <td>{{ day.count }}</td>
+            <td class="small">
+              {% for tool, cost in day.by_tool.items()|sort(attribute='0') %}
+              <span class="badge bg-light text-dark border">{{ tool }}: ${{ "%.4f"|format(cost) }}</span>
+              {% endfor %}
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% else %}
+    <p class="text-muted mb-0">No cost data yet.</p>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+{% if daily_history %}
+<script>
+(function() {
+  var history = {{ daily_history|tojson }};
+
+  // Daily cost line chart
+  var labels = history.map(function(d) { return d.date; });
+  var costs = history.map(function(d) { return d.total_usd; });
+  var counts = history.map(function(d) { return d.count; });
+
+  new Chart(document.getElementById('cost-chart'), {
+    type: 'bar',
+    data: {
+      labels: labels,
+      datasets: [
+        {
+          label: 'Cost ($)',
+          data: costs,
+          backgroundColor: 'rgba(13, 110, 253, 0.5)',
+          borderColor: 'rgba(13, 110, 253, 1)',
+          borderWidth: 1,
+          yAxisID: 'y'
+        },
+        {
+          label: 'Snapshots',
+          data: counts,
+          type: 'line',
+          borderColor: 'rgba(25, 135, 84, 1)',
+          backgroundColor: 'rgba(25, 135, 84, 0.1)',
+          tension: 0.3,
+          yAxisID: 'y1'
+        }
+      ]
+    },
+    options: {
+      responsive: true,
+      scales: {
+        y: { beginAtZero: true, title: { display: true, text: 'Cost ($)' } },
+        y1: { beginAtZero: true, position: 'right', grid: { drawOnChartArea: false }, title: { display: true, text: 'Snapshots' } }
+      }
+    }
+  });
+
+  // Tool breakdown pie chart
+  var toolTotals = {};
+  history.forEach(function(d) {
+    Object.keys(d.by_tool || {}).forEach(function(tool) {
+      toolTotals[tool] = (toolTotals[tool] || 0) + d.by_tool[tool];
+    });
+  });
+  var toolLabels = Object.keys(toolTotals).sort();
+  var toolData = toolLabels.map(function(t) { return toolTotals[t]; });
+  var palette = ['#0d6efd', '#198754', '#ffc107', '#dc3545', '#6f42c1', '#0dcaf0', '#fd7e14', '#6c757d'];
+
+  if (toolLabels.length > 0) {
+    new Chart(document.getElementById('tool-chart'), {
+      type: 'doughnut',
+      data: {
+        labels: toolLabels,
+        datasets: [{
+          data: toolData,
+          backgroundColor: palette.slice(0, toolLabels.length)
+        }]
+      },
+      options: {
+        responsive: true,
+        plugins: { legend: { position: 'bottom', labels: { boxWidth: 12, font: { size: 11 } } } }
+      }
+    });
+  }
+})();
+</script>
+{% endif %}
+{% endblock %}

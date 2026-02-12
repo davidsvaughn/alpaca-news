@@ -1,0 +1,32 @@
+{% extends "base.html" %}
+
+{% block title %}alpaca-news | Config{% endblock %}
+
+{% block content %}
+<h2 class="mb-4">Configuration <span class="badge bg-secondary fs-6">read-only</span></h2>
+<p class="text-muted small mb-4">Values loaded from environment variables at startup. Restart the server to apply changes.</p>
+
+{% for group_name, fields in groups %}
+<div class="card mb-3">
+  <div class="card-header">{{ group_name }}</div>
+  <div class="card-body py-2">
+    <dl class="row mb-0">
+      {% for name, value in fields %}
+      <dt class="col-sm-4 col-md-3 py-1">{{ name }}</dt>
+      <dd class="col-sm-8 col-md-9 py-1">
+        {% if value is sameas true %}
+          <span class="badge bg-success">true</span>
+        {% elif value is sameas false %}
+          <span class="badge bg-secondary">false</span>
+        {% elif value is number %}
+          <code>{{ value }}</code>
+        {% else %}
+          <code>{{ value }}</code>
+        {% endif %}
+      </dd>
+      {% endfor %}
+    </dl>
+  </div>
+</div>
+{% endfor %}
+{% endblock %}
