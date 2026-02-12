@@ -504,6 +504,19 @@ def run_watch_loop(
     observer.start()
     bus.publish(PipelineEvent(type="watching", payload={"dir": str(watch_dir)}))
 
+    # Monitoring thread for active watches
+    if settings.watch_enabled:
+        from trader.online.watcher import WatchMonitor, monitoring_loop
+
+        monitor = WatchMonitor(settings=settings, db=db, bus=bus)
+        monitor_thread = threading.Thread(
+            target=monitoring_loop,
+            args=(monitor,),
+            daemon=True,
+        )
+        monitor_thread.start()
+        bus.publish(PipelineEvent(type="monitoring_started", payload={}))
+
     try:
         while True:
             time.sleep(1)

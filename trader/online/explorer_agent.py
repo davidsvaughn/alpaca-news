@@ -49,6 +49,13 @@ class TradingSignal(BaseModel):
     risk_factors: list[str] = Field(description="Key risk factors that could invalidate the thesis")
 
 
+class CheckinDecision(BaseModel):
+    """Structured output from a monitoring check-in agent."""
+    action: Literal["hold", "exit"]
+    reason: str = Field(description="Brief explanation of the hold/exit decision")
+    unrealized_pnl_pct: float = Field(description="Current unrealized P&L as a percentage")
+
+
 # ---------------------------------------------------------------------------
 # Dependencies — passed to every tool via RunContext
 # ---------------------------------------------------------------------------

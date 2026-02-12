@@ -51,7 +51,7 @@ their full lifecycle, and learns from outcomes.
 | **BM25 situation memory** | TODO | New — learned from TradingAgents |
 | **Schwab Tier 1 expansion** | DONE | Options IV, fundamentals, movers, market hours, enhanced context |
 | **insights.json** | TODO | Flat scored insights for prompt injection |
-| **Watch lifecycle** | IN PROGRESS | Step 1 DONE (model + DB + creation); Steps 2-5 TODO |
+| **Watch lifecycle** | IN PROGRESS | Steps 1-2 DONE (model + DB + creation + monitoring scheduler); Steps 3-5 TODO |
 | **Signal extraction step** | DONE (by design) | Built into PydanticAI output_type=TradingSignal |
 | **Offline loop** | TODO | Labeling, hop scoring, reflection |
 | **Bull/bear prompt pattern** | TODO | New — lightweight adversarial reasoning |
@@ -1427,7 +1427,14 @@ Full position management from entry to retrospective.
    - Config: `WATCH_ENABLED`, `WATCH_CONFIDENCE_THRESHOLD` (0.7), `MAX_CONCURRENT_WATCHES` (5), `WATCH_MONITORING_BUDGET`, `WATCH_MAX_HOLD_MINUTES` (240), `WATCH_CHECKIN_MODEL` (gemini-3-flash)
    - Orchestrator creates Watch after snapshot seal when confidence >= threshold + direction != neutral + concurrent slots available
    - Virtual watches only — no real order placement
-2. `trader/online/watcher.py` — lifecycle manager (monitoring scheduler + check-in agent)
+2. **DONE** — Watch monitoring scheduler + check-in agent (`trader/online/watcher.py`):
+   - `WatchMonitor` class with time-based check-in schedule: lightweight (0-10m, 2m interval), medium (10-30m/5m, 30-60m/10m), full (60-240m, 15m), force_exit (240m+)
+   - Lightweight check-in: price-only (no LLM), computes unrealized P&L, auto stop-loss at -10%
+   - Agent check-in: single PydanticAI agent (configurable model via `WATCH_CHECKIN_MODEL`) with `CheckinDecision` structured output (hold/exit + reason + P&L)
+   - Reuses `ExplorerDeps` + `market_toolset` from explorer_agent.py — no duplicated tool definitions
+   - `WatchBuilder.from_dict()` reconstitutes builder from stored watch dict; `last_checkin_at` field for scheduling
+   - Daemon monitoring thread in orchestrator's `run_watch_loop()` (60s cycles)
+   - 12 tests covering scheduling, timing, P&L, is_due logic, lightweight check-ins (normal + stop-loss), and WatchBuilder roundtrip
 3. Monitoring prompts: `monitor_hold.md`, `monitor_exit.md`, `monitor_retrospective.md`
 4. Exit decision logic + retrospective phase
 5. Watch sealing

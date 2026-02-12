@@ -1,7 +1,7 @@
 # trader/
 
 This directory contains the first working slice of the system described in
-`cline/DESIGN_PLAN.md`.
+`docs/ARCHITECTURE.md`.
 
 It implements the **online (real-time) loop**:
 
@@ -65,7 +65,7 @@ uv run python -m trader.evidence.smoke_test --url https://example.com
 
 There are **two different “phase” concepts** used across the repo:
 
-1. **Project/roadmap phases** in `cline/DESIGN_PLAN.md` (Phase 1/2/3/...) — milestones for
+1. **Project/roadmap phases** in `docs/ARCHITECTURE.md` (Phase 1/2/3/...) — milestones for
    building the system.
 2. **Explorer “two-phase exploration”** inside Stage 2 (**Phase 1** and **Phase 2**) — the
    runtime behavior that happens *per news event*.
@@ -140,7 +140,7 @@ Implemented in `trader/online/explorer.py::explore_two_phase(...)` as:
 pipeline and run immediately per incoming news item.**
 
 The thing that is intended to run “after-hours” (offline/async) is **not** Phase 2 exploration.
-It is the separate offline loop described in `cline/DESIGN_PLAN.md`:
+It is the separate offline loop described in `docs/ARCHITECTURE.md`:
 
 - outcome labeling (+15m/+60m/+1d returns)
 - scoring hop/tool value

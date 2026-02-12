@@ -57,6 +57,7 @@ class Watch:
     monitoring_snapshot_ids: list[str]
     retrospective_snapshot_ids: list[str]
     created_at: str
+    last_checkin_at: str | None
     lifecycle_sealed_at: str | None
 
     def to_dict(self) -> dict[str, Any]:
@@ -104,6 +105,7 @@ class WatchBuilder:
         self.monitoring_snapshot_ids: list[str] = []
         self.retrospective_snapshot_ids: list[str] = []
         self.created_at = _utc_now()
+        self.last_checkin_at: str | None = None
         self.lifecycle_sealed_at: str | None = None
 
     @classmethod
@@ -126,6 +128,21 @@ class WatchBuilder:
             thesis=signal.key_catalyst,
         )
         return cls(symbol=symbol, entry=entry)
+
+    @classmethod
+    def from_dict(cls, d: dict[str, Any]) -> WatchBuilder:
+        """Reconstitute a WatchBuilder from a stored watch dict."""
+        entry = WatchEntry(**d["entry"])
+        builder = cls(watch_id=d["watch_id"], symbol=d["symbol"], entry=entry)
+        builder.status = d["status"]
+        builder.created_at = d["created_at"]
+        builder.last_checkin_at = d.get("last_checkin_at")
+        builder.monitoring_snapshot_ids = list(d.get("monitoring_snapshot_ids", []))
+        builder.retrospective_snapshot_ids = list(d.get("retrospective_snapshot_ids", []))
+        builder.lifecycle_sealed_at = d.get("lifecycle_sealed_at")
+        if d.get("exit"):
+            builder.exit = WatchExit(**d["exit"])
+        return builder
 
     # ------------------------------------------------------------------
     # Lifecycle methods
@@ -174,5 +191,6 @@ class WatchBuilder:
             monitoring_snapshot_ids=list(self.monitoring_snapshot_ids),
             retrospective_snapshot_ids=list(self.retrospective_snapshot_ids),
             created_at=self.created_at,
+            last_checkin_at=self.last_checkin_at,
             lifecycle_sealed_at=self.lifecycle_sealed_at,
         )
