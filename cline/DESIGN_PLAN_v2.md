@@ -515,6 +515,46 @@ and source reliability. Forcing premature categories loses connections. If natur
 clusters emerge after hundreds of snapshots, the reflection loop can itself propose
 how to reorganize.
 
+**Design principle:** Avoid premature formalism. The LLM's raw ability to
+identify and articulate novel patterns is the system's core asset — imposing
+rigid schemas on what an "insight" can look like risks constraining or disabling
+exactly the creativity we're trying to harness. Start with free-form text
+insights, observe what forms emerge in practice, then formalize only what's
+proven useful.
+
+#### Parked ideas: LLMFactor's "factors" concept (for future consideration)
+
+The LLMFactor paper (Qian et al., `docs/LLMFactor.pdf`) introduces "factors" —
+LLM-generated causal hypotheses about why news affects stock prices. Key ideas
+worth revisiting once we have operational experience:
+
+1. **Causal hypotheses vs. pattern labels.** Factors work better than keyphrases
+   because they capture *why* something matters, not just *what* was said.
+   Insight: when our system naturally starts producing insights, push toward
+   "mechanism" statements over vague labels.
+
+2. **Decomposition into constituent factors.** Each insight could reference
+   specific causal drivers (e.g. `earnings_surprise_magnitude`,
+   `revenue_concentration`). This makes insights matchable to new events.
+
+3. **Context conditions.** LLMFactor's "relations" (competitor, supplier,
+   partner) provide structural context. Analog: insights that specify when
+   they apply (market regime, sector, event type) are more useful than
+   universal claims.
+
+4. **Structured extraction templates.** LLMFactor uses a "FactorTemplate" for
+   consistent factor extraction. If our reflection loop converges on a useful
+   insight structure, a template could ensure consistency without constraining
+   content.
+
+5. **Thompson Sampling for scoring.** Beta(successes, failures) distributions
+   instead of flat +1/-1 (already noted in §5d). Natural exploration-exploitation.
+
+**Why parked, not adopted:** We don't yet know what forms useful insights will
+take. Over-structuring now could prevent the LLM from discovering patterns we
+didn't anticipate. Revisit after 2-4 weeks of operation, when we can see what
+the system actually produces.
+
 ### 5c. BM25 Situation Memory — NEW, TODO
 
 **Inspired by TradingAgents'** `memory.py` — uses `rank-bm25` (pure Python, no
@@ -1432,3 +1472,21 @@ critical — the reasoning can be regenerated, the inputs cannot.
 **Key ideas adopted:** yfinance data layer, BM25 situation memory, lightweight
 bull/bear prompt pattern, data vendor fallback, signal extraction step. See
 Appendix A for ideas evaluated and deferred.
+
+### LLMFactor (Qian et al., 2024)
+
+`docs/LLMFactor.pdf` — "Are LLMs Better than Established Factor Models at
+Explainability-Aware Stock Return Prediction?"
+
+Uses LLMs to generate "factors" — concise causal hypotheses about why news
+affects stock prices (e.g. "Selection of Nvidia Drive Thor by EV makers").
+Sequential Knowledge-Guided Prompting (SKGP): background knowledge → factor
+extraction → prediction. Shows factors outperform keyphrases and sentiment
+labels by large margins (~46% MCC improvement) because they capture causal
+mechanisms, not surface text features.
+
+**Relevance to our design:** Informs how to think about `insights.json` —
+see §5b "Parked ideas" section. Key takeaway: individual units of learned
+knowledge should be causal hypotheses (why something matters) rather than
+pattern labels (what happened). But we deliberately park formal adoption
+to avoid constraining LLM creativity with premature structure.
