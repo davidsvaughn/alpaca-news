@@ -39,6 +39,7 @@ OPENAI_PRICING: dict[str, dict[str, float]] = {
 GROK_PRICING: dict[str, dict[str, float]] = {
     "grok-4.1-fast-reasoning": {"input": 0.20, "output": 0.50},
     "grok-4.1-fast-non-reasoning": {"input": 0.20, "output": 0.50},
+    "grok-4-1-fast-reasoning": {"input": 0.20, "output": 0.50},  # dash variant
     "grok-4-fast-reasoning": {"input": 0.20, "output": 0.50},
     "grok-4-fast-non-reasoning": {"input": 0.20, "output": 0.50},
     "grok-code-fast-1": {"input": 0.20, "output": 1.50},

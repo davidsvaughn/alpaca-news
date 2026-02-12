@@ -10,10 +10,14 @@ Design:
   Snapshot at the end.
 - Snapshot IDs are deterministic (derived from the Alpaca article id) so that
   backfill is idempotent.
+
+Exploration uses the multi-agent PydanticAI pipeline (Grok → OpenAI → Gemini)
+via ``agent_pipeline.run_pipeline()``.
 """
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import queue
@@ -30,10 +34,16 @@ from trader.knowledge.store import KnowledgeStore
 from trader.llm.client import LLMClient
 from trader.llm.cost_tracker import CostTracker
 from trader.llm.mock import MockLLMClient
-from trader.market.schwab_client import SchwabMarketClient
+from trader.market.data_service import MarketDataService
 from trader.models.snapshot import SnapshotBuilder, Trigger, deterministic_snapshot_id
 from trader.evidence.acquirer import acquire_from_traces
-from trader.online.explorer import explore_two_phase, summarize_cost_by_tool
+from trader.online.agent_pipeline import (
+    PipelineConfig,
+    AgentSpec,
+    run_pipeline,
+    estimate_pipeline_cost,
+    _extract_model_for_pricing,
+)
 from trader.online.triage import run_triage
 from trader.online.event_bus import EventBus, PipelineEvent
 from trader.online.x_stream_service import XStreamService, build_rules_for_symbols
@@ -52,6 +62,25 @@ def _load_news_json(path: Path) -> dict[str, Any]:
 
 def _snapshot_path(settings: Settings, snapshot_id: str) -> Path:
     return Path(settings.snapshots_dir) / f"{snapshot_id}.json"
+
+
+def _build_mock_pipeline_config() -> PipelineConfig:
+    """Build a pipeline config using PydanticAI's TestModel (no API calls)."""
+    from pydantic_ai.models.test import TestModel
+
+    return PipelineConfig(
+        agents=[
+            AgentSpec(name="mock_1", model=TestModel(), builtin_tools=[],
+                      role_description="Mock investigator 1."),
+            AgentSpec(name="mock_2", model=TestModel(), builtin_tools=[],
+                      role_description="Mock investigator 2."),
+            AgentSpec(name="mock_final", model=TestModel(), builtin_tools=[],
+                      role_description="Mock final analyst.", is_final=True),
+        ],
+        max_rounds=1,
+        request_limit=10,
+        tool_calls_limit=20,
+    )
 
 
 def process_news_file(
@@ -146,26 +175,27 @@ def process_news_file(
                     raise
                 bus.publish(PipelineEvent(type="x_burst_start_error", payload={"error": str(e), "symbols": symbols}))
 
-        # Schwab context capture (optional via SCHWAB_DISABLED)
-        market: SchwabMarketClient | None = None
+        # Market data service (Schwab + yfinance fallback)
+        market: MarketDataService | None = None
         try:
-            market = SchwabMarketClient()
+            market = MarketDataService()
         except Exception as e:
             if DEBUG:
                 raise
-            print(f"WARN: Schwab init failed (set SCHWAB_DISABLED=true to disable): {e}")
+            print(f"WARN: MarketDataService init failed: {e}")
             market = None
 
-        if market is not None and market.available and symbols:
+        # Start Schwab streaming for real-time candle capture
+        if market is not None and market.schwab_available and symbols:
             try:
-                market.start_stream(symbols)
+                market._schwab.start_stream(symbols)
             except Exception as e:
                 if DEBUG:
                     raise
                 print(f"WARN: Schwab stream start failed: {e}")
 
         # Capture market/price context into the Snapshot
-        if market is not None and market.available:
+        if market is not None:
             try:
                 builder.set_market_context(market.build_market_context())
                 if symbols:
@@ -173,31 +203,67 @@ def process_news_file(
             except Exception as e:
                 if DEBUG:
                     raise
-                print(f"WARN: Schwab context capture failed: {e}")
+                print(f"WARN: Market context capture failed: {e}")
 
-        explore = explore_two_phase(
-            llm=llm,  # type: ignore[arg-type]
-            market=market,
+        # --- Run multi-agent pipeline ---
+        pipeline_config: PipelineConfig | None = None
+        if settings.mock_llm:
+            pipeline_config = _build_mock_pipeline_config()
+
+        pipeline_result = asyncio.run(run_pipeline(
             news=news,
             symbols=symbols,
-            research_provider=settings.research_provider,
-            research_model=settings.research_model,
-            xsearch_provider=settings.xsearch_provider,
-            xsearch_model=settings.xsearch_model,
-            sentiment_provider=settings.sentiment_provider,
-            sentiment_model=settings.sentiment_model,
-            max_phase1_actions=settings.max_phase1_actions,
-            max_phase2_branches=settings.max_phase2_branches,
-            max_total_hops=settings.max_total_hops,
-        )
-        for trace in explore.traces:
+            market=market,
+            config=pipeline_config,
+            x_stream_service=xstream,
+        ))
+
+        # Add all tool traces from the pipeline
+        for trace in pipeline_result.all_tool_traces:
             builder.add_tool_trace(trace)
+
+        # Compute dollar cost from token usage and feed to CostTracker
+        for rnd in pipeline_result.rounds:
+            agent_name = rnd["agent"]
+            model_string = rnd.get("model", agent_name)
+            usage = rnd.get("usage", {})
+            provider, raw_model = _extract_model_for_pricing(agent_name, model_string)
+
+            try:
+                cost_tracker.log_llm_call(
+                    provider=provider,  # type: ignore[arg-type]
+                    model=raw_model,
+                    usage=usage,
+                    tools_used=[],
+                    stage="explore",
+                    purpose=f"agent_{agent_name}",
+                )
+            except Exception as e:
+                # Don't fail the pipeline on cost estimation errors
+                if DEBUG:
+                    print(f"WARN: Cost estimation failed for agent {agent_name}: {e}")
+
+        # Store the TradingSignal as the snapshot prediction
+        signal = pipeline_result.signal
+        builder.prediction = signal.model_dump()
+
+        bus.publish(PipelineEvent(
+            type="exploration_complete",
+            payload={
+                "snapshot_id": snap_id,
+                "direction": signal.direction,
+                "confidence": signal.confidence,
+                "agents": len(pipeline_result.rounds),
+                "tool_calls": len(pipeline_result.all_tool_traces),
+                "rounds_completed": pipeline_result.rounds_completed,
+            },
+        ))
 
         # Optional: explicit acquisition of web evidence for auditability.
         if settings.evidence_acquire_enabled:
             try:
                 ar = acquire_from_traces(
-                    traces=explore.traces,
+                    traces=pipeline_result.all_tool_traces,
                     evidence_root=Path(settings.data_dir) / "evidence",
                     max_docs=settings.evidence_max_docs_per_item,
                     extractor=settings.evidence_extractor,
@@ -211,10 +277,6 @@ def process_news_file(
                 if DEBUG:
                     raise
                 bus.publish(PipelineEvent(type="evidence_acquire_error", payload={"error": str(e)}))
-
-        # Cost by tool from executed traces (more accurate than provider token accounting
-        # when running mocks or when providers don't report tool-level token usage).
-        builder.set_cost_by_tool(summarize_cost_by_tool(explore.traces))
 
         # Optional: attach a small snapshot of X cache as evidence.
         # Note: because the burst runs asynchronously, this may be empty. It's still useful
@@ -253,9 +315,10 @@ def process_news_file(
                     raise
                 bus.publish(PipelineEvent(type="x_cache_attach_error", payload={"error": str(e)}))
 
-        if market is not None:
+        # Stop Schwab streaming
+        if market is not None and market.schwab_available:
             try:
-                market.stop_stream()
+                market._schwab.stop_stream()
             except Exception as e:
                 if DEBUG:
                     raise

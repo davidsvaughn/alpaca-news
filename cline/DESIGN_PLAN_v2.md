@@ -46,7 +46,7 @@ their full lifecycle, and learns from outcomes.
 | **Schwab market data** | DONE | Quotes, candles, streaming, options, fundamentals, movers, market hours |
 | **Knowledge store** | PARTIAL | skip_patterns, reliable_sources exist; insights.json TODO |
 | **Action menu / weights** | DONE | 12 finite actions — will be deprioritized (see Explorer revision) |
-| **Explorer (multi-agent pipeline)** | IN PROGRESS | Sequential Grok→OpenAI→Gemini pipeline — tools + tests done, wiring TODO |
+| **Explorer (multi-agent pipeline)** | DONE | Sequential Grok→OpenAI→Gemini pipeline — wired into orchestrator |
 | **yfinance data layer** | DONE | Free data: fundamentals, insider tx, price history, news, technicals |
 | **BM25 situation memory** | TODO | New — learned from TradingAgents |
 | **Schwab Tier 1 expansion** | DONE | Options IV, fundamentals, movers, market hours, enhanced context |
@@ -1173,7 +1173,7 @@ and `pgvector` for similarity search. Not needed for v1.
 
 Future pages (when needed): trade log, cost monitor, knowledge viewer, config panel.
 
-### 9c. Cost Control — PARTIAL (gap in new pipeline)
+### 9c. Cost Control — DONE (pipeline wired into CostTracker)
 
 `trader/llm/cost_tracker.py`
 
@@ -1188,30 +1188,25 @@ MAX_COST_PER_NEWS_ITEM=0.50
 MAX_TOTAL_HOPS=3
 ```
 
-**Gap: new agent pipeline not yet wired into CostTracker.**
+**Pipeline wired into CostTracker (Phase B Step 6 — DONE).**
 
-The old explorer uses `CostTracker` for dollar-cost estimation and daily budget
-enforcement. The new multi-agent pipeline (`agent_pipeline.py`) tracks tokens
-comprehensively via PydanticAI's `RunUsage` (input/output/total tokens, requests,
-tool calls) but does NOT yet:
+After the multi-agent pipeline completes, the orchestrator iterates per-agent
+round records and computes dollar costs from token counts using the existing
+pricing tables in `trader/llm/pricing.py`. Each agent's cost is fed to
+`CostTracker.log_llm_call()` for daily + per-item budget enforcement.
 
-1. **Convert tokens → dollars** — needs provider-specific pricing tables
-   (different $/token for Grok, OpenAI, Gemini)
-2. **Enforce daily budget** — `MAX_DAILY_COST` hard cap not checked
-3. **Enforce per-item budget** — `MAX_COST_PER_NEWS_ITEM` not checked
-4. **Estimate cost for non-LLM tool calls** — `x_search` makes a separate
-   Grok API call whose tokens aren't captured by the driving agent's `RunUsage`
-
-**What IS tracked in the new pipeline:**
+**What IS tracked:**
 - Per-agent: input_tokens, output_tokens, total_tokens, requests, tool_calls
 - Per-pipeline: accumulated totals across all agents in `PipelineResult.total_usage`
 - Per-tool-call: `TracingToolset` records every invocation with tool name + args + output
+- Dollar cost: computed post-pipeline via `estimate_pipeline_cost()` + `CostTracker`
+- Budget enforcement: daily + per-item caps checked via `CostTracker.log_llm_call()`
 
-**TODO when wiring into orchestrator (Phase B Step 6):**
-- Add pricing tables for each provider ($/1K input tokens, $/1K output tokens)
-- Compute `cost_usd` from `PipelineResult.total_usage` per agent
-- Feed into `CostTracker` for daily/per-item budget enforcement
-- Estimate `x_search` cost separately (it makes its own Grok API call)
+**Remaining gap:** `x_search` makes its own Grok API call whose tokens aren't
+captured by the driving agent's `RunUsage`. This cost is currently untracked
+(the tool itself is free to call, but Grok processes the search server-side).
+To fix: instrument the `x_search` function tool to estimate and track its own
+cost separately.
 
 ### 9e. Watch Concurrency & Budget Controls
 
@@ -1337,23 +1332,30 @@ using PydanticAI, with enhanced data capture for future training.
    - `TradingSignal` Pydantic model, `ExplorerDeps`, `TracingToolset`
    - 11 market data function tools, `explore()` entry point
    - Smoke tests passing (TestModel, all tools traced)
-3. Add research tools to function toolset:
+3. **DONE** — Add research tools to function toolset:
    - `x_search(query)` — wraps xAI Responses API as function tool
    - `url_fetch(url)` — wraps existing `fetch_url()` + `extract_article()`
    - `x_stream_cache(symbol)` — wraps `XStreamService.get_recent_posts()`
-4. Build multi-agent orchestrator (`trader/online/orchestrator.py`):
+4. **DONE** — Build multi-agent pipeline (`trader/online/agent_pipeline.py`):
    - Per-provider agent factory (creates PydanticAI Agent with correct
      model + `WebSearchTool` + shared function toolset + `TracingToolset`)
    - Sequential runner: agent 1 → agent 2 → agent 3, accumulating context
    - Optional loop: if final agent confidence < threshold, run another round
    - Total budget enforcement across all agents
    - `explore()` entry point replaces single-agent version
-5. Per-provider integration tests:
-   - Verify each provider (Grok, OpenAI, Claude) works with all tools
+5. **DONE** — Per-provider integration tests:
+   - Verify each provider (Grok, OpenAI, Gemini) works with all tools
    - Confirm `WebSearchTool` works alongside function tools per provider
    - Confirm `x_search` function tool works (calls xAI Responses API)
    - Confirm `TracingToolset` captures traces across all agent runs
-6. Wire into existing orchestrator (replace `explore_two_phase()` call)
+6. **DONE** — Wire into existing orchestrator:
+   - Replaced `explore_two_phase()` with `run_pipeline()` (async bridge via `asyncio.run()`)
+   - Replaced `SchwabMarketClient` with `MarketDataService` (Schwab + yfinance fallback)
+   - Added per-agent dollar cost estimation via existing `pricing.py` tables
+   - Feeds per-agent costs to `CostTracker` for daily/per-item budget enforcement
+   - Stores `TradingSignal` as snapshot prediction via `model_dump()`
+   - Mock mode uses PydanticAI `TestModel` (3-agent pipeline, no API calls)
+   - Added `exploration_complete` event to event bus
 7. **Enhance data capture for training readiness:**
    - Store `raw_tool_output` in every ToolTrace via TracingToolset interception
    - Capture web search results (title, snippet, URL, rank) before LLM processing
