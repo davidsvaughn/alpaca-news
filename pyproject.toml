@@ -26,6 +26,7 @@ dependencies = [
   "watchdog>=6.0.0",
   "yfinance>=0.2.0",
   "stockstats>=0.6.0",
+  "pydantic-ai>=0.7.0",
 ]
 
 # Optional dependency groups for uv

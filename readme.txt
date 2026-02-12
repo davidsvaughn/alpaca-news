@@ -12,7 +12,16 @@ source .venv/bin/activate
 uv sync
 
 ---------------------------------------------------------------------------------------------------
-CLAUDE CODE COSTS
+CLAUDE CODE 
+
+subl .claude/settings.json
+subl ~/.claude/CLAUDE.md
+
+ # install context7 mcp globally
+claude mcp add --transport stdio --scope user context7 -- npx -y @upstash/context7-mcp --api-key API_KEY
+
+
+SHOW COSTS
 
 [ https://claude.ai/share/0b3b1977-bbec-412d-a43b-b81935fa82e8 ]
 

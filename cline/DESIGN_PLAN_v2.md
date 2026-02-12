@@ -4,7 +4,7 @@
 > `DESIGN_REVISION.md` (revisions). This is the single source of truth for system
 > architecture, implementation status, and roadmap.
 >
-> Last updated: 2026-02-11
+> Last updated: 2026-02-12
 
 ---
 
@@ -20,8 +20,8 @@ their full lifecycle, and learns from outcomes.
 3. **Offline:** label outcomes → score traces → reflect → update knowledge
 
 **Key design principles:**
-- **Free-form tool use** — the LLM decides what tools to call and when to stop;
-  learned knowledge is injected via prompts, not enforced via rigid code structures.
+- **Multi-agent free-form tool use** — multiple LLMs (Grok, OpenAI, Claude) run
+  sequentially, each with full tool access, compounding evidence and perspectives.
 - **Atomic learning artifacts** — every action produces an immutable Snapshot with
   full tool traces, enabling offline learning from complete trade lifecycles.
 - **Budget guardrails in code** — cost limits, rate limits, and safety constraints
@@ -46,13 +46,13 @@ their full lifecycle, and learns from outcomes.
 | **Schwab market data** | DONE | Quotes, candles, streaming, options, fundamentals, movers, market hours |
 | **Knowledge store** | PARTIAL | skip_patterns, reliable_sources exist; insights.json TODO |
 | **Action menu / weights** | DONE | 12 finite actions — will be deprioritized (see Explorer revision) |
-| **Explorer (free-form tool use)** | TODO | Replaces rigid Phase 1/2 |
+| **Explorer (multi-agent pipeline)** | TODO | Sequential Grok→OpenAI→Claude pipeline — replaces rigid Phase 1/2 |
 | **yfinance data layer** | DONE | Free data: fundamentals, insider tx, price history, news, technicals |
 | **BM25 situation memory** | TODO | New — learned from TradingAgents |
 | **Schwab Tier 1 expansion** | DONE | Options IV, fundamentals, movers, market hours, enhanced context |
 | **insights.json** | TODO | Flat scored insights for prompt injection |
 | **Watch lifecycle** | TODO | Entry → hold → exit → retrospective → sealed |
-| **Signal extraction step** | TODO | New — distill verbose output to clean signal |
+| **Signal extraction step** | DONE (by design) | Built into PydanticAI output_type=TradingSignal |
 | **Offline loop** | TODO | Labeling, hop scoring, reflection |
 | **Bull/bear prompt pattern** | TODO | New — lightweight adversarial reasoning |
 | **Data vendor fallback** | DONE | Schwab → yfinance fallback via MarketDataService |
@@ -142,30 +142,127 @@ The existing explorer (`trader/online/explorer.py`, 641 lines) uses:
 This works but constrains the LLM to a finite action menu, preventing creative
 reasoning about novel situations.
 
-### Target state: TODO (free-form tool use)
+### Target state: TODO (multi-agent sequential pipeline)
 
-Replace rigid Phase 1/2 with a **free-form tool-use reasoning loop**:
-- LLM receives tool definitions and a clear objective
-- LLM decides what tools to call, in what order, when to stop
-- Each tool call recorded as a ToolTrace (existing infrastructure)
-- Budget guardrails enforced after each call
-- Learned insights injected via prompt context
+Replace rigid Phase 1/2 with a **multi-agent sequential pipeline** — multiple
+PydanticAI agents backed by different LLM providers, each equipped with all
+available tools, running sequentially so each builds on the previous agents'
+findings.
 
-**Why:** Frontier LLMs improve faster than bandit learning can converge on our
-limited data. Prompt-injected knowledge compounds with model upgrades.
+#### Why multi-agent?
 
-### Tools available to the explorer
+Different LLMs bring different strengths: Grok has native X/Twitter search,
+OpenAI has strong reasoning + web search, Claude excels at synthesis. Running
+them sequentially compounds evidence and perspectives — like analysts passing
+a research report around a trading desk. Each agent can verify, challenge, or
+extend what prior agents found.
+
+#### Architecture
+
+```
+┌──────────── Sequential Orchestrator (explore()) ────────────┐
+│                                                              │
+│  Round 1:                                                    │
+│    Agent 1 (Grok)   ──→ web_search + x_search + all tools   │
+│    Agent 2 (OpenAI) ──→ web_search + all tools               │
+│    Agent 3 (Claude) ──→ web_search + all tools               │
+│      each agent sees full context from prior agents          │
+│      Agent 3 produces TradingSignal (structured output)      │
+│                                                              │
+│  If Agent 3 confidence < threshold → Round 2 (optional)      │
+│                                                              │
+└──────────────────────────────────────────────────────────────┘
+```
+
+All agents share:
+- **Framework:** PydanticAI — handles per-agent tool loop, message threading,
+  structured output, budget enforcement
+- **Tool tracing:** `TracingToolset` (WrapperToolset subclass) intercepts every
+  tool call across all agents, recording ToolTrace with `raw_tool_output`
+- **Budget:** `UsageLimits` per agent + total pipeline budget
+- **Dependencies:** `RunContext[ExplorerDeps]` carries `MarketDataService`,
+  tool traces, and accumulated context into tool functions
+
+#### Provider capabilities (verified)
+
+| Provider | Model prefix | Native search | x_search | Mix with function tools? |
+|----------|-------------|---------------|----------|-------------------------|
+| Grok (xAI) | `OpenAIResponsesModel` + xAI base_url | `WebSearchTool(search_context_size=None)` | Function tool wrapper (calls xAI Responses API) | Yes |
+| OpenAI | `openai-responses:` | `WebSearchTool()` | N/A | Yes |
+| Claude (Anthropic) | `anthropic:` | `WebSearchTool()` | N/A | Yes |
+| Gemini (Google) | `google-gla:` | Google grounding | N/A | **No** — cannot mix built-in + function tools |
+
+**Key findings from testing:**
+- Grok's Responses API at `https://api.x.ai/v1/` works through PydanticAI's
+  `OpenAIResponsesModel` — confirmed with `WebSearchTool(search_context_size=None)`
+- xAI server-side tools require **grok-4 family** models only
+- PydanticAI supports `builtin_tools` + `toolsets` together — they merge into
+  a single combined toolset automatically
+- `x_search` has no PydanticAI builtin, but as a function tool the agent CAN
+  call it multiple times with different queries (agent-driven iteration)
+- Gemini excluded from pipeline (can't mix search + function tools)
+
+#### Context flow between agents
+
+Each agent receives a prompt containing:
+1. The original news event
+2. All findings from prior agents (accumulated `context.rounds[]`)
+3. System prompt with tool definitions, budget, and learned insights
+
+```python
+context = {
+    "news": {"headline": "...", "summary": "...", "symbols": [...]},
+    "rounds": [
+        {"agent": "grok", "model": "grok-4-1-fast-reasoning",
+         "findings": "...", "tool_traces": [...]},
+        {"agent": "openai", "model": "gpt-5-mini",
+         "findings": "...", "tool_traces": [...]},
+    ]
+}
+# Agent 3 (Claude) sees everything above and produces TradingSignal
+```
+
+Each agent's output (str findings) becomes part of the next agent's input.
+No separate "blackboard" needed — the accumulated context IS the shared state.
+
+#### Why PydanticAI (still)
+
+Even with a multi-agent design, PydanticAI handles the tedious per-agent
+plumbing that would be ~200-300 lines to hand-roll:
+- Tool schema generation from Python type hints
+- Tool dispatch loop + message threading within each agent's run
+- `WrapperToolset.call_tool()` for ToolTrace interception
+- `UsageLimits` for per-agent budget enforcement
+- Structured `output_type` validation on the final agent
+- Usage tracking (tokens, requests, tool calls)
+
+The custom orchestrator is just Python passing context between agents.
+PydanticAI handles everything inside each agent's loop.
+
+**Why not OpenAI Agents SDK:** Hosted tools are OpenAI-model-only.
+**Why not LangGraph:** Heavy abstraction; our sequential pipeline is simpler
+than a state machine and doesn't need LangChain's baggage.
+
+### Tools available to all agents
 
 #### Web / social research tools
 
-| Tool | Provider | Cost |
-|------|----------|------|
-| `web_search(query)` | OpenAI / Gemini / Grok | Per-call LLM + tool fee |
-| `x_search(query)` | Grok | Per-call LLM + tool fee |
-| `x_stream(keywords, minutes)` | X API | X API credits |
-| `url_fetch(url)` | Local (trafilatura) | Free |
+| Tool | Type | Provider support | Cost |
+|------|------|-----------------|------|
+| `web_search` | PydanticAI `WebSearchTool` (native, iterative) | Grok, OpenAI, Claude | Per-call LLM + tool fee |
+| `x_search(query)` | Function tool (wraps xAI Responses API) | All agents can call it; Grok executes | Per-call Grok + tool fee |
+| `x_stream_cache(symbol)` | Function tool (reads XStreamService cache) | All | Free (cached) |
+| `url_fetch(url)` | Function tool (httpx + trafilatura) | All | Free (local) |
 
-#### Financial data tools — Schwab (free, no LLM cost)
+**`web_search`** is native/iterative: the agent's own LLM calls it, sees results,
+refines queries, and searches again — all within PydanticAI's tool loop.
+
+**`x_search`** wraps xAI's Responses API as a function tool. The driving agent
+can call it multiple times with different queries (agent-driven iteration), but
+each individual call is a one-shot to Grok. This is a pragmatic compromise —
+Grok's internal agentic search refinement is lost, but the agent loop compensates.
+
+#### Financial data tools — via MarketDataService (Schwab → yfinance fallback)
 
 | Tool | Status | What it reveals |
 |------|--------|-----------------|
@@ -174,93 +271,78 @@ limited data. Prompt-injected knowledge compounds with model upgrades.
 | `check_options_activity(symbol)` | DONE | ATM IV, put/call ratio, volume/OI totals |
 | `get_fundamentals(symbol)` | DONE | Market cap, P/E, EPS, beta, 52-week range |
 | `get_movers(index)` | DONE | Top gainers/losers by % change |
-| `get_market_hours(market)` | DONE | Real session times, open/closed status |
-| `get_price_history(symbol, period, freq)` | TODO | Historical candles (any granularity) |
-| `get_options_chain(symbol, ...)` | TODO | Full chain with Greeks |
-| `check_order_book(symbol)` | TODO | Level 2 bid/ask depth |
+| `check_insider_activity(symbol)` | DONE | Recent insider buys/sells |
+| `get_company_news(symbol)` | DONE | Recent news articles per ticker |
+| `get_price_history(symbol, period)` | DONE | Historical OHLCV |
+| `get_technical_indicators(symbol, indicators)` | DONE | RSI, MACD, BBands, ATR, VWMA, MFI |
+| `check_price_spike(symbol)` | DONE | Intraday spike detection |
+| `check_volume_regime(symbol)` | DONE | Abnormal volume detection |
 
-#### Financial data tools — yfinance (NEW — free, no API key)
+**TODO — Tier 2 (build on demand):**
+- `get_options_chain(symbol, ...)` — full chain with Greeks
+- `check_order_book(symbol)` — L2 bid/ask depth
 
-| Tool | Status | What it reveals |
-|------|--------|-----------------|
-| `check_insider_activity(symbol)` | DONE | Recent insider buys/sells — high-signal confirmation |
-| `get_fundamentals_yf(symbol)` | DONE | P/E, market cap, debt ratios — free fallback for Schwab |
-| `get_price_history_yf(symbol, period)` | DONE | Historical OHLCV — free, no API key needed |
-| `get_company_news_yf(symbol)` | DONE | Recent news articles per ticker |
+### Agent prompt design
 
-#### Technical indicators — stockstats (NEW — computed locally, free)
-
-| Tool | Status | What it reveals |
-|------|--------|-----------------|
-| `get_technical_indicators(symbol, indicators)` | DONE | RSI, MACD, Bollinger Bands, ATR, VWMA, MFI |
-
-Computed from yfinance OHLCV data. The LLM chooses which indicators are relevant
-for the current situation (no need to compute all of them every time).
-
-### Explorer prompt sketch
+Each agent gets a role-aware system prompt. The prompts share common structure
+but differ in emphasis:
 
 ```markdown
-You are a financial research assistant investigating a breaking news event.
+You are a financial research analyst investigating a breaking news event.
+You are Agent {N} of {total} in a sequential research pipeline.
+
+## Your role
+{role_description — varies by agent}
+
+## Prior findings
+{accumulated context from agents 1..N-1, or "You are the first investigator."}
 
 ## Tools available
-{tool definitions — web/social + financial data + evidence}
+{tool definitions — auto-generated by PydanticAI from function signatures}
 
 ## Lessons from experience
-{top-N scored insights from insights.json, filtered to score > 0}
-
-## Similar past situations
-{top-K BM25-matched past situations with lessons learned}
+{top-N scored insights from insights.json}
 
 ## Budget
-- Remaining cost: ${budget_remaining}
 - Remaining tool calls: {remaining_calls}
-- Financial data tools and local indicators are free.
+- Financial data tools, url_fetch, and x_stream_cache are free.
+- web_search and x_search cost per call.
 
 ## The news event
 Headline: {headline}
 Summary: {summary}
 Symbols: {symbols}
-Source: {source}
-Timestamp: {timestamp}
 
 ## Your task
-Investigate this news event to determine:
-1. Is this a real, tradeable signal or noise/recycled content?
-2. What is the likely short-term price impact (direction, magnitude, timing)?
-3. What is your confidence level?
+Investigate this news event using your tools. Focus on areas not yet covered
+by prior agents. When you've gathered enough evidence, produce your findings.
 
-Think step by step. Use tools as needed. Stop when you have enough evidence.
-
-Before making your final assessment, consider both sides:
-- What is the bull case? What evidence supports a price move?
-- What is the bear case? What could go wrong or be already priced in?
-Then weigh these against each other to reach your conclusion.
+{final_agent_instruction — only for last agent:
+"Synthesize ALL evidence from prior agents and your own investigation into a
+final trading signal. Consider both bull and bear cases."}
 ```
 
-The "consider both sides" instruction is a lightweight version of adversarial
-debate (inspired by TradingAgents' Bull/Bear researcher pattern) — it forces the
-LLM to consider counter-arguments without the cost of a multi-agent system.
+The final agent (and only the final agent) has `output_type=TradingSignal`
+forcing structured output. Intermediate agents output free-form `str` findings.
 
-### Signal extraction step (NEW)
+### Signal extraction — built into final agent's output_type
 
-After the explorer produces verbose output, run a cheap fast-model call to extract
-a clean, structured trading signal:
-
-```json
-{
-  "direction": "up | down | none",
-  "confidence": 0.82,
-  "horizon": "15m | 60m | 1d",
-  "magnitude_estimate": "0.5-1.5%",
-  "key_catalyst": "Supply constraint confirmed by Reuters + Bloomberg",
-  "bull_case": "...",
-  "bear_case": "...",
-  "risk_factors": ["...", "..."]
-}
+```python
+class TradingSignal(BaseModel):
+    direction: Literal["bullish", "bearish", "neutral"]
+    confidence: float                          # 0.0 - 1.0
+    horizon: Literal["15m", "60m", "1d"]
+    magnitude_estimate: str                    # e.g. "0.5-1.5%"
+    key_catalyst: str
+    bull_case: str
+    bear_case: str
+    risk_factors: list[str]
 ```
 
-This separates the rich reasoning (stored in ToolTraces) from the actionable
-signal (used by the Watch system to decide whether to enter a position).
+The final agent must produce a valid `TradingSignal` or the run fails.
+Multi-agent debate is built into the architecture — different models with
+different perspectives naturally produce adversarial reasoning, replacing the
+need for explicit bull/bear prompt instructions.
 
 ---
 
@@ -268,39 +350,37 @@ signal (used by the Watch system to decide whether to enter a position).
 
 ### 4a. LLM Providers — DONE
 
-`trader/llm/client.py` — unified interface, three providers:
+`trader/llm/client.py` — unified interface, three providers.
 
-| Provider | Capabilities | Unique strength |
-|----------|-------------|-----------------|
-| OpenAI | web_search, Responses API | Strongest reasoning |
-| Gemini | GoogleSearch grounding | Google search quality |
-| Grok | web_search + x_search | X/Twitter data access |
+For the explorer pipeline, agents use PydanticAI's native provider support
+(not the custom `client.py` wrapper):
 
-Per-stage model configuration via `.env`:
+| Provider | PydanticAI model | Native search | x_search | Mix search + function tools? |
+|----------|-----------------|---------------|----------|----------------------------|
+| Grok (xAI) | `OpenAIResponsesModel` + xAI base_url | `WebSearchTool(search_context_size=None)` | Function tool wrapper | Yes |
+| OpenAI | `openai-responses:gpt-5-mini` | `WebSearchTool()` | N/A | Yes |
+| Claude | `anthropic:claude-sonnet-4-0` | `WebSearchTool()` | N/A | Yes |
+| Gemini | `google-gla:gemini-3-flash` | Google grounding | N/A | **No** — excluded from pipeline |
+
+Per-stage model configuration via `.env` (subject to change):
 ```env
 TRIAGE_PROVIDER=grok        TRIAGE_MODEL=grok-4-1-fast-reasoning
 RESEARCH_PROVIDER=openai    RESEARCH_MODEL=gpt-5-mini
-XSEARCH_PROVIDER=grok      XSEARCH_MODEL=grok-4-1-fast-reasoning
-SENTIMENT_PROVIDER=gemini   SENTIMENT_MODEL=gemini-3-flash-preview
+DECISION_MODEL=gemini-3-flash-preview
 ```
 
-### 4b. Schwab Market Data — PARTIAL
+### 4b. Schwab Market Data — DONE
 
-`trader/market/schwab_client.py` (505 lines)
+`trader/market/schwab_client.py` (~830 lines)
 
 **Done:**
 - Real-time quotes (`get_quote()`, `get_quotes()`)
 - Intraday candles (`get_intraday_candles()` — 1-min default)
 - Level 1 streaming (`start_stream()`, `get_stream_snapshot()`)
-- Basic market context (SPY, VIX, session estimate)
-
-**TODO — Tier 1 (high value, build first):**
-- `check_options_activity(symbol)` — wraps `option_chains()`, extracts ATM IV +
-  put/call ratio. **Probably the single most informative signal we're missing.**
-  The options market often "knows" before the stock moves.
-- `get_fundamentals(symbol)` — wraps `instruments(symbol, projection="fundamental")`.
-  One API call gives market cap, P/E, EPS, sector, 52-week range.
-- `get_movers(index)` — wraps `movers()` for $DJI/$SPX/NASDAQ. Reveals whether
+- Market context with real hours (`build_market_context()`, `get_market_hours()`)
+- Options activity (`check_options_activity()` — ATM IV, put/call ratios)
+- Fundamentals (`get_fundamentals()` — P/E, EPS, market cap, beta, 52-week range)
+- Market movers (`get_movers()` — top gainers/losers by % change)
   a move is stock-specific or sector-wide.
 - Enhanced `check_market_context()` — add `market_hours()` (proper session detection)
   and /ES futures quote (more liquid than SPY after hours).
@@ -345,18 +425,14 @@ situation. For example, if investigating a price spike, it might check RSI
 **Implementation:** `trader/market/indicators.py`, using `stockstats` to compute
 indicators from a yfinance-fetched DataFrame.
 
-### 4e. Data Vendor Fallback — NEW, TODO
+### 4e. Data Vendor Fallback — DONE
 
-Apply the vendor-abstraction pattern (inspired by TradingAgents' interface layer):
-- If Schwab is unavailable (rate limit, auth expired, disabled), automatically
-  fall back to yfinance for the same data
-- Category-level configuration: set default vendor per data type
-- Graceful degradation: the system continues to function (with less data quality)
-  even when Schwab is down
-
-**Implementation:** Thin routing layer in the market module that tries Schwab
-first, falls back to yfinance on failure. Similar to the existing
-`SCHWAB_DISABLED=true` graceful degradation, but automatic.
+`trader/market/data_service.py` — `MarketDataService` class providing a unified
+interface with automatic Schwab → yfinance fallback:
+- Overlapping tools (fundamentals, price history) try Schwab first, fall back to yfinance
+- Schwab-only tools (options, movers, streaming) fail-loud when Schwab is off
+- yfinance-only tools (insider activity, news, technicals) always available
+- Every result includes a `source` field ("schwab", "yfinance", or "stockstats")
 
 ### 4f. Evidence Acquisition — DONE
 
@@ -1021,26 +1097,39 @@ the explorer revision (the LLM needs tools to call).
    enhanced `check_market_context()`
 4. Vendor fallback: try Schwab → fall back to yfinance
 
-### Phase B: Explorer revision (free-form + training-ready data capture)
+### Phase B: Explorer revision (multi-agent pipeline + training-ready data capture)
 
-Convert the explorer from rigid Phase 1/2 to free-form tool use, with enhanced
-data capture for future training.
+Convert the explorer from rigid Phase 1/2 to a multi-agent sequential pipeline
+using PydanticAI, with enhanced data capture for future training.
 
-1. Create `insights.json` (start empty or seed with a few common-sense insights)
-2. Implement BM25 situation memory (`trader/knowledge/memory.py`)
-3. Write `explore_freeform.md` prompt (with bull/bear pattern, insight injection,
-   memory injection)
-4. Refactor `explorer.py` to use free-form tool-use loop with budget guardrails
-5. Add signal extraction step (cheap LLM call to distill structured signal)
-6. **Enhance data capture for training readiness:**
-   - Store `raw_tool_output` in every ToolTrace (full API responses, not just
-     LLM summaries)
-   - Capture `options_iv` snapshots when `check_options_activity()` is called
-   - Capture `price_reaction` window (15-min before, 60-min after trigger)
+1. **DONE** — Add `pydantic-ai` dependency to `pyproject.toml`
+2. **DONE** — Create `trader/online/explorer_agent.py` (v1):
+   - `TradingSignal` Pydantic model, `ExplorerDeps`, `TracingToolset`
+   - 11 market data function tools, `explore()` entry point
+   - Smoke tests passing (TestModel, all tools traced)
+3. Add research tools to function toolset:
+   - `x_search(query)` — wraps xAI Responses API as function tool
+   - `url_fetch(url)` — wraps existing `fetch_url()` + `extract_article()`
+   - `x_stream_cache(symbol)` — wraps `XStreamService.get_recent_posts()`
+4. Build multi-agent orchestrator (`trader/online/orchestrator.py`):
+   - Per-provider agent factory (creates PydanticAI Agent with correct
+     model + `WebSearchTool` + shared function toolset + `TracingToolset`)
+   - Sequential runner: agent 1 → agent 2 → agent 3, accumulating context
+   - Optional loop: if final agent confidence < threshold, run another round
+   - Total budget enforcement across all agents
+   - `explore()` entry point replaces single-agent version
+5. Per-provider integration tests:
+   - Verify each provider (Grok, OpenAI, Claude) works with all tools
+   - Confirm `WebSearchTool` works alongside function tools per provider
+   - Confirm `x_search` function tool works (calls xAI Responses API)
+   - Confirm `TracingToolset` captures traces across all agent runs
+6. Wire into existing orchestrator (replace `explore_two_phase()` call)
+7. **Enhance data capture for training readiness:**
+   - Store `raw_tool_output` in every ToolTrace via TracingToolset interception
+   - Capture web search results (title, snippet, URL, rank) before LLM processing
+   - Store X search/stream posts verbatim with engagement metrics
    - Tag all captured data by modality in the `data_modalities` structure
-   - Store X posts verbatim with engagement metrics
-   - Store web search result lists (title, snippet, URL, rank) before LLM
-     processing
+8. **(Future)** Create `insights.json` + BM25 situation memory for prompt injection
 
 ### Phase C: Watch lifecycle
 
@@ -1068,7 +1157,8 @@ Close the learning feedback loop.
 
 | Decision | Choice | Rationale |
 |----------|--------|-----------|
-| LLM orchestration | Direct API calls, not Agents SDK | Multi-provider flexibility, explicit cost control, auditable pipeline |
+| Agent framework | PydanticAI + custom orchestrator | PydanticAI handles per-agent loop; custom orchestrator sequences agents and passes context |
+| Explorer architecture | Multi-agent sequential pipeline | Different LLMs compound evidence; Grok (search+X), OpenAI (reasoning+search), Claude (synthesis+search) |
 | Database | SQLite (v1), Postgres later | Speed of development; upgrade when concurrency demands it |
 | Explorer approach | Free-form tool use | LLM intelligence improves faster than bandit learning on limited data |
 | Knowledge model | Flat insights + BM25 memory | Avoids premature categorization; contextual + general knowledge |
@@ -1081,10 +1171,9 @@ Close the learning feedback loop.
 
 ## 13. Open Questions
 
-1. **Tool-use API mechanics:** Use OpenAI Responses API with function definitions,
-   or implement a custom tool-call loop (LLM outputs structured request → we
-   execute → feed result back)? Responses API is cleaner but ties the explorer
-   to OpenAI/Grok-compatible APIs.
+1. ~~**Tool-use API mechanics:**~~ **RESOLVED** — PydanticAI handles the tool-call
+   loop, message threading, and tool dispatch. Native support for Anthropic,
+   OpenAI, and Google providers without any compatibility shims.
 
 2. **X stream in explorer:** X stream is inherently async (runs N minutes). Should
    the LLM start a stream and continue investigating (parallel), or does it block?
@@ -1092,8 +1181,16 @@ Close the learning feedback loop.
 3. **Triage + explorer boundary:** Does triage stay as a separate Stage 1 (cheap
    filter before expensive exploration), or merge into the free-form loop?
 
-4. **Multi-provider tool routing:** When the LLM wants `web_search`, should we
-   always use the same provider, or let a heuristic choose between OpenAI/Gemini/Grok?
+4. ~~**Multi-provider tool routing:**~~ **RESOLVED** — Each agent uses its own
+   provider's native `WebSearchTool`. No routing needed — all three providers
+   (Grok, OpenAI, Claude) get native iterative web search. `x_search` is a
+   function tool that calls Grok under the hood, available to all agents.
+
+5. **Pipeline composition:** Should the agent sequence be configurable (e.g.
+   run only 2 agents instead of 3)? Or always run the full pipeline?
+
+6. **Loop termination:** When the final agent says "need more info" and triggers
+   another round, how many rounds max? What's the convergence criterion?
 
 ---
 
@@ -1104,14 +1201,14 @@ but deferred to keep v1 focused:
 
 | Idea | Source | Why deferred |
 |------|--------|-------------|
-| Full adversarial debate (multi-agent bull/bear) | TradingAgents | High cost (multiple LLM calls); lightweight prompt pattern captures 80% of value |
-| Three-way risk debate (aggressive/conservative/neutral) | TradingAgents | Complex orchestration; simple risk-check prompt is sufficient for v1 |
+| ~~Full adversarial debate (multi-agent bull/bear)~~ | TradingAgents | **ADOPTED** — multi-agent sequential pipeline provides natural adversarial reasoning across different LLMs |
+| Three-way risk debate (aggressive/conservative/neutral) | TradingAgents | Subsumed by multi-agent pipeline — different LLMs naturally bring different risk perspectives |
 | Alpha Vantage NEWS_SENTIMENT | TradingAgents | Limited free tier (25 calls/day); yfinance news + web_search cover this |
 | LLM-selected indicator subsets | TradingAgents | Interesting optimization but premature; start by making all indicators available |
 | Postgres / Supabase | Original design | SQLite sufficient for single-process v1; upgrade path clear |
 | Streamlit offline workbench | Original design | FastAPI dashboard is primary; add if offline analysis needs grow |
 | Formal policy learning (contextual bandit) | Original design | Insufficient data; prompt-injected insights are more practical |
-| LangGraph workflow orchestration | TradingAgents | Adds dependency and complexity; custom pipeline is more transparent |
+| LangGraph workflow orchestration | TradingAgents | Custom sequential orchestrator is simpler and more transparent |
 
 ---
 
