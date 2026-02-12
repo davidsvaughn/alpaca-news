@@ -29,13 +29,14 @@ from watchdog.events import FileSystemEventHandler
 from watchdog.observers import Observer
 
 from trader.config import Settings
-from trader.db.database import Database, insert_snapshot, snapshot_exists
+from trader.db.database import Database, insert_snapshot, insert_watch, count_holding_watches, snapshot_exists
 from trader.knowledge.store import KnowledgeStore
 from trader.llm.client import LLMClient
 from trader.llm.cost_tracker import CostTracker
 from trader.llm.mock import MockLLMClient
 from trader.market.data_service import MarketDataService
 from trader.models.snapshot import SnapshotBuilder, Trigger, deterministic_snapshot_id
+from trader.models.watch import WatchBuilder
 from trader.evidence.acquirer import acquire_from_traces
 from trader.online.agent_pipeline import (
     PipelineConfig,
@@ -62,6 +63,25 @@ def _load_news_json(path: Path) -> dict[str, Any]:
 
 def _snapshot_path(settings: Settings, snapshot_id: str) -> Path:
     return Path(settings.snapshots_dir) / f"{snapshot_id}.json"
+
+
+def _extract_entry_price(snapshot: Any, symbol: str) -> float | None:
+    """Extract the last trade price for a symbol from the snapshot's price_context."""
+    pc = snapshot.price_context
+    if not pc or not isinstance(pc, dict):
+        return None
+    # price_context is {symbol: {quote data}} or a flat dict with per-symbol keys
+    sym_data = pc.get(symbol) or pc.get(symbol.upper())
+    if isinstance(sym_data, dict):
+        # Try common keys from Schwab/yfinance quote data
+        for key in ("lastPrice", "last_price", "regularMarketPrice", "close"):
+            val = sym_data.get(key)
+            if val is not None:
+                try:
+                    return float(val)
+                except (TypeError, ValueError):
+                    continue
+    return None
 
 
 def _build_mock_pipeline_config() -> PipelineConfig:
@@ -153,6 +173,7 @@ def process_news_file(
         knowledge.append_skip_keywords(triage.skip_patterns_learned)
 
     # --- Stage 2: Exploration (if investigate) ---
+    signal = None  # set inside investigate block, used for watch creation
     if triage.action == "investigate":
         # Use triage-refined symbols (falls back to trigger symbols)
         symbols = triage.symbols if triage.symbols else trigger.symbols
@@ -346,6 +367,50 @@ def process_news_file(
     bus.publish(
         PipelineEvent(type="snapshot_sealed", payload={"snapshot_id": snapshot.snapshot_id, "path": str(out_path)})
     )
+
+    # --- Stage 3: Watch creation (if high confidence) ---
+    if (
+        settings.watch_enabled
+        and signal is not None
+        and signal.direction != "neutral"
+        and signal.confidence >= settings.watch_confidence_threshold
+    ):
+        try:
+            holding_count = count_holding_watches(db)
+            if holding_count >= settings.watch_max_concurrent:
+                if DEBUG:
+                    print(f"SKIP watch: {holding_count} concurrent watches (max {settings.watch_max_concurrent})")
+            else:
+                primary_symbol = snapshot.trigger.symbols[0] if snapshot.trigger.symbols else None
+                entry_price = _extract_entry_price(snapshot, primary_symbol) if primary_symbol else None
+                if entry_price is not None and primary_symbol is not None:
+                    wb = WatchBuilder.create_from_signal(
+                        snapshot_id=snapshot.snapshot_id,
+                        symbol=primary_symbol,
+                        entry_price=entry_price,
+                        signal=signal,
+                    )
+                    watch = wb.to_watch()
+                    watch_path = Path(settings.data_dir) / "watches" / f"{watch.watch_id}.json"
+                    watch.persist(watch_path)
+                    insert_watch(db, watch=watch.to_dict())
+                    bus.publish(PipelineEvent(
+                        type="watch_created",
+                        payload={
+                            "watch_id": watch.watch_id,
+                            "symbol": watch.symbol,
+                            "direction": watch.entry.direction,
+                            "confidence": watch.entry.confidence,
+                            "entry_price": watch.entry.price,
+                            "snapshot_id": snapshot.snapshot_id,
+                        },
+                    ))
+                elif DEBUG:
+                    print(f"SKIP watch: could not extract entry price for {primary_symbol}")
+        except Exception as e:
+            if DEBUG:
+                raise
+            print(f"WARN: Watch creation failed: {e}")
 
 
 # ---------------------------------------------------------------------------

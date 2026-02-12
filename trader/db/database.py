@@ -34,6 +34,20 @@ snapshots_table = Table(
 )
 
 
+watches_table = Table(
+    "watches",
+    metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("watch_id", String, unique=True, nullable=False),
+    Column("symbol", String, nullable=False),
+    Column("status", String, nullable=False),
+    Column("entry_snapshot_id", String, nullable=False),
+    Column("created_at", DateTime(timezone=True), server_default=func.now(), nullable=False),
+    Column("updated_at", DateTime(timezone=True), server_default=func.now(), nullable=False),
+    Column("watch_json", JSON, nullable=False),
+)
+
+
 @dataclass(frozen=True)
 class Database:
     engine: Engine
@@ -80,3 +94,84 @@ def insert_snapshot(db: Database, *, snapshot: dict[str, Any]) -> bool:
             },
         )
     return result.rowcount > 0
+
+
+# ---------------------------------------------------------------------------
+# Watches
+# ---------------------------------------------------------------------------
+
+
+def insert_watch(db: Database, *, watch: dict[str, Any]) -> bool:
+    """Insert a watch. Returns True if inserted, False if duplicate."""
+    entry = watch.get("entry") or {}
+    with db.engine.begin() as conn:
+        result = conn.execute(
+            text(
+                "INSERT OR IGNORE INTO watches "
+                "(watch_id, symbol, status, entry_snapshot_id, watch_json) "
+                "VALUES (:wid, :sym, :status, :esid, :wjson)"
+            ),
+            {
+                "wid": watch["watch_id"],
+                "sym": watch["symbol"],
+                "status": watch["status"],
+                "esid": entry.get("snapshot_id", ""),
+                "wjson": json.dumps(watch, ensure_ascii=False),
+            },
+        )
+    return result.rowcount > 0
+
+
+def update_watch(db: Database, watch_id: str, watch: dict[str, Any]) -> None:
+    """Update a watch's JSON, status, and updated_at timestamp."""
+    with db.engine.begin() as conn:
+        conn.execute(
+            text(
+                "UPDATE watches SET status = :status, watch_json = :wjson, "
+                "updated_at = CURRENT_TIMESTAMP WHERE watch_id = :wid"
+            ),
+            {
+                "wid": watch_id,
+                "status": watch["status"],
+                "wjson": json.dumps(watch, ensure_ascii=False),
+            },
+        )
+
+
+def get_watch(db: Database, watch_id: str) -> dict[str, Any] | None:
+    """Fetch a single watch by ID. Returns the parsed JSON or None."""
+    with db.engine.connect() as conn:
+        row = conn.execute(
+            text("SELECT watch_json FROM watches WHERE watch_id = :wid"),
+            {"wid": watch_id},
+        ).fetchone()
+    if row is None:
+        return None
+    raw = row[0]
+    return json.loads(raw) if isinstance(raw, str) else raw
+
+
+def count_holding_watches(db: Database) -> int:
+    """Count watches currently in 'holding' status."""
+    with db.engine.connect() as conn:
+        row = conn.execute(
+            text("SELECT COUNT(*) FROM watches WHERE status = 'holding'"),
+        ).fetchone()
+    return row[0] if row else 0
+
+
+def get_active_watches(db: Database) -> list[dict[str, Any]]:
+    """Fetch all watches that are not yet sealed."""
+    with db.engine.connect() as conn:
+        rows = conn.execute(
+            text(
+                "SELECT watch_json FROM watches "
+                "WHERE status IN ('holding', 'exited', 'retrospective') "
+                "ORDER BY created_at"
+            ),
+        ).fetchall()
+    result = []
+    for row in rows:
+        raw = row[0]
+        result.append(json.loads(raw) if isinstance(raw, str) else raw)
+    return result

@@ -109,6 +109,14 @@ class Settings:
     evidence_max_docs_per_item: int
     evidence_extractor: Literal["trafilatura", "newspaper_fulltext", "readability_lxml"]
 
+    # Watch lifecycle
+    watch_enabled: bool
+    watch_confidence_threshold: float
+    watch_max_concurrent: int
+    watch_monitoring_budget: float
+    watch_max_hold_minutes: int
+    watch_checkin_model: str
+
 
 def load_settings(*, dotenv_path: str | None = None) -> Settings:
     """Load settings from environment.
@@ -180,6 +188,14 @@ def load_settings(*, dotenv_path: str | None = None) -> Settings:
     if evidence_extractor not in ("trafilatura", "newspaper_fulltext", "readability_lxml"):
         raise ValueError("EVIDENCE_EXTRACTOR must be one of: trafilatura, newspaper_fulltext, readability_lxml")
 
+    # Watch lifecycle
+    watch_enabled = _env_bool("WATCH_ENABLED", True)
+    watch_confidence_threshold = _env_float("WATCH_CONFIDENCE_THRESHOLD", 0.7)
+    watch_max_concurrent = _env_int("MAX_CONCURRENT_WATCHES", 5)
+    watch_monitoring_budget = _env_float("WATCH_MONITORING_BUDGET", 0.50)
+    watch_max_hold_minutes = _env_int("WATCH_MAX_HOLD_MINUTES", 240)
+    watch_checkin_model = _env_str("WATCH_CHECKIN_MODEL", "gemini-3-flash") or "gemini-3-flash"
+
     return Settings(
         learning_mode=learning_mode,
         trading_mode=trading_mode,  # type: ignore[arg-type]
@@ -219,4 +235,11 @@ def load_settings(*, dotenv_path: str | None = None) -> Settings:
         evidence_acquire_enabled=evidence_acquire_enabled,
         evidence_max_docs_per_item=evidence_max_docs_per_item,
         evidence_extractor=evidence_extractor,  # type: ignore[arg-type]
+
+        watch_enabled=watch_enabled,
+        watch_confidence_threshold=watch_confidence_threshold,
+        watch_max_concurrent=watch_max_concurrent,
+        watch_monitoring_budget=watch_monitoring_budget,
+        watch_max_hold_minutes=watch_max_hold_minutes,
+        watch_checkin_model=watch_checkin_model,
     )

@@ -51,7 +51,7 @@ their full lifecycle, and learns from outcomes.
 | **BM25 situation memory** | TODO | New — learned from TradingAgents |
 | **Schwab Tier 1 expansion** | DONE | Options IV, fundamentals, movers, market hours, enhanced context |
 | **insights.json** | TODO | Flat scored insights for prompt injection |
-| **Watch lifecycle** | TODO | Entry → hold → exit → retrospective → sealed |
+| **Watch lifecycle** | IN PROGRESS | Step 1 DONE (model + DB + creation); Steps 2-5 TODO |
 | **Signal extraction step** | DONE (by design) | Built into PydanticAI output_type=TradingSignal |
 | **Offline loop** | TODO | Labeling, hop scoring, reflection |
 | **Bull/bear prompt pattern** | TODO | New — lightweight adversarial reasoning |
@@ -554,6 +554,58 @@ worth revisiting once we have operational experience:
 take. Over-structuring now could prevent the LLM from discovering patterns we
 didn't anticipate. Revisit after 2-4 weeks of operation, when we can see what
 the system actually produces.
+
+#### Parked ideas: Stock selection optimization & finscore integration
+
+Under budget constraints (max concurrent watches, daily cost caps), the system
+must learn **which stocks deserve expensive exploration/monitoring**. Several
+ideas, all connected:
+
+1. **Learned stock selector from historical data.** Every sealed Watch produces
+   an outcome label (P&L). Over time, accumulate `(news features, exploration
+   findings, outcome)` tuples. Train a lightweight selector to rank incoming
+   news by expected return-on-investigation. This feeds naturally from Phase D
+   (offline loop) outcomes.
+
+2. **Warm-up + pruning ("tournament bracket").** Instead of committing budget
+   to K watches immediately, start N > K watches at lightweight depth (price
+   checks only, no LLM). After a warm-up window (10-15 min), prune to top K
+   based on early price action and signals. This is compatible with the check-in
+   depth levels (§7) and the contextual bandits approach (§5d). The bandit's
+   exploration strategy naturally produces the "start wide, narrow down" behavior.
+
+3. **Contextual bandits for allocation.** The §5d bandits aren't just for insight
+   scoring — they can optimize the allocation decision itself. Context = news
+   features + triage signal + market state + finscore output. Arm = allocate
+   (depth level) or skip. Reward = eventual Watch P&L. LinUCB or Thompson
+   Sampling with features could work once ~100-200 labeled events exist.
+
+4. **Legacy finscore model as cheap parallel signal.** A fine-tuned Llama-3.2-1B
+   model (`davidsvaughn/finscore-W4A16`, quantized, served via vLLM) produces:
+   - **Type** (T0-T7): 8-class news categorization (analyst action, corporate
+     event, earnings, market activity, WIIM, macro, technical, background)
+   - **Signal** (0-10): Short-term signal potential score
+   Trained on ~3,100 type labels + ~4,120 signal labels from GPT-4 batch
+   classification of Alpaca news. Model lives at `~/models/finscore-W4A16`;
+   API code at `finscore-api/`. Integration approach: **record but don't act**.
+   Call during triage, log type+signal alongside the snapshot, evaluate
+   correlation with Watch outcomes during reflection. If useful, becomes a
+   feature for the selector/bandit. If not, stop. Cost is negligible (~1ms
+   inference on 1B model).
+
+**Connection:** Finscore could be the cheap pre-filter that enables warm-up+prune.
+Score all incoming news instantly, start watches on top N, prune using real-time
+data. Over time, the bandit learns to weight finscore signal vs. other features.
+
+**Implementation timeline:**
+- **Now (data capture):** Already logging triage decisions + exploration outcomes
+  in snapshots. No additional work needed.
+- **Near-term (finscore integration):** Add optional finscore call in triage
+  stage, record output in snapshot. ~50 lines of code.
+- **Medium-term (warm-up+prune):** After Phase C Step 2 (monitoring scheduler),
+  adjust watch creation to support N-wide-start → K-narrow-prune pattern.
+- **Long-term (bandits/selector):** After ~200 labeled events, train selector
+  from outcome data. Integrate with triage as a feature.
 
 ### 5c. BM25 Situation Memory — NEW, TODO
 
@@ -1369,11 +1421,16 @@ using PydanticAI, with enhanced data capture for future training.
 
 Full position management from entry to retrospective.
 
-1. `trader/models/watch.py` — Watch data model
-2. `trader/online/watcher.py` — lifecycle manager
+1. **DONE** — Watch data model (`trader/models/watch.py`):
+   - Watch, WatchEntry, WatchExit frozen dataclasses + WatchBuilder
+   - `watches` table in SQLite with CRUD helpers (insert, update, get, count_holding, get_active)
+   - Config: `WATCH_ENABLED`, `WATCH_CONFIDENCE_THRESHOLD` (0.7), `MAX_CONCURRENT_WATCHES` (5), `WATCH_MONITORING_BUDGET`, `WATCH_MAX_HOLD_MINUTES` (240), `WATCH_CHECKIN_MODEL` (gemini-3-flash)
+   - Orchestrator creates Watch after snapshot seal when confidence >= threshold + direction != neutral + concurrent slots available
+   - Virtual watches only — no real order placement
+2. `trader/online/watcher.py` — lifecycle manager (monitoring scheduler + check-in agent)
 3. Monitoring prompts: `monitor_hold.md`, `monitor_exit.md`, `monitor_retrospective.md`
-4. Integration with orchestrator (create Watch when confidence >= threshold)
-5. Watch persistence (extend SQLite schema or separate watches table)
+4. Exit decision logic + retrospective phase
+5. Watch sealing
 
 ### Phase D: Offline loop
 
