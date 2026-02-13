@@ -122,6 +122,11 @@ class Settings:
     watch_max_retro_minutes: int
     watch_checkin_model: str
 
+    # Pipeline per-agent limits
+    pipeline_request_limit: int
+    pipeline_tool_calls_limit: int
+    pipeline_total_tokens_limit: int
+
     # Reflection / Evaluation
     reflection_model: str
 
@@ -211,6 +216,11 @@ def load_settings(*, dotenv_path: str | None = None, override: bool = False) -> 
     watch_max_retro_minutes = _env_int("WATCH_MAX_RETRO_MINUTES", 60)
     watch_checkin_model = _env_str("WATCH_CHECKIN_MODEL", "gemini-3-flash") or "gemini-3-flash"
 
+    # Pipeline per-agent limits
+    pipeline_request_limit = _env_int("PIPELINE_REQUEST_LIMIT", 15)
+    pipeline_tool_calls_limit = _env_int("PIPELINE_TOOL_CALLS_LIMIT", 25)
+    pipeline_total_tokens_limit = _env_int("PIPELINE_TOTAL_TOKENS_LIMIT", 80_000)
+
     reflection_model = _env_str("REFLECTION_MODEL", "gemini-3-flash-preview") or "gemini-3-flash-preview"
 
     return Settings(
@@ -264,6 +274,10 @@ def load_settings(*, dotenv_path: str | None = None, override: bool = False) -> 
         watch_max_hold_minutes=watch_max_hold_minutes,
         watch_max_retro_minutes=watch_max_retro_minutes,
         watch_checkin_model=watch_checkin_model,
+
+        pipeline_request_limit=pipeline_request_limit,
+        pipeline_tool_calls_limit=pipeline_tool_calls_limit,
+        pipeline_total_tokens_limit=pipeline_total_tokens_limit,
 
         reflection_model=reflection_model,
     )

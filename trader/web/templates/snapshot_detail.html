@@ -71,19 +71,22 @@
             <th>#</th>
             <th>Agent</th>
             <th>Model</th>
-            <th>Tool Calls</th>
+            <th>Tools</th>
             <th>Tokens (in/out)</th>
-            <th>LLM Requests</th>
+            <th>Reqs</th>
+            <th>Cost</th>
             <th>Time</th>
           </tr>
         </thead>
         <tbody>
-          {% set ns = namespace(total_tools=0, total_tokens=0, total_time=0.0) %}
+          {% set ns = namespace(total_tools=0, total_tokens=0, total_time=0.0, total_cost=0.0) %}
           {% for round in s.rounds %}
           {% set u = round.usage or {} %}
+          {% set rcost = round.get('cost_usd', 0)|float %}
           {% set ns.total_tools = ns.total_tools + (u.get('tool_calls', 0)|int) %}
           {% set ns.total_tokens = ns.total_tokens + (u.get('total_tokens', 0)|int) %}
           {% set ns.total_time = ns.total_time + (round.get('elapsed_s', 0)|float) %}
+          {% set ns.total_cost = ns.total_cost + rcost %}
           <tr>
             <td>{{ loop.index }}</td>
             <td><strong>{{ round.agent or 'agent_' ~ loop.index }}</strong></td>
@@ -91,6 +94,7 @@
             <td>{{ u.get('tool_calls', 0) }}</td>
             <td>{{ "{:,}".format(u.get('input_tokens', 0)|int) }} / {{ "{:,}".format(u.get('output_tokens', 0)|int) }}</td>
             <td>{{ u.get('requests', 0) }}</td>
+            <td>${{ "%.4f"|format(rcost) }}</td>
             <td>{{ "%.1f"|format(round.get('elapsed_s', 0)|float) }}s</td>
           </tr>
           {% endfor %}
@@ -99,6 +103,7 @@
             <td>{{ ns.total_tools }}</td>
             <td>{{ "{:,}".format(ns.total_tokens) }}</td>
             <td></td>
+            <td>${{ "%.4f"|format(ns.total_cost) }}</td>
             <td>{{ "%.1f"|format(ns.total_time) }}s</td>
           </tr>
         </tbody>
@@ -555,8 +560,19 @@
 {% block scripts %}
 <script src="https://cdn.jsdelivr.net/npm/marked@15.0.0/marked.min.js"></script>
 <script>
-  document.querySelectorAll('.findings-md').forEach(function(el) {
+  // Render markdown in all .findings-md elements (lazy: only once, on first visibility)
+  function renderMd(el) {
+    if (el.dataset.mdRendered) return;
     el.innerHTML = marked.parse(el.textContent);
-  });
+    el.dataset.mdRendered = '1';
+  }
+  // Render immediately-visible elements
+  document.querySelectorAll('.findings-md').forEach(renderMd);
+  // Render when <details> is toggled open
+  document.addEventListener('toggle', function(e) {
+    if (e.target.open) {
+      e.target.querySelectorAll('.findings-md').forEach(renderMd);
+    }
+  }, true);
 </script>
 {% endblock %}

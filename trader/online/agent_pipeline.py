@@ -215,7 +215,15 @@ def build_default_pipeline() -> PipelineConfig:
     # Mark the last agent as final (in case some were skipped)
     agents[-1].is_final = True
 
-    return PipelineConfig(agents=agents)
+    from trader.config import load_settings
+    settings = load_settings()
+
+    return PipelineConfig(
+        agents=agents,
+        request_limit=settings.pipeline_request_limit,
+        tool_calls_limit=settings.pipeline_tool_calls_limit,
+        total_tokens_limit=settings.pipeline_total_tokens_limit,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -424,6 +432,13 @@ async def run_pipeline(
             elif hasattr(spec.model, "model_name"):
                 model_name = spec.model.model_name
 
+            # Estimate per-agent cost
+            agent_cost = _estimate_agent_cost(
+                spec.name, model_name,
+                input_tokens=usage.input_tokens or 0,
+                output_tokens=usage.output_tokens or 0,
+            )
+
             round_record = {
                 "agent": spec.name,
                 "model": model_name,
@@ -439,6 +454,7 @@ async def run_pipeline(
                     "requests": usage.requests,
                     "tool_calls": usage.tool_calls,
                 },
+                "cost_usd": agent_cost,
                 "elapsed_s": elapsed,
             }
             all_rounds.append(round_record)
@@ -530,6 +546,42 @@ _AGENT_TO_PROVIDER: dict[str, str] = {
 }
 
 
+def _estimate_agent_cost(
+    agent_name: str,
+    model_string: str,
+    *,
+    input_tokens: int,
+    output_tokens: int,
+) -> float:
+    """Estimate USD cost for a single agent's run. Returns 0.0 on error."""
+    from trader.llm.pricing import (
+        estimate_token_cost_grok,
+        estimate_token_cost_openai,
+        estimate_token_cost_gemini,
+    )
+
+    if not (input_tokens or output_tokens):
+        return 0.0
+
+    provider, raw_model = _extract_model_for_pricing(agent_name, model_string)
+    try:
+        if provider == "openai":
+            return estimate_token_cost_openai(
+                raw_model, input_tokens=input_tokens, output_tokens=output_tokens,
+            ).total_cost_usd
+        elif provider == "grok":
+            return estimate_token_cost_grok(
+                raw_model, input_tokens=input_tokens, output_tokens=output_tokens,
+            ).total_cost_usd
+        elif provider == "gemini":
+            return estimate_token_cost_gemini(
+                raw_model, input_tokens=input_tokens, output_tokens=output_tokens,
+            ).total_cost_usd
+    except (KeyError, ValueError):
+        pass
+    return 0.0
+
+
 def _extract_model_for_pricing(spec_name: str, model_string: str) -> tuple[str, str]:
     """Extract (provider, raw_model_name) for pricing lookup.
 
@@ -554,51 +606,19 @@ def _extract_model_for_pricing(spec_name: str, model_string: str) -> tuple[str, 
 def estimate_pipeline_cost(result: PipelineResult) -> float:
     """Estimate total USD cost from a PipelineResult using pricing tables.
 
-    Iterates per-agent rounds and computes dollar cost from token usage.
-    Returns total estimated cost in USD.
-
-    Silently returns partial cost if a model isn't in pricing tables
-    (logs a warning in DEBUG mode).
+    If rounds already have `cost_usd` (computed during execution), sums those.
+    Otherwise falls back to re-computing from token usage.
     """
-    from trader.llm.pricing import (
-        estimate_token_cost_grok,
-        estimate_token_cost_openai,
-        estimate_token_cost_gemini,
-    )
-
     total_cost = 0.0
     for rnd in result.rounds:
-        agent_name = rnd["agent"]
-        model_string = rnd.get("model", agent_name)
-        usage = rnd.get("usage", {})
-
-        provider, raw_model = _extract_model_for_pricing(agent_name, model_string)
-        input_tokens = int(usage.get("input_tokens") or 0)
-        output_tokens = int(usage.get("output_tokens") or 0)
-
-        if not (input_tokens or output_tokens):
-            continue
-
-        try:
-            if provider == "openai":
-                cost = estimate_token_cost_openai(
-                    raw_model, input_tokens=input_tokens, output_tokens=output_tokens,
-                ).total_cost_usd
-            elif provider == "grok":
-                cost = estimate_token_cost_grok(
-                    raw_model, input_tokens=input_tokens, output_tokens=output_tokens,
-                ).total_cost_usd
-            elif provider == "gemini":
-                cost = estimate_token_cost_gemini(
-                    raw_model, input_tokens=input_tokens, output_tokens=output_tokens,
-                ).total_cost_usd
-            else:
-                if DEBUG:
-                    print(f"[Pipeline] Unknown provider '{provider}' for cost estimation, skipping")
-                continue
-            total_cost += cost
-        except KeyError:
-            if DEBUG:
-                print(f"[Pipeline] No pricing for model '{raw_model}' (provider={provider}), skipping")
-
+        if "cost_usd" in rnd:
+            total_cost += rnd["cost_usd"]
+        else:
+            usage = rnd.get("usage", {})
+            total_cost += _estimate_agent_cost(
+                rnd["agent"],
+                rnd.get("model", rnd["agent"]),
+                input_tokens=int(usage.get("input_tokens") or 0),
+                output_tokens=int(usage.get("output_tokens") or 0),
+            )
     return total_cost

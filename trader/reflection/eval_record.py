@@ -98,11 +98,12 @@ def _round_node(r: dict[str, Any]) -> dict[str, Any]:
     model = r.get("model", "?")
     usage = r.get("usage") or {}
     elapsed = r.get("elapsed_s", 0)
+    cost_usd = r.get("cost_usd", 0.0)
     tool_calls = usage.get("tool_calls", 0)
     total_tok = usage.get("total_tokens", 0)
 
     tok_str = f"{total_tok // 1000}k" if total_tok >= 1000 else str(total_tok)
-    summary = f"{agent} | {tool_calls} tools | {tok_str} tokens | {elapsed:.1f}s"
+    summary = f"{agent} | {tool_calls} tools | {tok_str} tokens | ${cost_usd:.4f} | {elapsed:.1f}s"
 
     # Build child nodes from tool traces
     children = []
@@ -117,6 +118,7 @@ def _round_node(r: dict[str, Any]) -> dict[str, Any]:
         "user_message": r.get("user_message", "[not captured]"),
         "findings": r.get("findings", ""),
         "usage": usage,
+        "cost_usd": cost_usd,
         "elapsed_s": elapsed,
     }
 
