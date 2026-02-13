@@ -73,8 +73,10 @@ class ExplorerDeps:
     # Mutable trace accumulator
     tool_traces: list[dict[str, Any]] = field(default_factory=list)
     hop_index: int = 0
-    # Budget visibility (set by pipeline; 0 = don't show budget line)
+    # Budget visibility (set by pipeline; all 0 = don't show budget line)
     tool_calls_limit: int = 0
+    request_limit: int = 0
+    total_tokens_limit: int = 0
 
 
 # ---------------------------------------------------------------------------
@@ -150,8 +152,8 @@ class TracingToolset(WrapperToolset):
             ctx.deps.tool_traces.append(trace)
 
         # Append budget summary so the agent sees its usage naturally
-        if isinstance(result, str) and ctx.deps.tool_calls_limit > 0:
-            budget = _budget_summary(ctx.deps)
+        if isinstance(result, str) and ctx.deps.total_tokens_limit > 0:
+            budget = _budget_summary(ctx)
             if budget:
                 result = result + "\n\n" + budget
 
@@ -544,6 +546,8 @@ async def explore(
         news=news,
         symbols=symbols,
         tool_calls_limit=tool_calls_limit,
+        request_limit=request_limit,
+        total_tokens_limit=total_tokens_limit,
     )
 
     agent = build_explorer_agent(model=model)
@@ -675,25 +679,35 @@ def _fetch_finnhub_context(symbols: list[str]) -> str:
     return "\n## Recent news coverage (FinnHub)\n" + "\n\n".join(sections)
 
 
-def _budget_summary(deps: ExplorerDeps) -> str:
-    """Build a one-line budget summary from accumulated tool traces.
+def _budget_summary(ctx: RunContext[ExplorerDeps]) -> str:
+    """Build a one-line budget summary from ctx.usage (real provider data).
 
-    Returns empty string if budget tracking is disabled (tool_calls_limit == 0).
+    Returns empty string if budget tracking is disabled (total_tokens_limit == 0).
     """
-    if deps.tool_calls_limit <= 0:
+    deps = ctx.deps
+    if deps.total_tokens_limit <= 0:
         return ""
 
-    total = len(deps.tool_traces)
-    limit = deps.tool_calls_limit
+    usage = ctx.usage
+    parts: list[str] = []
 
-    # Count expensive tool uses
+    # Token usage (the most important signal)
+    tok_used = usage.total_tokens or 0
+    tok_limit = deps.total_tokens_limit
+    tok_k = tok_used // 1000
+    lim_k = tok_limit // 1000
+    parts.append(f"{tok_k}k/{lim_k}k tokens")
+
+    # Request count
+    if deps.request_limit > 0:
+        parts.append(f"{usage.requests or 0}/{deps.request_limit} requests")
+
+    # Expensive tool counts (from traces — ctx.usage doesn't break down by tool)
     expensive: dict[str, int] = {}
     for trace in deps.tool_traces:
         tool_name = trace.get("action", {}).get("tool", "")
         if tool_name in ("x_search", "web_search"):
             expensive[tool_name] = expensive.get(tool_name, 0) + 1
-
-    parts = [f"{total}/{limit} tool calls"]
     for tool_name in ("x_search", "web_search"):
         if tool_name in expensive:
             parts.append(f"{tool_name}: {expensive[tool_name]} used")
