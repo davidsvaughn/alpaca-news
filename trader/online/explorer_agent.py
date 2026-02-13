@@ -73,6 +73,8 @@ class ExplorerDeps:
     # Mutable trace accumulator
     tool_traces: list[dict[str, Any]] = field(default_factory=list)
     hop_index: int = 0
+    # Budget visibility (set by pipeline; 0 = don't show budget line)
+    tool_calls_limit: int = 0
 
 
 # ---------------------------------------------------------------------------
@@ -91,6 +93,7 @@ TOOL_MODALITY: dict[str, str] = {
     "get_technical_indicators": "market_data",
     "check_insider_activity": "fundamentals",
     "get_company_news": "news",
+    "get_finnhub_news": "news",
     "url_fetch": "web_research",
     "web_search": "web_research",
     "x_search": "social",
@@ -118,7 +121,6 @@ class TracingToolset(WrapperToolset):
 
         try:
             result = await super().call_tool(name, tool_args, ctx, tool)
-            return result
         except Exception as e:
             error = str(e)
             raise
@@ -146,6 +148,14 @@ class TracingToolset(WrapperToolset):
                 "error": error,
             }
             ctx.deps.tool_traces.append(trace)
+
+        # Append budget summary so the agent sees its usage naturally
+        if isinstance(result, str) and ctx.deps.tool_calls_limit > 0:
+            budget = _budget_summary(ctx.deps)
+            if budget:
+                result = result + "\n\n" + budget
+
+        return result
 
 
 # ---------------------------------------------------------------------------
@@ -215,6 +225,36 @@ def get_company_news(ctx: RunContext[ExplorerDeps], symbol: str) -> str:
     Use to check if this news is already widely reported or if it's truly breaking."""
     result = ctx.deps.market.get_company_news(symbol, max_articles=5)
     return json.dumps(result, default=str)
+
+
+@market_toolset.tool
+def get_finnhub_news(ctx: RunContext[ExplorerDeps], symbol: str, days_back: int = 3) -> str:
+    """Get recent company news from FinnHub. Free (60 req/min limit).
+    Returns headlines, summaries, sources, and URLs for a ticker.
+    Good for checking what's been reported recently about any company.
+
+    Args:
+        symbol: Stock ticker (e.g. 'AAPL', 'NVDA')
+        days_back: How many days of history (default 3, max 7)
+    """
+    from trader.market.finnhub_client import get_company_news as _fh_news
+
+    days_back = min(days_back, 7)
+    articles = _fh_news(symbol, days_back=days_back)
+    if not articles:
+        return json.dumps({"symbol": symbol, "articles": [], "note": "No articles found or FINNHUB_API_KEY not set"})
+    # Return top 15 articles with key fields only
+    trimmed = []
+    for a in articles[:15]:
+        trimmed.append({
+            "headline": a.get("headline", ""),
+            "summary": (a.get("summary") or "")[:300],
+            "source": a.get("source", ""),
+            "datetime": a.get("datetime", 0),
+            "url": a.get("url", ""),
+            "related": a.get("related", ""),
+        })
+    return json.dumps({"symbol": symbol, "count": len(articles), "articles": trimmed}, default=str)
 
 
 @market_toolset.tool
@@ -414,7 +454,7 @@ You have access to:
 - **X stream cache** (free): get cached posts from the live X filtered stream
 
 ## Cost awareness
-- Financial data tools, url_fetch, and x_stream_cache are **free** — use liberally.
+- Financial data tools, url_fetch, get_finnhub_news, and x_stream_cache are **free** — use liberally.
 - web_search and x_search cost per call — use purposefully, not wastefully.
 
 ## Your task
@@ -503,6 +543,7 @@ async def explore(
         market=market,
         news=news,
         symbols=symbols,
+        tool_calls_limit=tool_calls_limit,
     )
 
     agent = build_explorer_agent(model=model)
@@ -568,7 +609,96 @@ def _build_user_message(news: dict[str, Any], symbols: list[str]) -> str:
         parts.append(f"**Timestamp:** {news['created_at']}")
     if news.get("url"):
         parts.append(f"**URL:** {news['url']}")
+    # Include full article content if available (stripped of HTML tags)
+    content = news.get("content")
+    if content and isinstance(content, str):
+        text = _strip_html(content).strip()
+        if text and text != news.get("summary", ""):
+            parts.append(f"\n## Full article content\n{text}")
+    # Auto-fetch recent FinnHub news for primary symbols
+    finnhub_section = _fetch_finnhub_context(symbols)
+    if finnhub_section:
+        parts.append(finnhub_section)
     return "\n".join(parts)
+
+
+def _strip_html(html: str) -> str:
+    """Strip HTML tags, returning plain text. Uses stdlib only."""
+    import re
+    from html.parser import HTMLParser
+
+    _BLOCK_TAGS = frozenset({
+        "p", "div", "h1", "h2", "h3", "h4", "h5", "h6",
+        "li", "br", "tr", "blockquote", "figure", "figcaption",
+    })
+    pieces: list[str] = []
+
+    class _TagStripper(HTMLParser):
+        def handle_starttag(self, tag: str, attrs: list) -> None:
+            if tag in _BLOCK_TAGS:
+                pieces.append("\n")
+
+        def handle_data(self, data: str) -> None:
+            pieces.append(data)
+
+    _TagStripper().feed(html)
+    # Collapse excessive whitespace while preserving paragraph breaks
+    text = "".join(pieces)
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    return text.strip()
+
+
+def _fetch_finnhub_context(symbols: list[str]) -> str:
+    """Fetch recent FinnHub news for primary symbols and format for the prompt.
+
+    Returns a markdown section string, or empty string if unavailable.
+    """
+    if not symbols or not os.getenv("FINNHUB_API_KEY"):
+        return ""
+    try:
+        from trader.market.finnhub_client import (
+            get_company_news as _fh_news,
+            format_news_for_prompt,
+        )
+    except ImportError:
+        return ""
+
+    sections: list[str] = []
+    for sym in symbols[:3]:  # limit to first 3 symbols
+        articles = _fh_news(sym, days_back=3)
+        if articles:
+            formatted = format_news_for_prompt(articles, max_articles=10)
+            sections.append(f"### {sym}\n{formatted}")
+
+    if not sections:
+        return ""
+    return "\n## Recent news coverage (FinnHub)\n" + "\n\n".join(sections)
+
+
+def _budget_summary(deps: ExplorerDeps) -> str:
+    """Build a one-line budget summary from accumulated tool traces.
+
+    Returns empty string if budget tracking is disabled (tool_calls_limit == 0).
+    """
+    if deps.tool_calls_limit <= 0:
+        return ""
+
+    total = len(deps.tool_traces)
+    limit = deps.tool_calls_limit
+
+    # Count expensive tool uses
+    expensive: dict[str, int] = {}
+    for trace in deps.tool_traces:
+        tool_name = trace.get("action", {}).get("tool", "")
+        if tool_name in ("x_search", "web_search"):
+            expensive[tool_name] = expensive.get(tool_name, 0) + 1
+
+    parts = [f"{total}/{limit} tool calls"]
+    for tool_name in ("x_search", "web_search"):
+        if tool_name in expensive:
+            parts.append(f"{tool_name}: {expensive[tool_name]} used")
+
+    return f"[Budget: {' | '.join(parts)}]"
 
 
 def _safe_serialize(obj: Any) -> Any:

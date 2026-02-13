@@ -358,6 +358,7 @@ async def run_pipeline(
                 symbols=symbols,
                 x_stream_service=x_stream_service,
                 xai_api_key=xai_key,
+                tool_calls_limit=config.tool_calls_limit,
             )
 
             # Build agent with appropriate output type
