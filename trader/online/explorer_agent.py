@@ -73,10 +73,9 @@ class ExplorerDeps:
     # Mutable trace accumulator
     tool_traces: list[dict[str, Any]] = field(default_factory=list)
     hop_index: int = 0
-    # Budget visibility (set by pipeline; all 0 = don't show budget line)
+    # Budget visibility (set by pipeline; 0 = don't show budget line)
     tool_calls_limit: int = 0
     request_limit: int = 0
-    total_tokens_limit: int = 0
 
 
 # ---------------------------------------------------------------------------
@@ -153,7 +152,7 @@ class TracingToolset(WrapperToolset):
             ctx.deps.tool_traces.append(trace)
 
         # Append budget summary so the agent sees its usage naturally
-        if isinstance(result, str) and ctx.deps.total_tokens_limit > 0:
+        if isinstance(result, str) and (ctx.deps.request_limit > 0 or ctx.deps.tool_calls_limit > 0):
             budget = _budget_summary(ctx)
             if budget:
                 result = result + "\n\n" + budget
@@ -553,7 +552,6 @@ async def explore(
     market: MarketDataService | None = None,
     request_limit: int = 20,
     tool_calls_limit: int = 30,
-    total_tokens_limit: int = 100_000,
 ) -> ExploreResult:
     """Run the explorer agent on a news event.
 
@@ -562,9 +560,8 @@ async def explore(
         symbols: Ticker symbols to investigate.
         model: PydanticAI model string.
         market: MarketDataService instance. Created if not provided.
-        request_limit: Max LLM round-trips.
-        tool_calls_limit: Max tool executions.
-        total_tokens_limit: Max total tokens (input + output).
+        request_limit: Max LLM round-trips (safety net).
+        tool_calls_limit: Max tool executions (safety net).
 
     Returns:
         ExploreResult with signal, traces, and usage info.
@@ -578,7 +575,6 @@ async def explore(
         symbols=symbols,
         tool_calls_limit=tool_calls_limit,
         request_limit=request_limit,
-        total_tokens_limit=total_tokens_limit,
     )
 
     agent = build_explorer_agent(model=model)
@@ -592,7 +588,6 @@ async def explore(
         usage_limits=UsageLimits(
             request_limit=request_limit,
             tool_calls_limit=tool_calls_limit,
-            total_tokens_limit=total_tokens_limit,
         ),
     )
 
@@ -619,7 +614,7 @@ async def explore(
 @dataclass(frozen=True)
 class ExploreResult:
     """Result of an explorer agent run."""
-    signal: TradingSignal
+    signal: TradingSignal | None
     tool_traces: list[dict[str, Any]]
     usage: dict[str, Any]
 
@@ -629,8 +624,19 @@ class ExploreResult:
 # ---------------------------------------------------------------------------
 
 
-def _build_user_message(news: dict[str, Any], symbols: list[str]) -> str:
-    """Build the user message from a news event."""
+def _build_user_message(
+    news: dict[str, Any],
+    symbols: list[str],
+    market: "MarketDataService | None" = None,
+) -> str:
+    """Build the user message from a news event.
+
+    Args:
+        news: News event dict.
+        symbols: Ticker symbols.
+        market: If provided, pre-fetch basic market data for primary symbols
+            so agents don't waste tool calls on rote data gathering.
+    """
     parts = ["## The news event"]
     if news.get("headline"):
         parts.append(f"**Headline:** {news['headline']}")
@@ -657,6 +663,11 @@ def _build_user_message(news: dict[str, Any], symbols: list[str]) -> str:
     earnings_section = _fetch_earnings_context(symbols)
     if earnings_section:
         parts.append(earnings_section)
+    # Pre-fetch basic market data for primary symbols (Change 2)
+    if market is not None:
+        prefetch = _prefetch_market_data(symbols, market)
+        if prefetch:
+            parts.append(prefetch)
     return "\n".join(parts)
 
 
@@ -742,28 +753,208 @@ def _fetch_earnings_context(symbols: list[str]) -> str:
     return "\n## Earnings context (FinnHub)\n" + "\n\n".join(sections)
 
 
+def _prefetch_market_data(symbols: list[str], market: MarketDataService) -> str:
+    """Pre-fetch basic market data for primary symbols, formatted as markdown.
+
+    This eliminates redundant tool calls — every agent gets this data upfront
+    instead of each one independently calling check_price, get_fundamentals, etc.
+
+    Only fetches for the first 3 symbols. Investigative tools (web_search,
+    x_search, url_fetch) and cross-symbol lookups remain as agent tools.
+    """
+    if not symbols:
+        return ""
+
+    sections: list[str] = []
+
+    for sym in symbols[:3]:
+        sym_sections: list[str] = []
+
+        # Current price / quote
+        try:
+            quote = market.get_quote(sym)
+            if quote and not quote.get("error"):
+                last = quote.get("lastPrice") or quote.get("regularMarketPrice", "?")
+                change = quote.get("netChange", "")
+                change_pct = quote.get("netPercentChange", "")
+                vol = quote.get("totalVolume", "")
+                bid = quote.get("bidPrice", "")
+                ask = quote.get("askPrice", "")
+                line = f"Last: ${last}"
+                if change_pct:
+                    line += f" | Change: {change_pct:+.2f}%" if isinstance(change_pct, (int, float)) else f" | Change: {change_pct}"
+                if vol:
+                    line += f" | Vol: {vol:,}" if isinstance(vol, (int, float)) else f" | Vol: {vol}"
+                if bid and ask:
+                    line += f" | Bid: ${bid} / Ask: ${ask}"
+                sym_sections.append(f"### {sym} — Current Price\n{line}")
+        except Exception:
+            pass
+
+        # Fundamentals
+        try:
+            fund = market.get_fundamentals(sym)
+            if fund and not fund.get("error"):
+                parts = []
+                for key, label in [
+                    ("marketCap", "Market Cap"), ("peRatio", "P/E"), ("eps", "EPS"),
+                    ("beta", "Beta"), ("52WeekHigh", "52w High"), ("52WeekLow", "52w Low"),
+                    ("dividendYield", "Div Yield"),
+                ]:
+                    val = fund.get(key)
+                    if val is not None:
+                        if key == "marketCap" and isinstance(val, (int, float)) and val > 1e9:
+                            parts.append(f"{label}: ${val/1e9:.1f}B")
+                        elif key == "dividendYield" and isinstance(val, (int, float)):
+                            parts.append(f"{label}: {val:.2f}%")
+                        else:
+                            parts.append(f"{label}: {val}")
+                if parts:
+                    sym_sections.append(f"### {sym} — Fundamentals\n{' | '.join(parts)}")
+        except Exception:
+            pass
+
+        # Technical indicators
+        try:
+            techs = market.get_current_technicals(sym, ["rsi", "macd", "macds", "boll", "boll_ub", "boll_lb", "atr"])
+            if techs and not techs.get("error"):
+                parts = []
+                if "rsi" in techs:
+                    parts.append(f"RSI(14): {techs['rsi']:.1f}" if isinstance(techs["rsi"], (int, float)) else f"RSI: {techs['rsi']}")
+                if "macd" in techs:
+                    macd_str = f"MACD: {techs['macd']:.3f}" if isinstance(techs["macd"], (int, float)) else f"MACD: {techs['macd']}"
+                    if "macds" in techs:
+                        macd_str += f" (signal: {techs['macds']:.3f})" if isinstance(techs["macds"], (int, float)) else f" (signal: {techs['macds']})"
+                    parts.append(macd_str)
+                if "boll" in techs and "boll_ub" in techs and "boll_lb" in techs:
+                    try:
+                        parts.append(f"BBands: {float(techs['boll_lb']):.2f}/{float(techs['boll']):.2f}/{float(techs['boll_ub']):.2f}")
+                    except (TypeError, ValueError):
+                        pass
+                if "atr" in techs:
+                    parts.append(f"ATR: {techs['atr']:.3f}" if isinstance(techs["atr"], (int, float)) else f"ATR: {techs['atr']}")
+                if parts:
+                    sym_sections.append(f"### {sym} — Technical Indicators\n{' | '.join(parts)}")
+        except Exception:
+            pass
+
+        # Options activity
+        try:
+            opts = market.check_options_activity(sym)
+            if opts and not opts.get("error"):
+                parts = []
+                if "atm_iv" in opts:
+                    parts.append(f"ATM IV: {opts['atm_iv']}")
+                if "put_call_volume_ratio" in opts:
+                    parts.append(f"Put/Call Vol: {opts['put_call_volume_ratio']}")
+                if "put_call_oi_ratio" in opts:
+                    parts.append(f"Put/Call OI: {opts['put_call_oi_ratio']}")
+                if parts:
+                    sym_sections.append(f"### {sym} — Options Activity\n{' | '.join(parts)}")
+        except Exception:
+            pass
+
+        # Volume regime
+        try:
+            vol_data = market.check_volume_regime(sym)
+            if vol_data and not vol_data.get("error"):
+                regime = vol_data.get("regime", "unknown")
+                ratio = vol_data.get("volume_ratio", "")
+                line = f"Volume regime: {regime}"
+                if ratio:
+                    line += f" ({ratio}x avg)" if isinstance(ratio, (int, float)) else f" ({ratio})"
+                sym_sections.append(f"### {sym} — Volume Regime\n{line}")
+        except Exception:
+            pass
+
+        # Price spike
+        try:
+            spike = market.check_price_spike(sym)
+            if spike and not spike.get("error"):
+                has_spike = spike.get("spike_detected", False)
+                if has_spike:
+                    pct = spike.get("change_pct", "?")
+                    sym_sections.append(f"### {sym} — Price Spike\nSpike detected: {pct}% move")
+                else:
+                    sym_sections.append(f"### {sym} — Price Spike\nNo significant spike detected")
+        except Exception:
+            pass
+
+        # Insider activity
+        try:
+            insider = market.check_insider_activity(sym)
+            if insider and not insider.get("error"):
+                txns = insider.get("transactions", [])
+                if txns:
+                    lines = []
+                    for tx in txns[:5]:
+                        lines.append(f"- {tx.get('insider', '?')}: {tx.get('type', '?')} {tx.get('shares', '?')} shares @ ${tx.get('price', '?')} ({tx.get('date', '?')})")
+                    sym_sections.append(f"### {sym} — Insider Activity\n" + "\n".join(lines))
+                else:
+                    sym_sections.append(f"### {sym} — Insider Activity\nNo recent insider transactions")
+        except Exception:
+            pass
+
+        # Company news (yfinance)
+        try:
+            news_items = market.get_company_news(sym, max_articles=5)
+            if news_items and isinstance(news_items, list) and news_items:
+                lines = []
+                for item in news_items[:5]:
+                    title = item.get("title") or item.get("headline", "?")
+                    pub = item.get("published", "")
+                    lines.append(f"- [{pub}] {title}" if pub else f"- {title}")
+                sym_sections.append(f"### {sym} — Recent News (yfinance)\n" + "\n".join(lines))
+        except Exception:
+            pass
+
+        # Price history (5d, 1h) — compact summary
+        try:
+            hist = market.get_price_history(sym, period="5d", interval="1h")
+            if hist and isinstance(hist, list) and len(hist) > 0:
+                # Show last 5 candles only
+                recent = hist[-5:]
+                lines = []
+                for candle in recent:
+                    dt = candle.get("datetime", candle.get("date", "?"))
+                    o, h, l, c = candle.get("open", "?"), candle.get("high", "?"), candle.get("low", "?"), candle.get("close", "?")
+                    v = candle.get("volume", "")
+                    line = f"{dt}: O={o} H={h} L={l} C={c}"
+                    if v:
+                        line += f" V={v}"
+                    lines.append(line)
+                sym_sections.append(f"### {sym} — Price History (5d, 1h, last 5 candles)\n" + "\n".join(lines))
+        except Exception:
+            pass
+
+        if sym_sections:
+            sections.extend(sym_sections)
+
+    if not sections:
+        return ""
+    return "\n\n## Pre-fetched market data\n\n" + "\n\n".join(sections)
+
+
 def _budget_summary(ctx: RunContext[ExplorerDeps]) -> str:
     """Build a one-line budget summary from ctx.usage (real provider data).
 
-    Returns empty string if budget tracking is disabled (total_tokens_limit == 0).
+    Shows request count, tool call count, and expensive tool usage.
+    Returns empty string if no limits are set.
     """
     deps = ctx.deps
-    if deps.total_tokens_limit <= 0:
+    if deps.request_limit <= 0 and deps.tool_calls_limit <= 0:
         return ""
 
     usage = ctx.usage
     parts: list[str] = []
 
-    # Token usage (the most important signal)
-    tok_used = usage.total_tokens or 0
-    tok_limit = deps.total_tokens_limit
-    tok_k = tok_used // 1000
-    lim_k = tok_limit // 1000
-    parts.append(f"{tok_k}k/{lim_k}k tokens")
-
     # Request count
     if deps.request_limit > 0:
         parts.append(f"{usage.requests or 0}/{deps.request_limit} requests")
+
+    # Tool calls count
+    if deps.tool_calls_limit > 0:
+        parts.append(f"{usage.tool_calls or 0}/{deps.tool_calls_limit} tool calls")
 
     # Expensive tool counts (from traces — ctx.usage doesn't break down by tool)
     expensive: dict[str, int] = {}

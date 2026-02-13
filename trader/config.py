@@ -125,7 +125,9 @@ class Settings:
     # Pipeline per-agent limits
     pipeline_request_limit: int
     pipeline_tool_calls_limit: int
-    pipeline_total_tokens_limit: int
+    # Cost-based budget: skip remaining intermediate agents when cumulative
+    # pipeline cost exceeds this threshold (USD). Final agent always runs.
+    pipeline_max_cost_usd: float
 
     # Reflection / Evaluation
     reflection_model: str
@@ -219,7 +221,7 @@ def load_settings(*, dotenv_path: str | None = None, override: bool = False) -> 
     # Pipeline per-agent limits
     pipeline_request_limit = _env_int("PIPELINE_REQUEST_LIMIT", 15)
     pipeline_tool_calls_limit = _env_int("PIPELINE_TOOL_CALLS_LIMIT", 25)
-    pipeline_total_tokens_limit = _env_int("PIPELINE_TOTAL_TOKENS_LIMIT", 80_000)
+    pipeline_max_cost_usd = _env_float("PIPELINE_MAX_COST_USD", 0.50)
 
     reflection_model = _env_str("REFLECTION_MODEL", "gemini-3-flash-preview") or "gemini-3-flash-preview"
 
@@ -277,7 +279,7 @@ def load_settings(*, dotenv_path: str | None = None, override: bool = False) -> 
 
         pipeline_request_limit=pipeline_request_limit,
         pipeline_tool_calls_limit=pipeline_tool_calls_limit,
-        pipeline_total_tokens_limit=pipeline_total_tokens_limit,
+        pipeline_max_cost_usd=pipeline_max_cost_usd,
 
         reflection_model=reflection_model,
     )

@@ -4,7 +4,7 @@
 > For stable architecture reference, see [ARCHITECTURE.md](ARCHITECTURE.md).
 > For implementation status, see [ROADMAP.md](ROADMAP.md).
 >
-> Last updated: 2026-02-12
+> Last updated: 2026-02-13
 
 ---
 
@@ -29,6 +29,11 @@
 | Auto-fetch vs tool pattern | Always-relevant data auto-fetched; on-demand data as tools | Earnings context goes in every prompt (always relevant); analyst ratings is an agent tool (sometimes relevant) |
 | Budget awareness approach | Append to tool results via ctx.usage | Preserves prefix caching (no system prompt changes); agents naturally see budget after each tool call; uses PydanticAI's real cumulative counters |
 | Include potentially redundant data | Yes — let reflection loop evaluate | FinnHub news + analyst data may overlap with existing sources, but including them tests whether the self-improvement loop can identify and weed out low-value inputs |
+| Token limit handling | Soft caps with graceful degradation | Hard limits destroy accumulated work; partial data is better than no data. Pipeline continues on agent failure |
+| Pre-fetch vs tool pattern | Basic data pre-fetched; investigative tools remain | Eliminates redundant tool calls (observed 3x check_price, 4x get_finnhub_news per pipeline). Agents focus on web_search, x_search, url_fetch |
+| Budget metric | Output tokens (not total) | Output tokens cost 3-4x more than input; penalizing input discourages richer context. `PIPELINE_OUTPUT_TOKENS_LIMIT=50000` |
+| Tool call ledger | Full results for investigative tools | Downstream agents see complete web_search/x_search/url_fetch results. url_fetch capped at 3000 chars. Pre-fetched data tools omitted (already in prompt) |
+| Gemini tool mode | Google grounding only (no function tools) | With pre-fetched market data + tool ledger, Gemini doesn't need function tools. Google grounding gives independent web search capability |
 
 ---
 

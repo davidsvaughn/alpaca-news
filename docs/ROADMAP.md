@@ -4,7 +4,7 @@
 > For stable architecture reference, see [ARCHITECTURE.md](ARCHITECTURE.md).
 > For design rationale, see [DECISIONS.md](DECISIONS.md).
 >
-> Last updated: 2026-02-12
+> Last updated: 2026-02-13
 
 ---
 
@@ -24,10 +24,13 @@
 | **Dashboard (FastAPI + SSE + HTMX)** | DONE | Full monitoring + control UI (6 pages, charts, editor) |
 | **Schwab market data** | DONE | Quotes, candles, streaming, options, fundamentals, movers, market hours |
 | **Knowledge store** | PARTIAL | skip_patterns, reliable_sources, generic append_to_list; insights.json TODO |
-| **Explorer (multi-agent pipeline)** | DONE | Sequential Grok→OpenAI→Gemini pipeline — wired into orchestrator |
+| **Explorer (multi-agent pipeline)** | DONE | Sequential Grok→OpenAI→Gemini; pre-fetched market data; tool call ledger; graceful degradation |
 | **FinnHub data integration** | DONE | Company news, earnings context (auto-fetch), analyst ratings (tool) |
-| **Budget awareness** | DONE | Real-time token/request usage injected into tool results via ctx.usage |
-| **Pipeline env var config** | DONE | PIPELINE_REQUEST_LIMIT, PIPELINE_TOOL_CALLS_LIMIT, PIPELINE_TOTAL_TOKENS_LIMIT |
+| **Budget awareness** | DONE | Output tokens as primary budget (PIPELINE_OUTPUT_TOKENS_LIMIT); real-time usage in tool results |
+| **Pipeline env var config** | DONE | PIPELINE_REQUEST_LIMIT, PIPELINE_TOOL_CALLS_LIMIT, PIPELINE_OUTPUT_TOKENS_LIMIT |
+| **Graceful degradation** | DONE | Agent failures preserved as partial rounds; pipeline continues; snapshot always sealed |
+| **Pre-fetched market data** | DONE | Basic data fetched once for primary symbols; agents focus on investigation |
+| **Gemini web search** | DONE | Gemini uses Google grounding (WebSearchTool) instead of function tools |
 | **yfinance data layer** | DONE | Free data: fundamentals, insider tx, price history, news, technicals |
 | **BM25 situation memory** | TODO | New — learned from TradingAgents |
 | **Schwab Tier 1 expansion** | DONE | Options IV, fundamentals, movers, market hours, enhanced context |
@@ -150,6 +153,36 @@ On-demand decision evaluation with nested decision tree and two-tier insights.
      `PIPELINE_TOTAL_TOKENS_LIMIT` (80,000) — wired into ExplorerDeps + UsageLimits
 4. **DONE** — Article content inclusion:
    - HTML-stripped article body included in user message when available
+
+## Phase B-2: Pipeline resilience & efficiency — DONE
+
+Eliminate redundant tool calls, survive agent failures, and control costs.
+
+1. **DONE** — Graceful degradation (`agent_pipeline.py`, `orchestrator.py`):
+   - `agent.run()` wrapped in try/except for `UsageLimitExceeded` / `AgentRunError`
+   - Partial tool traces survive (on `deps` object); partial round records created
+   - Pipeline continues to next agent on failure; `PipelineResult.signal` is optional
+   - Orchestrator wraps `run_pipeline()` in try/except; always seals snapshot
+2. **DONE** — Pre-fetch basic market data (`explorer_agent.py`):
+   - `_prefetch_market_data()` fetches price, fundamentals, technicals, options,
+     volume, insider, news, price history ONCE for primary symbols
+   - Injected into user message via `_build_user_message(market=...)`
+   - Agents guided to investigate (web_search, x_search) rather than re-fetch
+3. **DONE** — Updated system prompts (`agent_pipeline.py`):
+   - Agents told "Background data is ALREADY provided" — do NOT re-fetch
+   - Guided to use web_search, x_search, url_fetch for investigation
+4. **DONE** — Tool call ledger (`agent_pipeline.py`):
+   - `_format_tool_ledger()` passes full investigative tool results downstream
+   - Skips pre-fetched data tools; caps url_fetch at 3000 chars
+   - Downstream agents see what was already found, avoiding redundant calls
+5. **DONE** — Output tokens as primary budget control:
+   - `PIPELINE_OUTPUT_TOKENS_LIMIT` (default 50k) replaces total_tokens as primary limit
+   - Output tokens cost 3-4x more; input tokens now "free" for richer context
+   - `_budget_summary()` shows output tokens used/limit
+6. **DONE** — Gemini → Google grounding web search:
+   - Gemini uses `WebSearchTool()` (Google grounding) instead of function tools
+   - With pre-fetched data + tool ledger, Gemini doesn't need function tools
+   - `function_tools=False` flag on AgentSpec; TracingToolset conditionally skipped
 
 ## Phase D-2: Offline loop — TODO
 

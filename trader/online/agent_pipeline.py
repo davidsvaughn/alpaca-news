@@ -1,21 +1,22 @@
 """Multi-agent sequential pipeline for news investigation.
 
 Runs multiple PydanticAI agents (each backed by a different LLM provider)
-sequentially. Each agent has access to all tools (market data, web search,
-x_search, url_fetch, x_stream_cache) and sees accumulated findings from
-prior agents.
+sequentially. Basic market data is pre-fetched once and included in the
+prompt. Each agent's investigative tool results are passed downstream
+via a tool call ledger.
 
 Architecture:
     Agent 1 (Grok)   → web_search + x_search + all function tools
     Agent 2 (OpenAI) → web_search + all function tools
-    Agent 3 (Gemini) → all function tools (no web search) → TradingSignal
+    Agent 3 (Gemini) → Google grounding web search (no function tools) → TradingSignal
 
-The orchestrator passes context between agents and optionally loops
-if the final agent's confidence is below a threshold.
+Graceful degradation: if an agent fails (e.g. token limit exceeded),
+partial traces are preserved and the pipeline continues to the next agent.
 """
 
 from __future__ import annotations
 
+import json
 import os
 import time
 from dataclasses import dataclass, field
@@ -23,6 +24,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from pydantic_ai import Agent, UsageLimits, WebSearchTool
+from pydantic_ai.exceptions import AgentRunError, UsageLimitExceeded
 from pydantic_ai.messages import ModelResponse
 from pydantic_ai.models.openai import OpenAIResponsesModel
 from pydantic_ai.providers.openai import OpenAIProvider
@@ -112,6 +114,7 @@ class AgentSpec:
     builtin_tools: list[Any]        # e.g. [WebSearchTool()]
     role_description: str = ""      # injected into the agent's system prompt
     is_final: bool = False          # only the final agent produces TradingSignal
+    function_tools: bool = True     # False = skip TracingToolset (e.g. Gemini with grounding)
 
 
 @dataclass
@@ -121,10 +124,12 @@ class PipelineConfig:
     agents: list[AgentSpec]
     max_rounds: int = 2
     confidence_threshold: float = 0.7
-    # Per-agent budget limits
+    # Per-agent safety nets (prevent runaway loops, not budget control)
     request_limit: int = 15
     tool_calls_limit: int = 25
-    total_tokens_limit: int = 80_000
+    # Cost-based budget: skip remaining intermediate agents when cumulative
+    # pipeline cost exceeds this threshold. Final agent always runs.
+    max_cost_usd: float = 0.50
 
 
 # ---------------------------------------------------------------------------
@@ -184,26 +189,29 @@ def build_default_pipeline() -> PipelineConfig:
             ),
         ))
 
-    # Agent 3: Gemini (function tools only — no WebSearchTool)
-    # Gemini cannot mix Google grounding with function tools, so it runs
-    # with function tools only.  Prior agents' web search findings are
-    # passed in the accumulated context, so Gemini can still synthesize
-    # web evidence without calling web_search itself.
+    # Agent 3: Gemini (Google grounding web search, no function tools)
+    # Gemini cannot mix Google grounding with function tools. With pre-fetched
+    # market data and tool ledgers from prior agents, Gemini gets all data in
+    # the prompt. Web search is for finding NEW angles, not repeating prior work.
     google_key = os.getenv("GOOGLE_API_KEY")
     if google_key:
         gemini_model = os.getenv("SYNTHESIS_MODEL", "gemini-3-flash-preview")
         agents.append(AgentSpec(
             name="gemini",
             model=f"google-gla:{gemini_model}",
-            builtin_tools=[],
+            builtin_tools=[WebSearchTool()],
             role_description=(
-                "You are the FINAL analyst. Review ALL evidence gathered by "
-                "previous investigators. You may use any tool to verify or "
-                "extend their findings. Your job is to synthesize everything "
-                "into a clear, actionable trading signal. Weigh bull vs bear "
-                "cases carefully."
+                "You are the FINAL analyst. All prior agents' evidence — market "
+                "data, web research, X/Twitter sentiment, and full tool results "
+                "— is provided in the prompt. Do NOT repeat searches or lookups "
+                "that prior agents already performed. Instead: (1) search for NEW "
+                "angles, patterns, or evidence that prior agents missed, "
+                "(2) deeply synthesize ALL accumulated evidence, and (3) think "
+                "through the implications for short-term stock price movement. "
+                "Produce a clear, actionable trading signal."
             ),
             is_final=True,
+            function_tools=False,
         ))
 
     if not agents:
@@ -222,7 +230,7 @@ def build_default_pipeline() -> PipelineConfig:
         agents=agents,
         request_limit=settings.pipeline_request_limit,
         tool_calls_limit=settings.pipeline_tool_calls_limit,
-        total_tokens_limit=settings.pipeline_total_tokens_limit,
+        max_cost_usd=settings.pipeline_max_cost_usd,
     )
 
 
@@ -245,17 +253,26 @@ def _build_system_prompt(
         spec.role_description,
         "",
         "## Your tools",
-        "You have access to real-time market data, company fundamentals, insider",
-        "activity, technical indicators, price history, web search, X/Twitter",
-        "search (x_search), URL fetching (url_fetch), and X stream cache.",
+        "You have access to real-time market data tools and research tools.",
+        "",
+        "**Background data is ALREADY provided** in the prompt below — current price,",
+        "fundamentals, technicals, options, volume, insider activity, and news for the",
+        "primary symbol(s). Do NOT re-fetch this data.",
+        "",
+        "**Your job is to INVESTIGATE beyond the basics:**",
+        "- Use web_search to find breaking analysis, earnings reports, SEC filings",
+        "- Use x_search to gauge real-time market sentiment on X/Twitter",
+        "- Use url_fetch to read full articles and press releases",
+        "- Use check_price/get_fundamentals for OTHER symbols (peers, sector, related)",
+        "- Use get_movers to understand sector-wide moves",
         "",
         "## Cost awareness",
-        "- Financial data tools, url_fetch, and x_stream_cache are FREE — use liberally.",
         "- web_search and x_search cost per call — use purposefully.",
+        "- Financial data tools are free but already pre-fetched for primary symbols.",
         "",
         "## How to investigate",
-        "Think step by step. Use tools as needed. Focus on areas NOT yet covered",
-        "by prior agents (if any). Stop when you have enough evidence.",
+        "Think step by step. Focus on areas NOT yet covered by prior agents (if any).",
+        "Stop when you have enough evidence.",
     ]
 
     if spec.is_final:
@@ -263,11 +280,14 @@ def _build_system_prompt(
             "",
             "## IMPORTANT: Final synthesis",
             "You are the FINAL agent. You MUST produce a definitive trading signal.",
-            "Synthesize ALL evidence from prior agents and your own investigation.",
-            "Consider both sides:",
-            "- **Bull case:** What evidence supports a price move?",
-            "- **Bear case:** What could go wrong or be already priced in?",
-            "Then weigh these to reach your conclusion.",
+            "All prior agents' findings and tool results are in the prompt — do NOT",
+            "repeat their work. If you use web search, look for NEW angles or evidence",
+            "that prior agents did not explore.",
+            "",
+            "Your primary job is deep synthesis and reasoning:",
+            "- **Bull case:** What evidence supports a price move? What could go right?",
+            "- **Bear case:** What could go wrong? Is this already priced in? What are the risks?",
+            "- **Weigh** these against each other to reach your conclusion.",
         ])
 
     return "\n".join(parts)
@@ -277,9 +297,10 @@ def _build_pipeline_user_message(
     news: dict[str, Any],
     symbols: list[str],
     prior_rounds: list[dict[str, Any]],
+    market: "MarketDataService | None" = None,
 ) -> str:
-    """Build the user message with news + accumulated findings."""
-    parts = [_build_user_message(news, symbols)]
+    """Build the user message with news + accumulated findings + tool ledger."""
+    parts = [_build_user_message(news, symbols, market=market)]
 
     if prior_rounds:
         parts.append("\n\n---\n\n## Prior agent findings\n")
@@ -292,8 +313,75 @@ def _build_pipeline_user_message(
                 f"### Agent: {agent_name} (model: {model_name}, {tool_count} tool calls)\n"
                 f"{findings}\n"
             )
+            # Tool results ledger — pass investigative results downstream
+            ledger = _format_tool_ledger(rnd.get("tool_traces", []))
+            if ledger:
+                parts.append(ledger)
 
     return "\n".join(parts)
+
+
+# Tools whose results are already in the prompt via pre-fetch (Change 2).
+# Their outputs are NOT included in the tool ledger to avoid duplication.
+_PREFETCHED_TOOLS = frozenset({
+    "check_price", "get_fundamentals", "get_technical_indicators",
+    "check_options_activity", "check_volume_regime", "check_price_spike",
+    "check_insider_activity", "get_company_news", "get_finnhub_news",
+    "get_analyst_ratings", "get_price_history",
+})
+
+# url_fetch can return very long articles — cap to keep prompts reasonable.
+_URL_FETCH_MAX_CHARS = 3000
+
+
+def _format_tool_ledger(tool_traces: list[dict[str, Any]]) -> str:
+    """Format investigative tool results as a ledger for downstream agents.
+
+    Includes full output for web_search, x_search, x_stream_cache.
+    Caps url_fetch at _URL_FETCH_MAX_CHARS.
+    Skips pre-fetched data tools entirely (already in prompt).
+    """
+    lines: list[str] = []
+
+    for trace in tool_traces:
+        action = trace.get("action", {})
+        tool_name = action.get("tool", "")
+
+        # Skip pre-fetched tools — their data is already in the prompt
+        if tool_name in _PREFETCHED_TOOLS:
+            continue
+
+        # Skip errored calls
+        if trace.get("error"):
+            continue
+
+        raw = trace.get("raw_tool_output")
+        if raw is None:
+            continue
+
+        # Format the args summary
+        args = action.get("args", {})
+        args_str = ", ".join(f"{k}={v!r}" for k, v in args.items()) if args else ""
+
+        # Get string representation of output
+        if isinstance(raw, str):
+            output_str = raw
+        elif isinstance(raw, dict):
+            output_str = json.dumps(raw, default=str)
+        elif isinstance(raw, list):
+            output_str = json.dumps(raw, default=str)
+        else:
+            output_str = str(raw)
+
+        # Cap url_fetch output
+        if tool_name == "url_fetch" and len(output_str) > _URL_FETCH_MAX_CHARS:
+            output_str = output_str[:_URL_FETCH_MAX_CHARS] + "... [truncated]"
+
+        lines.append(f"**{tool_name}({args_str})**:\n```\n{output_str}\n```\n")
+
+    if not lines:
+        return ""
+    return "#### Tool results from this agent:\n" + "\n".join(lines)
 
 
 # ---------------------------------------------------------------------------
@@ -305,7 +393,7 @@ def _build_pipeline_user_message(
 class PipelineResult:
     """Result of the full multi-agent pipeline."""
 
-    signal: TradingSignal
+    signal: TradingSignal | None
     rounds: list[dict[str, Any]]
     all_tool_traces: list[dict[str, Any]]
     total_usage: dict[str, Any]
@@ -349,8 +437,25 @@ async def run_pipeline(
     }
     signal: TradingSignal | None = None
 
+    # UsageLimits: only request_limit and tool_calls_limit as safety nets.
+    # No token limits — agents run to completion. Budget control is done
+    # at the pipeline level: check cumulative cost after each agent.
+    usage_limits = UsageLimits(
+        request_limit=config.request_limit,
+        tool_calls_limit=config.tool_calls_limit,
+    )
+    cumulative_cost: float = 0.0
+
     for round_num in range(config.max_rounds):
         for i, spec in enumerate(config.agents):
+            # Cost-based skip: if we've exceeded budget and this isn't the
+            # final agent, skip to the next one (final agent always runs).
+            if not spec.is_final and cumulative_cost >= config.max_cost_usd > 0:
+                if DEBUG:
+                    print(f"[Pipeline]   Skipping {spec.name} — "
+                          f"cumulative cost ${cumulative_cost:.3f} >= ${config.max_cost_usd:.2f}")
+                continue
+
             # Fresh deps per agent, but shared trace accumulator
             deps = ExplorerDeps(
                 market=market,
@@ -360,11 +465,12 @@ async def run_pipeline(
                 xai_api_key=xai_key,
                 tool_calls_limit=config.tool_calls_limit,
                 request_limit=config.request_limit,
-                total_tokens_limit=config.total_tokens_limit,
             )
 
             # Build agent with appropriate output type
-            tracing = TracingToolset(market_toolset)
+            # Agents with function_tools=False (e.g. Gemini with Google grounding)
+            # skip TracingToolset — they can't mix builtin + function tools.
+            toolsets = [TracingToolset(market_toolset)] if spec.function_tools else []
             system_prompt = _build_system_prompt(
                 spec, agent_index=i, total_agents=len(config.agents),
             )
@@ -376,7 +482,7 @@ async def run_pipeline(
                     output_type=TradingSignal,
                     system_prompt=system_prompt,
                     builtin_tools=spec.builtin_tools,
-                    toolsets=[tracing],
+                    toolsets=toolsets,
                 )
             else:
                 agent = Agent(
@@ -385,12 +491,15 @@ async def run_pipeline(
                     output_type=str,
                     system_prompt=system_prompt,
                     builtin_tools=spec.builtin_tools,
-                    toolsets=[tracing],
+                    toolsets=toolsets,
                 )
 
-            # Build prompt with accumulated context
+            # Build prompt with accumulated context + pre-fetched market data
+            # Only pass market to the first agent's message (subsequent agents
+            # get it via the first message, which is re-used in prior_rounds).
+            msg_market = market if (round_num == 0 and i == 0) else None
             user_message = _build_pipeline_user_message(
-                news, symbols, all_rounds,
+                news, symbols, all_rounds, market=msg_market,
             )
 
             if DEBUG:
@@ -399,15 +508,40 @@ async def run_pipeline(
 
             start_time = time.time()
 
-            result = await agent.run(
-                user_message,
-                deps=deps,
-                usage_limits=UsageLimits(
-                    request_limit=config.request_limit,
-                    tool_calls_limit=config.tool_calls_limit,
-                    total_tokens_limit=config.total_tokens_limit,
-                ),
-            )
+            # Determine model name for logging (needed in both success and error paths)
+            model_name = spec.name
+            if isinstance(spec.model, str):
+                model_name = spec.model
+            elif hasattr(spec.model, "model_name"):
+                model_name = spec.model.model_name
+
+            try:
+                result = await agent.run(
+                    user_message,
+                    deps=deps,
+                    usage_limits=usage_limits,
+                )
+            except (UsageLimitExceeded, AgentRunError) as e:
+                # Graceful degradation: capture partial work and continue
+                elapsed = round(time.time() - start_time, 1)
+                all_tool_traces.extend(deps.tool_traces)
+                round_record = {
+                    "agent": spec.name,
+                    "model": model_name,
+                    "round": round_num + 1,
+                    "system_prompt": system_prompt,
+                    "user_message": user_message,
+                    "findings": f"[INCOMPLETE: {type(e).__name__}: {e}]",
+                    "tool_traces": deps.tool_traces,
+                    "usage": {},
+                    "cost_usd": 0.0,
+                    "elapsed_s": elapsed,
+                    "error": {"type": type(e).__name__, "message": str(e)},
+                }
+                all_rounds.append(round_record)
+                if DEBUG:
+                    print(f"[Pipeline]   → FAILED: {e}")
+                continue  # try next agent
 
             elapsed = round(time.time() - start_time, 1)
             usage = result.usage()
@@ -428,19 +562,14 @@ async def run_pipeline(
             # Collect traces and findings
             all_tool_traces.extend(deps.tool_traces)
 
-            # Determine model name for logging
-            model_name = spec.name
-            if isinstance(spec.model, str):
-                model_name = spec.model
-            elif hasattr(spec.model, "model_name"):
-                model_name = spec.model.model_name
-
             # Estimate per-agent cost
             agent_cost = _estimate_agent_cost(
                 spec.name, model_name,
                 input_tokens=usage.input_tokens or 0,
                 output_tokens=usage.output_tokens or 0,
             )
+
+            cumulative_cost += agent_cost
 
             round_record = {
                 "agent": spec.name,
@@ -464,7 +593,8 @@ async def run_pipeline(
 
             if DEBUG:
                 print(f"[Pipeline]   → {len(deps.tool_traces)} tool calls, "
-                      f"{usage.total_tokens} tokens, {elapsed}s")
+                      f"{usage.total_tokens} tokens, ${agent_cost:.3f} "
+                      f"(cumulative: ${cumulative_cost:.3f}), {elapsed}s")
 
             # If this is the final agent, capture the signal
             if spec.is_final:
@@ -486,8 +616,8 @@ async def run_pipeline(
                 print(f"[Pipeline] Confidence {signal.confidence if signal else 'N/A'} "
                       f"< {config.confidence_threshold} — starting round {round_num + 2}")
 
-    if signal is None:
-        raise RuntimeError("Pipeline produced no signal — check agent configuration")
+    if signal is None and DEBUG:
+        print("[Pipeline] WARNING: Pipeline produced no signal (all agents may have failed)")
 
     # Re-number all traces sequentially
     for idx, trace in enumerate(all_tool_traces):

@@ -77,8 +77,8 @@ NEWS_PROMPT = (
     "Investigate briefly. Use 2-3 tools max, then produce your assessment."
 )
 
-# Tight limits to keep costs low
-TEST_LIMITS = UsageLimits(request_limit=5, tool_calls_limit=8, total_tokens_limit=30_000)
+# Tight limits to keep costs low (safety nets only — no token limits)
+TEST_LIMITS = UsageLimits(request_limit=5, tool_calls_limit=8)
 
 
 # ---------------------------------------------------------------------------

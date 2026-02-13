@@ -4,7 +4,7 @@
 > For implementation status and roadmap, see [ROADMAP.md](ROADMAP.md).
 > For design rationale and open questions, see [DECISIONS.md](DECISIONS.md).
 >
-> Last updated: 2026-02-12
+> Last updated: 2026-02-13
 
 ---
 
@@ -112,29 +112,39 @@ a research report around a trading desk.
 ```
 ┌──────────── Sequential Orchestrator (explore()) ────────────┐
 │                                                              │
+│  Pre-fetch: basic market data for primary symbols (once)     │
+│                                                              │
 │  Round 1:                                                    │
 │    Agent 1 (Grok)   ──→ web_search + x_search + all tools   │
 │    Agent 2 (OpenAI) ──→ web_search + all tools               │
-│    Agent 3 (Gemini) ──→ all function tools (no web search)   │
-│      each agent sees full context from prior agents          │
+│    Agent 3 (Gemini) ──→ Google grounding web search only     │
+│      each agent sees: pre-fetched data + prior findings      │
+│      + tool call ledger (full results from prior agents)     │
 │      Agent 3 produces TradingSignal (structured output)      │
 │                                                              │
 │  If Agent 3 confidence < threshold → Round 2 (optional)      │
+│  If an agent fails → partial traces saved, pipeline continues│
 │                                                              │
 └──────────────────────────────────────────────────────────────┘
 ```
 
-All agents share:
+Key features:
+- **Pre-fetched market data:** Basic data (price, fundamentals, technicals, options,
+  volume, insider, news, price history) is fetched once and included in the prompt.
+  Agents focus on investigative tools (web_search, x_search, url_fetch).
+- **Tool call ledger:** Each agent's investigative tool results (web_search, x_search,
+  url_fetch) are passed downstream in full. Agents see what was already found.
+- **Graceful degradation:** If an agent fails (e.g. token limit exceeded), partial
+  tool traces are preserved and the pipeline continues to the next agent.
 - **Framework:** PydanticAI — handles per-agent tool loop, message threading,
   structured output, budget enforcement
 - **Tool tracing:** `TracingToolset` (WrapperToolset subclass) intercepts every
-  tool call across all agents, recording ToolTrace with `raw_tool_output`
-- **Budget:** `UsageLimits` per agent + total pipeline budget (configurable
-  via `PIPELINE_REQUEST_LIMIT`, `PIPELINE_TOOL_CALLS_LIMIT`, `PIPELINE_TOTAL_TOKENS_LIMIT`)
+  function tool call, recording ToolTrace with `raw_tool_output`
+- **Budget:** `UsageLimits` per agent — primarily `output_tokens_limit` (configurable
+  via `PIPELINE_OUTPUT_TOKENS_LIMIT`, default 50k). Output tokens cost 3-4x more
+  than input and are the actual cost driver.
 - **Budget awareness:** `TracingToolset` appends real-time usage stats to tool
-  results using `ctx.usage` (PydanticAI's live cumulative counters), so agents
-  see `[Budget: 43k/80k tokens | 7/15 requests | x_search: 2 used]` after
-  each tool call and can self-regulate
+  results using `ctx.usage`, so agents see budget after each tool call
 - **Dependencies:** `RunContext[ExplorerDeps]` carries `MarketDataService`,
   tool traces, and accumulated context into tool functions
 
@@ -145,17 +155,19 @@ All agents share:
 | Grok (xAI) | `OpenAIResponsesModel` + xAI base_url | `WebSearchTool(search_context_size=None)` | Function tool wrapper (calls xAI Responses API) | Yes |
 | OpenAI | `openai-responses:` | `WebSearchTool()` | N/A | Yes |
 | Claude | `anthropic:` | `WebSearchTool()` | N/A | Yes |
-| Gemini | `google-gla:` | Google grounding | N/A | **No** — requires two-instance workaround |
+| Gemini | `google-gla:` | Google grounding (`WebSearchTool()`) | N/A | **No** — uses grounding only, no function tools |
 
 #### Context flow between agents
 
 Each agent receives a prompt containing:
 1. The original news event (headline + article content when available)
 2. Auto-fetched context: FinnHub company news and earnings data for primary symbols
-3. All findings from prior agents (accumulated `context.rounds[]`)
-4. System prompt with tool definitions, budget, and learned insights
+3. Pre-fetched market data: price, fundamentals, technicals, options, volume, insider, news, price history
+4. All findings from prior agents (accumulated `context.rounds[]`)
+5. Tool call ledger: full results from prior agents' investigative tools (web_search, x_search, url_fetch)
+6. System prompt with investigation guidance and budget awareness
 
-Each agent's output (str findings) becomes part of the next agent's input.
+Each agent's output (str findings + tool results) becomes part of the next agent's input.
 No separate "blackboard" needed — the accumulated context IS the shared state.
 
 #### Signal extraction — built into final agent's output_type
@@ -172,7 +184,9 @@ class TradingSignal(BaseModel):
     risk_factors: list[str]
 ```
 
-The final agent must produce a valid `TradingSignal` or the run fails.
+The final agent must produce a valid `TradingSignal`. If it fails (e.g. token
+limit), the pipeline returns `signal=None` and the snapshot is sealed without
+a prediction — partial data is always preserved.
 
 ### Tools available to all agents
 

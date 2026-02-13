@@ -314,115 +314,132 @@ def process_news_file(
         if settings.mock_llm:
             pipeline_config = _build_mock_pipeline_config()
 
-        pipeline_result = asyncio.run(run_pipeline(
-            news=news,
-            symbols=symbols,
-            market=market,
-            config=pipeline_config,
-            x_stream_service=xstream,
-        ))
+        pipeline_result = None
+        try:
+            pipeline_result = asyncio.run(run_pipeline(
+                news=news,
+                symbols=symbols,
+                market=market,
+                config=pipeline_config,
+                x_stream_service=xstream,
+            ))
+        except Exception as e:
+            # Pipeline crashed entirely — save what we have
+            bus.publish(PipelineEvent(
+                type="exploration_error",
+                payload={
+                    "snapshot_id": snap_id,
+                    "error": f"{type(e).__name__}: {e}",
+                    "symbols": symbols,
+                    "headline": trigger.headline,
+                },
+            ))
+            if DEBUG:
+                print(f"ERROR: Pipeline crashed: {e}")
 
-        # Add all tool traces from the pipeline
-        for trace in pipeline_result.all_tool_traces:
-            builder.add_tool_trace(trace)
+        if pipeline_result is not None:
+            # Add all tool traces from the pipeline
+            for trace in pipeline_result.all_tool_traces:
+                builder.add_tool_trace(trace)
 
-        # Store agent rounds (findings, usage, model) for training data
-        for rnd in pipeline_result.rounds:
-            builder.add_round(rnd)
+            # Store agent rounds (findings, usage, model) for training data
+            for rnd in pipeline_result.rounds:
+                builder.add_round(rnd)
 
-        # Compute dollar cost from token usage and feed to CostTracker
-        for rnd in pipeline_result.rounds:
-            agent_name = rnd["agent"]
-            model_string = rnd.get("model", agent_name)
-            usage = rnd.get("usage", {})
-            provider, raw_model = _extract_model_for_pricing(agent_name, model_string)
+            # Compute dollar cost from token usage and feed to CostTracker
+            for rnd in pipeline_result.rounds:
+                agent_name = rnd["agent"]
+                model_string = rnd.get("model", agent_name)
+                usage = rnd.get("usage", {})
+                provider, raw_model = _extract_model_for_pricing(agent_name, model_string)
 
-            try:
-                cost_tracker.log_llm_call(
-                    provider=provider,  # type: ignore[arg-type]
-                    model=raw_model,
-                    usage=usage,
-                    tools_used=[],
-                    stage="explore",
-                    purpose=f"agent_{agent_name}",
-                )
-            except Exception as e:
-                # Don't fail the pipeline on cost estimation errors
-                if DEBUG:
-                    print(f"WARN: Cost estimation failed for agent {agent_name}: {e}")
-
-        # Store the TradingSignal as the snapshot prediction
-        signal = pipeline_result.signal
-        builder.prediction = signal.model_dump()
-
-        bus.publish(PipelineEvent(
-            type="exploration_complete",
-            payload={
-                "snapshot_id": snap_id,
-                "symbols": triage.symbols,
-                "headline": trigger.headline,
-                "direction": signal.direction,
-                "confidence": signal.confidence,
-                "agents": len(pipeline_result.rounds),
-                "tool_calls": len(pipeline_result.all_tool_traces),
-                "rounds_completed": pipeline_result.rounds_completed,
-            },
-        ))
-
-        # Optional: explicit acquisition of web evidence for auditability.
-        if settings.evidence_acquire_enabled:
-            try:
-                ar = acquire_from_traces(
-                    traces=pipeline_result.all_tool_traces,
-                    evidence_root=Path(settings.data_dir) / "evidence",
-                    max_docs=settings.evidence_max_docs_per_item,
-                    extractor=settings.evidence_extractor,
-                )
-                # Add acquisition traces after exploration traces
-                for t in ar.traces:
-                    # Ensure hop indexes are monotonic in the final snapshot
-                    t["hop_index"] = len(builder.tool_traces) + 1
-                    builder.add_tool_trace(t)
-            except Exception as e:
-                if DEBUG:
-                    raise
-                bus.publish(PipelineEvent(type="evidence_acquire_error", payload={"error": str(e)}))
-
-        # Optional: attach a small snapshot of X cache as evidence.
-        # Only relevant for fresh news where a burst was actually started.
-        if xstream is not None and settings.x_stream_enabled and _news_is_fresh(trigger):
-            try:
-                x_items = xstream.get_recent_posts(key="_all", limit=10)
-                if x_items:
-                    from trader.models.tool_trace import TraceExecution, new_tool_trace, utc_now_iso
-
-                    builder.add_tool_trace(
-                        new_tool_trace(
-                            trace_id=f"trace_x_cache_{int(time.time())}",
-                            hop_index=len(builder.tool_traces) + 1,
-                            parent_trace_id=None,
-                            decision_context={
-                                "state_summary": "",
-                                "reason_for_action": "Attach recent X stream cache posts",
-                                "symbols": symbols,
-                            },
-                            action={
-                                "tool": "x_stream_cache",
-                                "provider": "xapi",
-                                "query_template": "x_stream_cache_recent",
-                                "query": "_all",
-                                "filters": {"limit": 10},
-                            },
-                            execution=TraceExecution(model="xapi", start_time=utc_now_iso(), end_time=utc_now_iso(), cost_usd=0.0),
-                            results=[{"source_type": "x_stream", "title": "x_post", "snippet": json.dumps(x, ensure_ascii=False)[:800]} for x in x_items],
-                            extracted_signals={"posts_included": len(x_items)},
-                            stop_signal={"should_stop": False, "reason": ""},
-                        )
+                try:
+                    cost_tracker.log_llm_call(
+                        provider=provider,  # type: ignore[arg-type]
+                        model=raw_model,
+                        usage=usage,
+                        tools_used=[],
+                        stage="explore",
+                        purpose=f"agent_{agent_name}",
                     )
-            except Exception as e:
-                if DEBUG:
-                    raise
-                bus.publish(PipelineEvent(type="x_cache_attach_error", payload={"error": str(e)}))
+                except Exception as e:
+                    # Don't fail the pipeline on cost estimation errors
+                    if DEBUG:
+                        print(f"WARN: Cost estimation failed for agent {agent_name}: {e}")
+
+            # Store the TradingSignal as the snapshot prediction (if produced)
+            signal = pipeline_result.signal
+            if signal is not None:
+                builder.prediction = signal.model_dump()
+
+            bus.publish(PipelineEvent(
+                type="exploration_complete",
+                payload={
+                    "snapshot_id": snap_id,
+                    "symbols": triage.symbols,
+                    "headline": trigger.headline,
+                    "direction": signal.direction if signal else None,
+                    "confidence": signal.confidence if signal else None,
+                    "agents": len(pipeline_result.rounds),
+                    "tool_calls": len(pipeline_result.all_tool_traces),
+                    "rounds_completed": pipeline_result.rounds_completed,
+                },
+            ))
+
+            # Optional: explicit acquisition of web evidence for auditability.
+            if settings.evidence_acquire_enabled:
+                try:
+                    ar = acquire_from_traces(
+                        traces=pipeline_result.all_tool_traces,
+                        evidence_root=Path(settings.data_dir) / "evidence",
+                        max_docs=settings.evidence_max_docs_per_item,
+                        extractor=settings.evidence_extractor,
+                    )
+                    # Add acquisition traces after exploration traces
+                    for t in ar.traces:
+                        # Ensure hop indexes are monotonic in the final snapshot
+                        t["hop_index"] = len(builder.tool_traces) + 1
+                        builder.add_tool_trace(t)
+                except Exception as e:
+                    if DEBUG:
+                        raise
+                    bus.publish(PipelineEvent(type="evidence_acquire_error", payload={"error": str(e)}))
+
+            # Optional: attach a small snapshot of X cache as evidence.
+            # Only relevant for fresh news where a burst was actually started.
+            if xstream is not None and settings.x_stream_enabled and _news_is_fresh(trigger):
+                try:
+                    x_items = xstream.get_recent_posts(key="_all", limit=10)
+                    if x_items:
+                        from trader.models.tool_trace import TraceExecution, new_tool_trace, utc_now_iso
+
+                        builder.add_tool_trace(
+                            new_tool_trace(
+                                trace_id=f"trace_x_cache_{int(time.time())}",
+                                hop_index=len(builder.tool_traces) + 1,
+                                parent_trace_id=None,
+                                decision_context={
+                                    "state_summary": "",
+                                    "reason_for_action": "Attach recent X stream cache posts",
+                                    "symbols": symbols,
+                                },
+                                action={
+                                    "tool": "x_stream_cache",
+                                    "provider": "xapi",
+                                    "query_template": "x_stream_cache_recent",
+                                    "query": "_all",
+                                    "filters": {"limit": 10},
+                                },
+                                execution=TraceExecution(model="xapi", start_time=utc_now_iso(), end_time=utc_now_iso(), cost_usd=0.0),
+                                results=[{"source_type": "x_stream", "title": "x_post", "snippet": json.dumps(x, ensure_ascii=False)[:800]} for x in x_items],
+                                extracted_signals={"posts_included": len(x_items)},
+                                stop_signal={"should_stop": False, "reason": ""},
+                            )
+                        )
+                except Exception as e:
+                    if DEBUG:
+                        raise
+                    bus.publish(PipelineEvent(type="x_cache_attach_error", payload={"error": str(e)}))
 
         # Stop Schwab streaming
         if market is not None and market.schwab_available:
