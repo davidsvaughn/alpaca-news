@@ -209,7 +209,7 @@ def load_settings(*, dotenv_path: str | None = None, override: bool = False) -> 
     x_usage_poll_interval_s = _env_int("X_USAGE_POLL_INTERVAL_S", 300)
     x_min_triage_confidence_for_burst = _env_float("X_MIN_TRIAGE_CONFIDENCE_FOR_BURST", 0.75)
     x_stream_quality_check_enabled = _env_bool("X_STREAM_QUALITY_CHECK_ENABLED", True)
-    x_stream_quality_check_after = _env_int("X_STREAM_QUALITY_CHECK_AFTER", 5)
+    x_stream_quality_check_after = _env_int("X_STREAM_QUALITY_CHECK_AFTER", 3)
     x_stream_quality_check_model = _env_str("X_STREAM_QUALITY_CHECK_MODEL", "gemini-3-flash") or "gemini-3-flash"
     x_stream_quality_max_retries = _env_int("X_STREAM_QUALITY_MAX_RETRIES", 3)
 

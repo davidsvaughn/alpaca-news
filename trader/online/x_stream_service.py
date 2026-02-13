@@ -183,6 +183,28 @@ class XStreamService:
         self._current_burst_thread = t
         t.start()
 
+    def _flush_posts(
+        self,
+        posts: list[dict[str, Any]],
+        log_path: Path,
+    ) -> None:
+        """Persist, cache, and publish posts that passed the quality gate."""
+        for obj in posts:
+            # Persist JSONL
+            with log_path.open("a", encoding="utf-8") as f:
+                f.write(json.dumps(obj, ensure_ascii=False) + "\n")
+
+            # Cache by tag AND _all
+            tags = [
+                r.get("tag") for r in (obj.get("matching_rules") or []) if r.get("tag")
+            ]
+            with self._lock:
+                self._cache["_all"].append(obj)
+                for tag in tags:
+                    self._cache[tag].append(obj)
+
+            self.bus.publish(PipelineEvent(type="x_post", payload={"post": obj}))
+
     def _run_burst(
         self,
         *,
@@ -220,8 +242,9 @@ class XStreamService:
             created_ids = [str(x.get("id")) for x in created if x.get("id")]
 
             # 2) Stream + quality gate
+            # Posts are BUFFERED until quality check passes (fail-closed).
             collected: list[dict[str, Any]] = []
-            quality_passed = False
+            quality_passed = quality_check is None  # no check = auto-pass
             verdict: QualityVerdict | None = None
 
             try:
@@ -238,24 +261,18 @@ class XStreamService:
                             f"X posts guard tripped: total_posts={total_posts} max={self.guards.max_posts_per_day}"
                         )
 
-                    # Persist JSONL
-                    with log_path.open("a", encoding="utf-8") as f:
-                        f.write(json.dumps(obj, ensure_ascii=False) + "\n")
-
-                    # Cache
-                    with self._lock:
-                        self._cache["_all"].append(obj)
-
-                    self.bus.publish(PipelineEvent(type="x_post", payload={"post": obj}))
+                    if quality_passed:
+                        # Already passed — flush this post immediately
+                        self._flush_posts([obj], log_path)
+                    # else: buffered silently, waiting for quality check
 
                     # Quality gate: check once per attempt after N tweets
                     if (
                         not quality_passed
-                        and quality_check is not None
                         and len(collected) >= quality_check_after
                     ):
                         try:
-                            verdict = quality_check(collected, current_rules)
+                            verdict = quality_check(collected, current_rules)  # type: ignore[misc]
                             self.bus.publish(PipelineEvent(
                                 type="x_burst_quality",
                                 payload={
@@ -270,6 +287,8 @@ class XStreamService:
                             ))
                             if verdict.relevant:
                                 quality_passed = True
+                                # Flush buffered posts now that quality is confirmed
+                                self._flush_posts(collected, log_path)
                             else:
                                 break  # stop streaming, will retry below
                         except Exception as e:
@@ -279,8 +298,8 @@ class XStreamService:
                                 type="x_burst_quality_error",
                                 payload={"error": str(e), "attempt": attempt + 1},
                             ))
-                            # Quality check failure is non-fatal; continue streaming
-                            quality_passed = True
+                            # FAIL-CLOSED: quality check error = stop this attempt
+                            break
 
                     # Global TTL check
                     if time.time() - global_start >= ttl_s:
@@ -299,8 +318,11 @@ class XStreamService:
                         ))
 
             # Decide: success, give up, or retry
-            if quality_passed or verdict is None:
-                break  # quality passed or no quality check configured/triggered
+            if quality_passed:
+                break  # quality passed (or no check configured)
+
+            if verdict is None:
+                break  # quality check never triggered (too few posts) or error
 
             # Retry with revised rules if available
             if verdict.revised_rule_values and attempt < max_quality_retries:
@@ -341,25 +363,43 @@ class XStreamService:
         self._burst_stop_evt.set()
 
 
-def build_rules_for_symbols(*, symbols: list[str]) -> list[StreamRule]:
+def build_rules_for_symbols(
+    *,
+    symbols: list[str],
+    company_names: dict[str, str] | None = None,
+) -> list[StreamRule]:
     """Build X stream filter rules for stock symbols.
 
     Strategy:
     - Always include $TICKER cashtag (high signal)
+    - For short/ambiguous tickers (< 5 chars), also require context:166.*
+      (X Stocks domain) to ensure financial relevance
+    - If a company name is provided, include it as an alternative match
     - Only include bare TICKER word for longer/uncommon tickers (5+ chars)
-      to avoid matching common words (PARA, AI, ON, A, F, etc.)
     - Exclude retweets, English only
+
+    The context:166.* operator requires Pro tier. If not available, the
+    quality gate serves as fallback.
     """
+    names = company_names or {}
     out: list[StreamRule] = []
     for s in symbols[:3]:  # cap tightness in the rule set
         sym = s.strip().upper()
         if not sym:
             continue
+
+        name = names.get(sym)
+
         if len(sym) >= 5:
             # Longer tickers are unlikely to be common words
             value = f"({sym} OR ${sym}) -is:retweet lang:en"
+        elif name:
+            # Short ticker + known company name: use both for better signal
+            value = f"(${sym} OR \"{name}\") -is:retweet lang:en"
         else:
-            # Short tickers: cashtag only to avoid noise
-            value = f"${sym} -is:retweet lang:en"
+            # Short ticker, no company name: require Stocks domain context
+            # (context:166.* = X's ML classification for stock-related content)
+            # Falls back to cashtag-only if context: operator unavailable
+            value = f"${sym} context:166.* -is:retweet lang:en"
         out.append(StreamRule(value=value, tag=sym))
     return out
