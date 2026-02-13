@@ -96,6 +96,7 @@ TOOL_MODALITY: dict[str, str] = {
     "check_insider_activity": "fundamentals",
     "get_company_news": "news",
     "get_finnhub_news": "news",
+    "get_analyst_ratings": "fundamentals",
     "url_fetch": "web_research",
     "web_search": "web_research",
     "x_search": "social",
@@ -257,6 +258,36 @@ def get_finnhub_news(ctx: RunContext[ExplorerDeps], symbol: str, days_back: int 
             "related": a.get("related", ""),
         })
     return json.dumps({"symbol": symbol, "count": len(articles), "articles": trimmed}, default=str)
+
+
+@market_toolset.tool
+def get_analyst_ratings(ctx: RunContext[ExplorerDeps], symbol: str) -> str:
+    """Get analyst recommendation trends for a stock. Free (FinnHub, 60 req/min).
+    Shows monthly buy/hold/sell distribution and how consensus is shifting.
+    Use to understand where Wall Street stands and whether sentiment is changing.
+
+    Args:
+        symbol: Stock ticker (e.g. 'AAPL', 'NVDA')
+    """
+    from trader.market.finnhub_client import get_recommendation_trends
+
+    trends = get_recommendation_trends(symbol)
+    if not trends:
+        return json.dumps({"symbol": symbol, "trends": [], "note": "No data or FINNHUB_API_KEY not set"})
+    # Return last 6 months for trend visibility
+    trimmed = []
+    for t in trends[:6]:
+        total = t.get("buy", 0) + t.get("hold", 0) + t.get("sell", 0) + t.get("strongBuy", 0) + t.get("strongSell", 0)
+        trimmed.append({
+            "period": t.get("period", ""),
+            "strongBuy": t.get("strongBuy", 0),
+            "buy": t.get("buy", 0),
+            "hold": t.get("hold", 0),
+            "sell": t.get("sell", 0),
+            "strongSell": t.get("strongSell", 0),
+            "total_analysts": total,
+        })
+    return json.dumps({"symbol": symbol, "trends": trimmed}, default=str)
 
 
 @market_toolset.tool
@@ -619,10 +650,13 @@ def _build_user_message(news: dict[str, Any], symbols: list[str]) -> str:
         text = _strip_html(content).strip()
         if text and text != news.get("summary", ""):
             parts.append(f"\n## Full article content\n{text}")
-    # Auto-fetch recent FinnHub news for primary symbols
+    # Auto-fetch FinnHub context for primary symbols
     finnhub_section = _fetch_finnhub_context(symbols)
     if finnhub_section:
         parts.append(finnhub_section)
+    earnings_section = _fetch_earnings_context(symbols)
+    if earnings_section:
+        parts.append(earnings_section)
     return "\n".join(parts)
 
 
@@ -677,6 +711,35 @@ def _fetch_finnhub_context(symbols: list[str]) -> str:
     if not sections:
         return ""
     return "\n## Recent news coverage (FinnHub)\n" + "\n\n".join(sections)
+
+
+def _fetch_earnings_context(symbols: list[str]) -> str:
+    """Fetch earnings data for primary symbols and format for the prompt.
+
+    Returns a markdown section string, or empty string if unavailable.
+    """
+    if not symbols or not os.getenv("FINNHUB_API_KEY"):
+        return ""
+    try:
+        from trader.market.finnhub_client import (
+            get_earnings_surprises,
+            get_earnings_calendar,
+            format_earnings_for_prompt,
+        )
+    except ImportError:
+        return ""
+
+    sections: list[str] = []
+    for sym in symbols[:3]:
+        surprises = get_earnings_surprises(sym, limit=4)
+        calendar = get_earnings_calendar(sym)
+        formatted = format_earnings_for_prompt(surprises, calendar)
+        if formatted:
+            sections.append(f"### {sym}\n{formatted}")
+
+    if not sections:
+        return ""
+    return "\n## Earnings context (FinnHub)\n" + "\n\n".join(sections)
 
 
 def _budget_summary(ctx: RunContext[ExplorerDeps]) -> str:
