@@ -96,7 +96,14 @@ def main() -> None:
             ok = 0
             for i, p in enumerate(targets, 1):
                 print(f"Backfill [{i}/{total}]: {p.name}")
-                tracker.update("backfill_main", progress=f"{i}/{total}")
+                # Extract symbols from the file for dashboard display
+                try:
+                    import json as _json
+                    _news = _json.loads(p.read_text(encoding="utf-8"))
+                    _syms = [str(s) for s in (_news.get("symbols") or [])]
+                except Exception:
+                    _syms = []
+                tracker.update("backfill_main", progress=f"{i}/{total}", symbols=_syms, label=p.name)
                 bus.publish(PipelineEvent(type="backfill_progress", payload={"current": i, "total": total, "file": p.name}))
                 try:
                     process_news_file(path=p, settings=settings, db=db, knowledge=knowledge, bus=bus, xstream=None, tracker=tracker)

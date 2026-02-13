@@ -65,6 +65,57 @@ def create_app(
 
     templates.env.filters["to_json"] = _to_json
 
+    # Custom filter: format ISO timestamps to human-readable local time
+    def _fmt_dt(value: Any, fmt: str = "short") -> str:
+        """Convert ISO timestamp string to readable format.
+
+        fmt="short"  → "Feb 13 4:32 PM"  (no year, for recent items)
+        fmt="long"   → "Feb 13, 2026 4:32 PM"
+        fmt="full"   → "Feb 13, 2026 4:32:45 PM"
+        """
+        if not value:
+            return "?"
+        from datetime import datetime as _dt, timezone as _tz
+        s = str(value).strip()
+        # Parse various ISO formats
+        for pattern in (
+            "%Y-%m-%dT%H:%M:%S.%f%z",
+            "%Y-%m-%dT%H:%M:%S%z",
+            "%Y-%m-%dT%H:%M:%S.%f",
+            "%Y-%m-%dT%H:%M:%S",
+            "%Y-%m-%d %H:%M:%S.%f%z",
+            "%Y-%m-%d %H:%M:%S%z",
+            "%Y-%m-%d %H:%M:%S.%f",
+            "%Y-%m-%d %H:%M:%S",
+        ):
+            try:
+                dt = _dt.strptime(s, pattern)
+                break
+            except ValueError:
+                continue
+        else:
+            return s  # unparseable — return as-is
+
+        # Normalize to UTC if no tzinfo
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=_tz.utc)
+
+        # Convert to US Eastern (server-side best guess for user's local)
+        try:
+            from zoneinfo import ZoneInfo
+            dt = dt.astimezone(ZoneInfo("US/Eastern"))
+        except Exception:
+            pass  # fall back to UTC
+
+        if fmt == "short":
+            return dt.strftime("%b %d %-I:%M %p")
+        elif fmt == "long":
+            return dt.strftime("%b %d, %Y %-I:%M %p")
+        else:  # full
+            return dt.strftime("%b %d, %Y %-I:%M:%S %p")
+
+    templates.env.filters["fmt_dt"] = _fmt_dt
+
     # ------------------------------------------------------------------
     # Page routes
     # ------------------------------------------------------------------

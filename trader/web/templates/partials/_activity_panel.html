@@ -12,8 +12,9 @@
   {% for a in backfills %}
   <div class="d-flex align-items-center gap-2 ms-2 my-1 small">
     <div class="spinner-border spinner-border-sm text-info" role="status"></div>
-    <span class="fw-semibold">{{ a.progress }}</span>
-    <span class="text-muted">{{ a.label }}</span>
+    {% for s in a.symbols %}<span class="badge bg-primary">{{ s }}</span>{% endfor %}
+    <span class="badge bg-secondary">{{ a.progress }}</span>
+    <span class="text-muted">{{ a.label[:50] }}{% if a.label|length > 50 %}...{% endif %}</span>
     {% if a.cost_usd > 0 %}<span class="text-warning">${{ "%.4f"|format(a.cost_usd) }}</span>{% endif %}
   </div>
   {% endfor %}

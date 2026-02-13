@@ -17,7 +17,7 @@
     <tbody>
       {% for s in snapshots %}
       <tr>
-        <td class="small text-muted text-nowrap">{{ s.created_at[:16] }}</td>
+        <td class="small text-muted text-nowrap">{{ s.created_at | fmt_dt("short") }}</td>
         <td class="text-truncate" style="max-width: 300px;">{{ s.trigger.headline }}</td>
         <td>
           {% for sym in s.trigger.symbols %}

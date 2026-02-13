@@ -210,7 +210,7 @@ def load_settings(*, dotenv_path: str | None = None, override: bool = False) -> 
     x_min_triage_confidence_for_burst = _env_float("X_MIN_TRIAGE_CONFIDENCE_FOR_BURST", 0.75)
     x_stream_quality_check_enabled = _env_bool("X_STREAM_QUALITY_CHECK_ENABLED", True)
     x_stream_quality_check_after = _env_int("X_STREAM_QUALITY_CHECK_AFTER", 3)
-    x_stream_quality_check_model = _env_str("X_STREAM_QUALITY_CHECK_MODEL", "gemini-3-flash") or "gemini-3-flash"
+    x_stream_quality_check_model = _env_str("X_STREAM_QUALITY_CHECK_MODEL", "gemini-3-flash-preview") or "gemini-3-flash-preview"
     x_stream_quality_max_retries = _env_int("X_STREAM_QUALITY_MAX_RETRIES", 3)
 
     evidence_acquire_enabled = _env_bool("EVIDENCE_ACQUIRE_ENABLED", False)
@@ -226,7 +226,7 @@ def load_settings(*, dotenv_path: str | None = None, override: bool = False) -> 
     watch_monitoring_budget = _env_float("WATCH_MONITORING_BUDGET", 0.50)
     watch_max_hold_minutes = _env_int("WATCH_MAX_HOLD_MINUTES", 240)
     watch_max_retro_minutes = _env_int("WATCH_MAX_RETRO_MINUTES", 60)
-    watch_checkin_model = _env_str("WATCH_CHECKIN_MODEL", "gemini-3-flash") or "gemini-3-flash"
+    watch_checkin_model = _env_str("WATCH_CHECKIN_MODEL", "gemini-3-flash-preview") or "gemini-3-flash-preview"
 
     # Follow-up data collection
     follow_up_enabled = _env_bool("FOLLOW_UP_ENABLED", True)
@@ -236,7 +236,7 @@ def load_settings(*, dotenv_path: str | None = None, override: bool = False) -> 
     follow_up_max_cost = _env_float("FOLLOW_UP_MAX_COST", 0.20)
     follow_up_max_concurrent = _env_int("FOLLOW_UP_MAX_CONCURRENT", 20)
     follow_up_collector_interval_s = _env_int("FOLLOW_UP_COLLECTOR_INTERVAL_S", 300)
-    follow_up_planner_model = _env_str("FOLLOW_UP_PLANNER_MODEL", "gemini-3-flash") or "gemini-3-flash"
+    follow_up_planner_model = _env_str("FOLLOW_UP_PLANNER_MODEL", "gemini-3-flash-preview") or "gemini-3-flash-preview"
 
     # Pipeline per-agent limits
     pipeline_request_limit = _env_int("PIPELINE_REQUEST_LIMIT", 15)

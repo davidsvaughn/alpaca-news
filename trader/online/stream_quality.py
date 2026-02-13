@@ -80,7 +80,7 @@ def check_stream_quality(
     summary: str,
     current_rules: list[StreamRule],
     llm: LLMClient,
-    model: str = "gemini-3-flash",
+    model: str = "gemini-3-flash-preview",
     provider: str = "gemini",
 ) -> QualityVerdict:
     """Evaluate whether stream tweets are relevant to the news context."""
