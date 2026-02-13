@@ -628,7 +628,7 @@ no build step.
 
 | Page | URL | Features |
 |------|-----|----------|
-| Dashboard | `/` | Stats cards (HTMX polling), active watches, manual explore form, live SSE event feed |
+| Dashboard | `/` | Stats cards (HTMX polling), activity panel (10s refresh), active watches, manual explore form, live SSE event feed |
 | Watches | `/watches` | Filterable table by status, force-exit buttons, detail pages with full lifecycle view |
 | Snapshots | `/snapshots` | Filterable table by symbol, detail pages with pipeline timeline + collapsible agent rounds + tool traces |
 | Costs | `/costs` | Budget progress bar, Chart.js daily trend + tool breakdown doughnut, history table |
@@ -640,6 +640,13 @@ no build step.
 - Force exit watch at current market price
 - Manual exploration trigger (headline + symbols → full pipeline in background thread)
 - Knowledge file editing (JSON validation, whitelist-guarded)
+
+**Activity panel:** Shows all in-flight operations categorized by type (backfill, exploration,
+follow-up collection, scheduled follow-ups). Each item shows progress, symbols, cost. Powered
+by `ActivityTracker` — thread-safe in-memory state read by `/api/activity-panel` endpoint.
+
+**Real-time costs:** Daily Cost card shows `sealed + inflight` cost. Inflight cost comes from
+`ActivityTracker.get_inflight_cost()`, updated as explorations accumulate LLM spend.
 
 **Real-time:** SSE connection with green/red indicator, toast notifications for key events
 (watch created/exited, snapshot sealed, explore complete/error), HTMX auto-refresh panels.
@@ -667,6 +674,7 @@ trader/
 │   ├── agent_pipeline.py           # Multi-agent sequential pipeline
 │   ├── watcher.py                  # Watch monitoring scheduler
 │   ├── follow_up_collector.py      # Follow-up data collection daemon
+│   ├── activity_tracker.py         # Thread-safe in-flight activity tracking
 │   ├── backfill.py                 # Batch reprocessing
 │   ├── x_stream_service.py         # X stream burst service
 │   └── stream_quality.py           # LLM quality gate for stream bursts
@@ -698,7 +706,7 @@ trader/
 ├── web/                            # FastAPI dashboard (HTMX + Bootstrap 5)
 │   ├── app.py                     # Routes (pages, API fragments, control actions)
 │   ├── sse.py                     # SSE helpers
-│   └── templates/                 # Jinja2: base, 7 pages, 9 partials
+│   └── templates/                 # Jinja2: base, 7 pages, 10 partials
 └── data/                           # Runtime data (gitignored)
     ├── snapshots/                  # Sealed Snapshot JSON files
     ├── watches/                    # Watch JSON files

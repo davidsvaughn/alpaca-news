@@ -31,7 +31,11 @@
           <div class="progress-bar {% if pct > 80 %}bg-danger{% elif pct > 50 %}bg-warning{% else %}bg-success{% endif %}"
                style="width: {{ pct_clamped }}%"></div>
         </div>
+        {% if inflight_cost is defined and inflight_cost > 0 %}
+        <div class="small text-muted mt-1">${{ "%.4f"|format(daily_cost - inflight_cost) }} sealed + ${{ "%.4f"|format(inflight_cost) }} in-flight | ${{ "%.2f"|format(max_daily_cost) }} budget</div>
+        {% else %}
         <div class="small text-muted mt-1">${{ "%.2f"|format(max_daily_cost) }} budget</div>
+        {% endif %}
       </div>
     </div>
   </div>

@@ -39,6 +39,9 @@
 | Follow-up query planning | LLM planner (gemini-3-flash) before mechanical collection | Template queries too generic. LLM planner proposes context-aware queries informed by headline, prediction, prior collection results. ~$0.001 per call |
 | Follow-up search API | Direct httpx to Grok API (no PydanticAI agent) | No agent reasoning needed for mechanical data collection. Direct API calls are simpler, cheaper, and more predictable. Same pattern as x_search function tool |
 | Query effectiveness | Simple heuristic (answer length > 100 chars) | Avoids costly LLM evaluation of search quality. Good enough to identify dead-end queries. LLM planner uses quality feedback to adjust subsequent queries |
+| Activity tracking | In-memory ActivityTracker (not DB) | Dashboard needs sub-second reads; operations are transient; no value in persisting "currently running" state across restarts |
+| In-flight cost visibility | ActivityTracker accumulates per-activity cost, summed for dashboard | CostTracker is per-item ephemeral; daily cost only reflects sealed snapshots. ActivityTracker bridges the gap with real-time cost_usd per activity |
+| Activity panel refresh | HTMX polling every 10s + SSE-triggered immediate | 10s is responsive enough for activity changes; SSE events trigger immediate refresh on state transitions (backfill progress, snapshot sealed) |
 
 ---
 

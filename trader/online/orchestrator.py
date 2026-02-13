@@ -159,6 +159,7 @@ def process_news_file(
     knowledge: KnowledgeStore,
     bus: EventBus,
     xstream: XStreamService | None = None,
+    tracker: "ActivityTracker | None" = None,
 ) -> None:
     news = _load_news_json(path)
 
@@ -194,6 +195,19 @@ def process_news_file(
         "headline": trigger.headline,
         "symbols": trigger.symbols,
     }))
+
+    # Activity tracking for dashboard visibility
+    _act_id = f"explore_{snap_id}"
+    if tracker is not None:
+        from trader.online.activity_tracker import Activity
+        tracker.start(Activity(
+            id=_act_id,
+            type="exploration",
+            label=trigger.headline[:80] if trigger.headline else path.name,
+            symbols=trigger.symbols[:3],
+            progress="triage",
+            detail={"snapshot_id": snap_id},
+        ))
 
     cost_tracker = CostTracker(
         max_daily_cost=settings.max_daily_cost,
@@ -239,6 +253,13 @@ def process_news_file(
 
     if triage.skip_patterns_learned:
         knowledge.append_skip_keywords(triage.skip_patterns_learned)
+
+    # Update activity after triage
+    if tracker is not None:
+        if triage.action != "investigate":
+            tracker.update(_act_id, progress="skip", cost_usd=cost_tracker.item_spent)
+        else:
+            tracker.update(_act_id, progress="exploring", cost_usd=cost_tracker.item_spent)
 
     # --- Stage 2: Exploration (if investigate) ---
     signal = None  # set inside investigate block, used for watch creation
@@ -368,6 +389,11 @@ def process_news_file(
                     if DEBUG:
                         print(f"WARN: Cost estimation failed for agent {agent_name}: {e}")
 
+            # Update activity with pipeline cost
+            if tracker is not None:
+                agents_done = len(pipeline_result.rounds)
+                tracker.update(_act_id, progress=f"agent {agents_done}/{agents_done}", cost_usd=cost_tracker.item_spent)
+
             # Store the TradingSignal as the snapshot prediction (if produced)
             signal = pipeline_result.signal
             if signal is not None:
@@ -456,6 +482,10 @@ def process_news_file(
     # the observed costs per executed action (web_search / x_search / market, etc.).
     builder.set_cost_total(cost_tracker.item_spent)
 
+    # Finish activity tracking (cost now reflected in sealed snapshot)
+    if tracker is not None:
+        tracker.update(_act_id, progress="sealing", cost_usd=cost_tracker.item_spent)
+
     # --- Seal snapshot ---
     snapshot = builder.seal()
 
@@ -476,6 +506,10 @@ def process_news_file(
             "confidence": snapshot.prediction.get("confidence") if snapshot.prediction else None,
         })
     )
+
+    # Activity complete — cost now in sealed snapshot
+    if tracker is not None:
+        tracker.finish(_act_id)
 
     # --- Stage 3: Watch creation (if high confidence) ---
     if (
@@ -606,6 +640,7 @@ def _worker_loop(
     knowledge: KnowledgeStore,
     bus: EventBus,
     xstream: XStreamService | None = None,
+    tracker: "ActivityTracker | None" = None,
 ) -> None:
     """Pull paths from the queue and process them one at a time."""
     while True:
@@ -621,6 +656,7 @@ def _worker_loop(
                 knowledge=knowledge,
                 bus=bus,
                 xstream=xstream,
+                tracker=tracker,
             )
         except Exception as e:
             if DEBUG:
@@ -637,6 +673,7 @@ def run_watch_loop(
     knowledge: KnowledgeStore,
     bus: EventBus,
     xstream: XStreamService | None = None,
+    tracker: "ActivityTracker | None" = None,
 ) -> None:
     """Start watchdog observer + worker thread, block forever."""
     import threading
@@ -656,6 +693,7 @@ def run_watch_loop(
             "knowledge": knowledge,
             "bus": bus,
             "xstream": xstream,
+            "tracker": tracker,
         },
         daemon=True,
     )
@@ -684,7 +722,7 @@ def run_watch_loop(
     if settings.follow_up_enabled:
         from trader.online.follow_up_collector import FollowUpCollector, collector_loop
 
-        fu_collector = FollowUpCollector(settings=settings, db=db, bus=bus)
+        fu_collector = FollowUpCollector(settings=settings, db=db, bus=bus, tracker=tracker)
         fu_thread = threading.Thread(
             target=collector_loop,
             args=(fu_collector, settings.follow_up_collector_interval_s),

@@ -1,0 +1,69 @@
+{% set backfills = activities | selectattr("type", "equalto", "backfill") | list %}
+{% set explorations = activities | selectattr("type", "equalto", "exploration") | list %}
+{% set fu_collections = activities | selectattr("type", "equalto", "follow_up_collection") | list %}
+
+{% if not activities and not follow_ups %}
+<div class="text-muted small py-1">No active operations</div>
+{% else %}
+
+{% if backfills %}
+<div class="mb-2">
+  <span class="badge bg-info text-dark">Backfill</span>
+  {% for a in backfills %}
+  <div class="d-flex align-items-center gap-2 ms-2 my-1 small">
+    <div class="spinner-border spinner-border-sm text-info" role="status"></div>
+    <span class="fw-semibold">{{ a.progress }}</span>
+    <span class="text-muted">{{ a.label }}</span>
+    {% if a.cost_usd > 0 %}<span class="text-warning">${{ "%.4f"|format(a.cost_usd) }}</span>{% endif %}
+  </div>
+  {% endfor %}
+</div>
+{% endif %}
+
+{% if explorations %}
+<div class="mb-2">
+  <span class="badge bg-primary">Exploring</span>
+  <span class="text-muted small ms-1">({{ explorations|length }})</span>
+  {% for a in explorations %}
+  <div class="d-flex align-items-center gap-2 ms-2 my-1 small">
+    <div class="spinner-border spinner-border-sm text-primary" role="status"></div>
+    {% for s in a.symbols %}<span class="badge bg-primary">{{ s }}</span>{% endfor %}
+    <span class="text-muted">{{ a.label[:50] }}{% if a.label|length > 50 %}...{% endif %}</span>
+    <span class="badge bg-secondary">{{ a.progress }}</span>
+    {% if a.cost_usd > 0 %}<span class="text-warning">${{ "%.4f"|format(a.cost_usd) }}</span>{% endif %}
+  </div>
+  {% endfor %}
+</div>
+{% endif %}
+
+{% if fu_collections %}
+<div class="mb-2">
+  <span class="badge bg-secondary">Follow-up Collection</span>
+  {% for a in fu_collections %}
+  <div class="d-flex align-items-center gap-2 ms-2 my-1 small">
+    <div class="spinner-border spinner-border-sm text-secondary" role="status"></div>
+    {% for s in a.symbols %}<span class="badge bg-primary">{{ s }}</span>{% endfor %}
+    <span class="text-muted">{{ a.progress }}</span>
+  </div>
+  {% endfor %}
+</div>
+{% endif %}
+
+{% if follow_ups %}
+<div class="mb-2">
+  <span class="badge bg-dark">Scheduled Follow-ups</span>
+  <span class="text-muted small ms-1">{{ follow_ups|length }} active</span>
+  {% for fu in follow_ups[:5] %}
+  <div class="ms-2 my-1 small text-muted">
+    {{ fu.symbols | join(", ") }}
+    <span class="badge bg-secondary">{{ fu.reason }}</span>
+    next: {{ fu.next_offset }} ({{ fu.collections_done }}/{{ fu.total_scheduled }})
+  </div>
+  {% endfor %}
+  {% if follow_ups|length > 5 %}
+  <div class="ms-2 small text-muted">+{{ follow_ups|length - 5 }} more</div>
+  {% endif %}
+</div>
+{% endif %}
+
+{% endif %}

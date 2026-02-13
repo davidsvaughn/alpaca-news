@@ -16,10 +16,12 @@ from fastapi.templating import Jinja2Templates
 from trader.config import Settings, load_settings
 from trader.db.database import (
     Database,
+    count_active_follow_ups,
     count_all_watches,
     count_snapshots,
     count_snapshots_today,
     count_watches_by_status,
+    get_active_follow_ups,
     get_active_watches,
     get_all_follow_ups,
     get_all_snapshots,
@@ -35,6 +37,7 @@ from trader.db.database import (
 )
 from trader.knowledge.store import KnowledgeStore
 from trader.models.watch import WatchBuilder
+from trader.online.activity_tracker import ActivityTracker
 from trader.online.event_bus import EventBus, PipelineEvent
 from trader.reflection.eval_record import build_eval_record
 from trader.web.sse import sse_response
@@ -46,6 +49,7 @@ def create_app(
     bus: EventBus,
     db: Database,
     knowledge: KnowledgeStore,
+    tracker: ActivityTracker | None = None,
 ) -> FastAPI:
     app = FastAPI(title="alpaca-news dashboard")
     app.state.settings = settings  # mutable ref for hot-reload
@@ -193,6 +197,8 @@ def create_app(
     @app.get("/api/stats", response_class=HTMLResponse)
     async def api_stats(request: Request):
         counts = count_watches_by_status(db)
+        inflight = tracker.get_inflight_cost() if tracker else 0.0
+        sealed_cost = get_daily_cost_today(db)
         return templates.TemplateResponse(
             request=request,
             name="partials/_stats_cards.html",
@@ -201,7 +207,8 @@ def create_app(
                 "exited_count": counts.get("exited", 0),
                 "retro_count": counts.get("retrospective", 0),
                 "snapshots_today": count_snapshots_today(db),
-                "daily_cost": get_daily_cost_today(db),
+                "daily_cost": sealed_cost + inflight,
+                "inflight_cost": inflight,
                 "max_daily_cost": app.state.settings.max_daily_cost,
             },
         )
@@ -209,13 +216,15 @@ def create_app(
     @app.get("/api/stats-bar", response_class=HTMLResponse)
     async def api_stats_bar(request: Request):
         counts = count_watches_by_status(db)
+        inflight = tracker.get_inflight_cost() if tracker else 0.0
+        sealed_cost = get_daily_cost_today(db)
         return templates.TemplateResponse(
             request=request,
             name="partials/_stats_bar.html",
             context={
                 "holding_count": counts.get("holding", 0),
                 "snapshots_today": count_snapshots_today(db),
-                "daily_cost": get_daily_cost_today(db),
+                "daily_cost": sealed_cost + inflight,
                 "max_daily_cost": app.state.settings.max_daily_cost,
             },
         )
@@ -245,6 +254,32 @@ def create_app(
             request=request,
             name="partials/_snapshots_table.html",
             context={"snapshots": [_DictObj(s) for s in snaps]},
+        )
+
+    @app.get("/api/activity-panel", response_class=HTMLResponse)
+    async def api_activity_panel(request: Request):
+        activities = tracker.get_all() if tracker else []
+        active_fus = get_active_follow_ups(db)
+        # Enrich follow-ups with schedule progress info
+        fu_summaries = []
+        for fu in active_fus:
+            fj = fu.get("follow_up_json", fu) if isinstance(fu, dict) else fu
+            schedule = fj.get("schedule", [])
+            collections = fj.get("collections", [])
+            fu_summaries.append({
+                "symbols": fj.get("symbols", []),
+                "reason": fj.get("reason", ""),
+                "collections_done": len(collections),
+                "total_scheduled": len(schedule),
+                "next_offset": schedule[len(collections)] if len(collections) < len(schedule) else "done",
+            })
+        return templates.TemplateResponse(
+            request=request,
+            name="partials/_activity_panel.html",
+            context={
+                "activities": [dataclasses.asdict(a) for a in activities],
+                "follow_ups": fu_summaries,
+            },
         )
 
     # ------------------------------------------------------------------

@@ -18,6 +18,17 @@
   <div class="text-center text-muted py-3">Loading stats...</div>
 </div>
 
+<!-- Activity Panel (HTMX-loaded) -->
+<div class="d-flex align-items-center mb-2 mt-2">
+  <h5 class="mb-0">Activity</h5>
+</div>
+<div id="activity-panel"
+     hx-get="/api/activity-panel"
+     hx-trigger="load, every 10s, sse-refresh from:body"
+     hx-swap="innerHTML">
+  <div class="text-center text-muted py-2">Loading...</div>
+</div>
+
 <!-- Active Watches -->
 <div class="d-flex align-items-center mb-2 mt-2">
   <h5 class="mb-0">Active Watches</h5>
@@ -87,7 +98,12 @@
     manual_explore_started: 'primary',
     manual_explore_complete: 'success',
     manual_explore_error: 'danger',
-    knowledge_updated: 'info'
+    knowledge_updated: 'info',
+    backfill_started: 'info',
+    backfill_progress: 'secondary',
+    backfill_complete: 'success',
+    follow_up_collection: 'secondary',
+    follow_up_complete: 'info'
   };
 
   function snapLink(id, label) {
@@ -156,6 +172,16 @@
         return (p.headline || '').slice(0, 40) + ' ERROR: ' + (p.error || '').slice(0, 60);
       case 'knowledge_updated':
         return p.filename + ' saved';
+      case 'backfill_started':
+        return '<span class="feed-dim">Processing ' + (p.total||0) + ' files</span>';
+      case 'backfill_progress':
+        return '<span class="feed-dim">[' + (p.current||0) + '/' + (p.total||0) + '] ' + (p.file||'') + '</span>';
+      case 'backfill_complete':
+        return (p.succeeded||0) + '/' + (p.total||0) + ' succeeded';
+      case 'follow_up_collection':
+        return symBadges(p.symbols) + ' ' + (p.offset_label||'') + ' ($' + (p.cost_usd||0).toFixed(4) + ')';
+      case 'follow_up_complete':
+        return symBadges(p.symbols) + ' complete (' + (p.collections||0) + ' collections, $' + (p.total_cost_usd||0).toFixed(4) + ')';
       case 'x_burst_quality':
         return (p.relevant ? '\u2705 RELEVANT' : '\u274c IRRELEVANT')
           + ' (' + ((p.confidence||0)*100).toFixed(0) + '%) '

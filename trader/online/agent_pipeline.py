@@ -175,7 +175,7 @@ def build_default_pipeline() -> PipelineConfig:
     # Agent 2: OpenAI (web_search + strong reasoning)
     openai_key = os.getenv("OPENAI_API_KEY")
     if openai_key:
-        openai_model = os.getenv("RESEARCH_MODEL", "gpt-5-mini")
+        openai_model = os.getenv("RESEARCH_MODEL", "gpt-5.1")
         agents.append(AgentSpec(
             name="openai",
             model=f"openai-responses:{openai_model}",

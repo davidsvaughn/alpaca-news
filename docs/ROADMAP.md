@@ -39,6 +39,7 @@
 | **Signal extraction step** | DONE (by design) | Built into PydanticAI output_type=TradingSignal |
 | **Reflection / Evaluation** | DONE | On-demand LLM evaluation, nested decision tree, Tier A/B insights |
 | **Follow-up data collection** | DONE | Scheduled post-event data collection (no-buy + post-exit), LLM query planner, query effectiveness tracking |
+| **Dashboard activity panel** | DONE | Real-time activity tracking (backfill, exploration, follow-ups), in-flight cost visibility, 10s HTMX refresh |
 | **Offline loop** | TODO | Labeling, hop scoring, automated reflection scheduling |
 | **Bull/bear prompt pattern** | TODO | New — lightweight adversarial reasoning |
 | **Data vendor fallback** | DONE | Schwab → yfinance fallback via MarketDataService |
@@ -228,6 +229,34 @@ Scheduled post-event data collection for both no-buy and post-exit cases.
 
 9. **DONE** — 18 new tests (`tests/test_follow_up.py`):
    - Model (parse_offset, builder, roundtrip), DB CRUD, eval_record integration
+
+## Dashboard Activity Panel — DONE
+
+Real-time visibility into all in-flight operations with cost percolation.
+
+1. **DONE** — ActivityTracker (`trader/online/activity_tracker.py`):
+   - Thread-safe `Activity` dataclass + `ActivityTracker` class
+   - `start()`, `update()`, `finish()` lifecycle; `get_inflight_cost()` for live cost
+
+2. **DONE** — Orchestrator integration (`trader/online/orchestrator.py`):
+   - Exploration activities: triage → agent N/M → sealing → finish
+   - Real-time cost updates from `CostTracker.item_spent`
+
+3. **DONE** — Backfill tracking (`trader/main.py`):
+   - Backfill activity with progress "X/N" items
+   - Bus events: `backfill_started`, `backfill_progress`, `backfill_complete`
+
+4. **DONE** — Follow-up collector integration (`trader/online/follow_up_collector.py`):
+   - Activity per collection run (start/finish)
+
+5. **DONE** — Dashboard UI:
+   - `/api/activity-panel` HTMX endpoint (10s refresh + SSE triggers)
+   - Categorized display: Backfill, Exploring, Follow-up Collection, Scheduled Follow-ups
+   - Stats cards show `sealed + inflight` cost with breakdown
+   - New SSE events registered for immediate refresh
+
+6. **DONE** — 10 unit tests (`tests/test_activity_tracker.py`):
+   - Lifecycle, cost tracking, concurrent access safety
 
 ## Phase D-2: Offline loop — TODO
 

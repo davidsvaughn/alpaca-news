@@ -194,7 +194,7 @@ async def test_grok_x_search_function_tool(deps):
 @pytest.mark.asyncio
 async def test_openai_with_websearch_and_tools(deps):
     """OpenAI Responses API: WebSearchTool + function tools."""
-    model_name = os.getenv("RESEARCH_MODEL", "gpt-4o-mini")
+    model_name = os.getenv("RESEARCH_MODEL", "gpt-5-mini")
 
     tracing = TracingToolset(market_toolset)
     agent = Agent(

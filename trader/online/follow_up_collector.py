@@ -66,11 +66,13 @@ class FollowUpCollector:
         db: Database,
         bus: EventBus,
         market: MarketDataService | None = None,
+        tracker: "ActivityTracker | None" = None,
     ) -> None:
         self.settings = settings
         self.db = db
         self.bus = bus
         self.market = market or MarketDataService()
+        self.tracker = tracker
 
     def run_cycle(self) -> None:
         """Check all active follow-ups, run collections that are due."""
@@ -123,6 +125,19 @@ class FollowUpCollector:
         symbols = builder.symbols
         headline = builder.headline
         snapshot_id = builder.snapshot_id
+
+        # Activity tracking
+        _act_id = f"fu_{builder.follow_up_id}_{offset_label}"
+        if self.tracker is not None:
+            from trader.online.activity_tracker import Activity
+            self.tracker.start(Activity(
+                id=_act_id,
+                type="follow_up_collection",
+                label=f"{', '.join(symbols)} {offset_label}",
+                symbols=symbols,
+                progress=offset_label,
+                detail={"follow_up_id": builder.follow_up_id, "snapshot_id": snapshot_id},
+            ))
 
         # Phase 1: LLM query planner
         query_plan = self._plan_queries(builder, offset_label)
@@ -185,6 +200,10 @@ class FollowUpCollector:
         update_follow_up(
             self.db, builder.follow_up_id, builder.to_follow_up().to_dict()
         )
+
+        # Finish activity tracking
+        if self.tracker is not None:
+            self.tracker.finish(_act_id)
 
         self.bus.publish(PipelineEvent(
             type="follow_up_collection",

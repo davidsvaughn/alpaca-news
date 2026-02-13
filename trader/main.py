@@ -18,6 +18,7 @@ import uvicorn
 from trader.config import load_settings
 from trader.db.database import insert_event, open_sqlite, prune_old_events
 from trader.knowledge.store import KnowledgeStore
+from trader.online.activity_tracker import Activity, ActivityTracker
 from trader.online.event_bus import EventBus, PipelineEvent
 from trader.online.orchestrator import process_news_file, run_watch_loop
 from trader.online.x_stream_service import XStreamGuards, XStreamService
@@ -41,6 +42,8 @@ def main() -> None:
 
     bus.subscribe(_persist_event)
     prune_old_events(db, keep_days=7)
+
+    tracker = ActivityTracker()
 
     xstream: XStreamService | None = None
     if settings.x_stream_enabled and settings.x_stream_mode != "off":
@@ -70,7 +73,7 @@ def main() -> None:
         )
     t = threading.Thread(
         target=run_watch_loop,
-        kwargs={"settings": settings, "db": db, "knowledge": knowledge, "bus": bus, "xstream": xstream},
+        kwargs={"settings": settings, "db": db, "knowledge": knowledge, "bus": bus, "xstream": xstream, "tracker": tracker},
         daemon=True,
     )
     t.start()
@@ -81,23 +84,35 @@ def main() -> None:
             root = Path(settings.alpaca_output_dir)
             files = sorted([p for p in root.glob("*.json") if p.is_file()])
             targets = files[-settings.backfill_limit :]
-            print(f"Backfill: processing {len(targets)} files in background...")
+            total = len(targets)
+            print(f"Backfill: processing {total} files in background...")
+            bus.publish(PipelineEvent(type="backfill_started", payload={"total": total}))
+            tracker.start(Activity(
+                id="backfill_main",
+                type="backfill",
+                label=f"Backfill ({total} files)",
+                progress=f"0/{total}",
+            ))
             ok = 0
             for i, p in enumerate(targets, 1):
-                print(f"Backfill [{i}/{len(targets)}]: {p.name}")
+                print(f"Backfill [{i}/{total}]: {p.name}")
+                tracker.update("backfill_main", progress=f"{i}/{total}")
+                bus.publish(PipelineEvent(type="backfill_progress", payload={"current": i, "total": total, "file": p.name}))
                 try:
-                    process_news_file(path=p, settings=settings, db=db, knowledge=knowledge, bus=bus, xstream=None)
+                    process_news_file(path=p, settings=settings, db=db, knowledge=knowledge, bus=bus, xstream=None, tracker=tracker)
                     ok += 1
                 except Exception as exc:
-                    print(f"Backfill [{i}/{len(targets)}] FAILED: {exc}")
+                    print(f"Backfill [{i}/{total}] FAILED: {exc}")
                     bus.publish(PipelineEvent(type="manual_explore_error", payload={
                         "headline": p.name, "error": f"Backfill failed: {exc}",
                     }))
-            print(f"Backfill complete: {ok}/{len(targets)} succeeded.")
+            tracker.finish("backfill_main")
+            bus.publish(PipelineEvent(type="backfill_complete", payload={"succeeded": ok, "total": total}))
+            print(f"Backfill complete: {ok}/{total} succeeded.")
 
         threading.Thread(target=_backfill, daemon=True).start()
 
-    app = create_app(settings=settings, bus=bus, db=db, knowledge=knowledge)
+    app = create_app(settings=settings, bus=bus, db=db, knowledge=knowledge, tracker=tracker)
     uvicorn.run(app, host="127.0.0.1", port=8000, log_level="info")
 
 
