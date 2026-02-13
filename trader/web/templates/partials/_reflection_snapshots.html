@@ -1,0 +1,66 @@
+{% if snapshots %}
+<div class="table-responsive">
+  <table class="table table-sm table-hover align-middle mb-0">
+    <thead class="table-light">
+      <tr>
+        <th style="width:30px"></th>
+        <th>Created</th>
+        <th>Headline</th>
+        <th>Symbols</th>
+        <th>Direction</th>
+        <th>Confidence</th>
+        <th>Agents</th>
+        <th>Cost</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for s in snapshots %}
+      <tr class="snap-row" data-symbols="{{ s.trigger.symbols|join(',') }}">
+        <td><input type="checkbox" class="form-check-input snap-check" value="{{ s.snapshot_id }}"></td>
+        <td class="small text-muted text-nowrap">{{ s.created_at[:16] }}</td>
+        <td class="text-truncate" style="max-width: 280px;">
+          <a href="/snapshots/{{ s.snapshot_id }}" class="text-decoration-none">{{ s.trigger.headline }}</a>
+        </td>
+        <td>
+          {% for sym in s.trigger.symbols %}
+          <span class="badge bg-light text-dark border">{{ sym }}</span>
+          {% endfor %}
+        </td>
+        <td>
+          {% if s.prediction and s.prediction.direction %}
+            {% if s.prediction.direction == 'bullish' %}
+              <span class="text-success">&#9650;</span>
+            {% elif s.prediction.direction == 'bearish' %}
+              <span class="text-danger">&#9660;</span>
+            {% else %}
+              <span class="text-muted">&#8212;</span>
+            {% endif %}
+          {% else %}
+            <span class="text-muted">&mdash;</span>
+          {% endif %}
+        </td>
+        <td>
+          {% if s.prediction and s.prediction.confidence is defined %}
+            {{ "%.0f"|format(s.prediction.confidence * 100) }}%
+          {% else %}
+            <span class="text-muted">&mdash;</span>
+          {% endif %}
+        </td>
+        <td class="small">
+          {% if s.rounds %}{{ s.rounds|length }}{% else %}<span class="text-muted">&mdash;</span>{% endif %}
+        </td>
+        <td class="small">
+          {% if s.cost_summary and s.cost_summary.total_usd is defined %}
+            ${{ "%.4f"|format(s.cost_summary.total_usd) }}
+          {% else %}
+            <span class="text-muted">&mdash;</span>
+          {% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% else %}
+<p class="text-muted">No snapshots found.</p>
+{% endif %}

@@ -56,6 +56,7 @@ class Snapshot:
     market_context: dict[str, Any]
     price_context: dict[str, Any]
     exploration_budget: ExplorationBudget
+    triage: dict[str, Any]
     tool_traces: list[dict[str, Any]]
     rounds: list[dict[str, Any]]
     data_modalities: dict[str, list[int]]
@@ -119,6 +120,7 @@ class SnapshotBuilder:
         self.market_context: dict[str, Any] = {}
         self.price_context: dict[str, Any] = {}
         self.exploration_budget = exploration_budget or ExplorationBudget()
+        self.triage: dict[str, Any] = {}
         self.tool_traces: list[dict[str, Any]] = []
         self.rounds: list[dict[str, Any]] = []
         self.prediction: dict[str, Any] = {}
@@ -145,6 +147,9 @@ class SnapshotBuilder:
 
     def set_price_context(self, ctx: dict[str, Any]) -> None:
         self.price_context = ctx
+
+    def set_triage(self, triage: dict[str, Any]) -> None:
+        self.triage = triage
 
     def set_prediction(self, pred: dict[str, Any]) -> None:
         self.prediction = pred
@@ -179,6 +184,7 @@ class SnapshotBuilder:
             version=self.version,
             created_at=self.created_at,
             trigger=self.trigger,
+            triage=self.triage,
             market_context=self.market_context,
             price_context=self.price_context,
             exploration_budget=self.exploration_budget,

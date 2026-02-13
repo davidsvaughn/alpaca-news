@@ -6,7 +6,14 @@
 .tool-trace-row { cursor: pointer; }
 .tool-trace-row:hover { background-color: rgba(13, 110, 253, 0.05); }
 .trace-output { max-height: 300px; overflow-y: auto; font-size: 0.8rem; }
-.findings-text { white-space: pre-wrap; font-family: monospace; font-size: 0.82rem; max-height: 500px; overflow-y: auto; }
+.findings-text { font-size: 0.88rem; max-height: 500px; overflow-y: auto; }
+.findings-text h1, .findings-text h2, .findings-text h3 { font-size: 1.1rem; margin-top: 0.8rem; margin-bottom: 0.4rem; }
+.findings-text h4, .findings-text h5, .findings-text h6 { font-size: 0.95rem; margin-top: 0.6rem; margin-bottom: 0.3rem; }
+.findings-text p { margin-bottom: 0.4rem; }
+.findings-text ul, .findings-text ol { margin-bottom: 0.4rem; padding-left: 1.5rem; }
+.findings-text pre { font-size: 0.8rem; background: #f8f9fa; padding: 0.5rem; border-radius: 0.25rem; }
+.findings-text code { font-size: 0.82rem; }
+.findings-text table { font-size: 0.82rem; }
 .modality-social { background-color: #0dcaf0; }
 .modality-web_research { background-color: #6f42c1; color: #fff; }
 .modality-market_data { background-color: #0d6efd; color: #fff; }
@@ -100,6 +107,26 @@
     {% endif %}
   </div>
 </div>
+
+{# ============================================================ #}
+{# PIPELINE TIMELINE (nested decision tree)                      #}
+{# ============================================================ #}
+{% if timeline and timeline.nodes %}
+{% from "partials/_timeline_node.html" import render_node %}
+<div class="card mb-4 border-info">
+  <div class="card-header bg-info text-white d-flex align-items-center">
+    <strong class="me-auto">Pipeline Timeline</strong>
+    <span class="badge bg-light text-dark">{{ timeline.nodes|length }} decision points</span>
+  </div>
+  <div class="card-body p-2">
+    <div class="accordion" id="timeline-accordion">
+      {% for node in timeline.nodes %}
+        {{ render_node(node, 0, 'root', loop.index) }}
+      {% endfor %}
+    </div>
+  </div>
+</div>
+{% endif %}
 
 {# ============================================================ #}
 {# TRIGGER + MARKET CONTEXT ROW                                  #}
@@ -362,10 +389,10 @@
             </div>
             {% endif %}
 
-            {# Agent findings text #}
+            {# Agent findings text (rendered as markdown) #}
             {% if round.findings %}
             <h6>Agent Findings</h6>
-            <div class="findings-text p-2 bg-light rounded border">{{ round.findings }}</div>
+            <div class="findings-text p-2 bg-light rounded border findings-md">{{ round.findings }}</div>
             {% endif %}
           </div>
         </div>
@@ -523,4 +550,13 @@
     </div>
   </div>
 </div>
+{% endblock %}
+
+{% block scripts %}
+<script src="https://cdn.jsdelivr.net/npm/marked@15.0.0/marked.min.js"></script>
+<script>
+  document.querySelectorAll('.findings-md').forEach(function(el) {
+    el.innerHTML = marked.parse(el.textContent);
+  });
+</script>
 {% endblock %}

@@ -232,7 +232,7 @@ async def test_openai_with_websearch_and_tools(deps):
 @pytest.mark.asyncio
 async def test_gemini_with_function_tools(deps):
     """Gemini: function tools only (cannot mix with Google grounding)."""
-    model_name = os.getenv("SYNTHESIS_MODEL", "gemini-2.5-flash")
+    model_name = os.getenv("SYNTHESIS_MODEL", "gemini-3-flash-preview")
 
     tracing = TracingToolset(market_toolset)
     agent = Agent(

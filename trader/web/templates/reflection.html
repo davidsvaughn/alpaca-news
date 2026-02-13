@@ -1,0 +1,129 @@
+{% extends "base.html" %}
+
+{% block title %}alpaca-news | Reflection{% endblock %}
+
+{% block extra_css %}
+.snap-row { cursor: pointer; }
+.snap-row:hover { background-color: rgba(13, 110, 253, 0.05); }
+#eval-results .grade-A { color: #198754; font-weight: 700; }
+#eval-results .grade-B { color: #0d6efd; font-weight: 700; }
+#eval-results .grade-C { color: #ffc107; font-weight: 700; }
+#eval-results .grade-D { color: #fd7e14; font-weight: 700; }
+#eval-results .grade-F { color: #dc3545; font-weight: 700; }
+{% endblock %}
+
+{% block content %}
+<h2 class="mb-3">Reflection</h2>
+<p class="text-muted small">Select snapshots to evaluate, then click "Evaluate Selected" to run LLM analysis on the decision timeline.</p>
+
+<!-- Filters -->
+<div class="row g-2 mb-3">
+  <div class="col-md-3">
+    <input type="text" id="filter-symbol" class="form-control form-control-sm" placeholder="Filter by symbol...">
+  </div>
+  <div class="col-md-2">
+    <button class="btn btn-sm btn-outline-secondary" id="select-all-btn">Select All</button>
+    <button class="btn btn-sm btn-outline-secondary" id="select-none-btn">None</button>
+  </div>
+  <div class="col-md-3 ms-auto text-end">
+    <button class="btn btn-sm btn-primary" id="evaluate-btn" disabled>
+      Evaluate Selected (<span id="selected-count">0</span>)
+    </button>
+  </div>
+</div>
+
+<!-- Snapshot table with checkboxes -->
+<div id="snapshot-table"
+     hx-get="/api/reflection/snapshots"
+     hx-trigger="load"
+     hx-swap="innerHTML">
+  <div class="text-center text-muted py-3">Loading snapshots...</div>
+</div>
+
+<!-- Evaluation results area -->
+<div id="eval-results" class="mt-4"></div>
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function() {
+  var evalBtn = document.getElementById('evaluate-btn');
+  var countSpan = document.getElementById('selected-count');
+  var filterInput = document.getElementById('filter-symbol');
+
+  function updateCount() {
+    var checked = document.querySelectorAll('.snap-check:checked');
+    countSpan.textContent = checked.length;
+    evalBtn.disabled = checked.length === 0;
+  }
+
+  // Delegate checkbox changes from HTMX-loaded content
+  document.getElementById('snapshot-table').addEventListener('change', function(e) {
+    if (e.target.classList.contains('snap-check')) updateCount();
+  });
+
+  // Row click toggles checkbox
+  document.getElementById('snapshot-table').addEventListener('click', function(e) {
+    var row = e.target.closest('tr.snap-row');
+    if (!row) return;
+    if (e.target.tagName === 'INPUT' || e.target.tagName === 'A') return;
+    var cb = row.querySelector('.snap-check');
+    if (cb) { cb.checked = !cb.checked; updateCount(); }
+  });
+
+  // Select all / none
+  document.getElementById('select-all-btn').addEventListener('click', function() {
+    document.querySelectorAll('.snap-check').forEach(function(cb) {
+      if (!cb.closest('tr').classList.contains('d-none')) cb.checked = true;
+    });
+    updateCount();
+  });
+  document.getElementById('select-none-btn').addEventListener('click', function() {
+    document.querySelectorAll('.snap-check').forEach(function(cb) { cb.checked = false; });
+    updateCount();
+  });
+
+  // Symbol filter
+  filterInput.addEventListener('input', function() {
+    var q = this.value.trim().toUpperCase();
+    document.querySelectorAll('#snapshot-table tr.snap-row').forEach(function(row) {
+      var syms = row.dataset.symbols || '';
+      row.classList.toggle('d-none', q && syms.toUpperCase().indexOf(q) === -1);
+    });
+  });
+
+  // Evaluate button
+  evalBtn.addEventListener('click', function() {
+    var ids = [];
+    document.querySelectorAll('.snap-check:checked').forEach(function(cb) {
+      ids.push(cb.value);
+    });
+    if (!ids.length) return;
+
+    evalBtn.disabled = true;
+    evalBtn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>Evaluating...';
+
+    fetch('/api/reflection/evaluate', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({snapshot_ids: ids})
+    })
+    .then(function(r) { return r.text(); })
+    .then(function(html) {
+      document.getElementById('eval-results').innerHTML = html;
+      evalBtn.disabled = false;
+      evalBtn.innerHTML = 'Evaluate Selected (<span id="selected-count">' + ids.length + '</span>)';
+      countSpan = document.getElementById('selected-count');
+    })
+    .catch(function(err) {
+      document.getElementById('eval-results').innerHTML =
+        '<div class="alert alert-danger">Evaluation failed: ' + err + '</div>';
+      evalBtn.disabled = false;
+      evalBtn.innerHTML = 'Evaluate Selected (<span id="selected-count">' + ids.length + '</span>)';
+      countSpan = document.getElementById('selected-count');
+    });
+  });
+})();
+</script>
+{% endblock %}

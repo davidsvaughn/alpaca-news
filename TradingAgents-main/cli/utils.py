@@ -141,9 +141,9 @@ def select_shallow_thinking_agent(provider) -> str:
         ],
         "google": [
             ("Gemini 3 Flash - Next-gen fast", "gemini-3-flash-preview"),
-            ("Gemini 2.5 Flash - Balanced, recommended", "gemini-2.5-flash"),
+            ("Gemini 2.5 Flash - Balanced, recommended", "gemini-3-flash-preview"),
             ("Gemini 3 Pro - Reasoning-first", "gemini-3-pro-preview"),
-            ("Gemini 2.5 Flash Lite - Fast, low-cost", "gemini-2.5-flash-lite"),
+            ("Gemini 2.5 Flash Lite - Fast, low-cost", "gemini-3-flash-preview-lite"),
         ],
         "xai": [
             ("Grok 4.1 Fast (Non-Reasoning) - Speed optimized, 2M ctx", "grok-4-1-fast-non-reasoning"),
@@ -210,7 +210,7 @@ def select_deep_thinking_agent(provider) -> str:
         "google": [
             ("Gemini 3 Pro - Reasoning-first", "gemini-3-pro-preview"),
             ("Gemini 3 Flash - Next-gen fast", "gemini-3-flash-preview"),
-            ("Gemini 2.5 Flash - Balanced, recommended", "gemini-2.5-flash"),
+            ("Gemini 2.5 Flash - Balanced, recommended", "gemini-3-flash-preview"),
         ],
         "xai": [
             ("Grok 4.1 Fast (Reasoning) - High-performance, 2M ctx", "grok-4-1-fast-reasoning"),

@@ -28,11 +28,13 @@ from trader.db.database import (
     get_recent_events,
     get_snapshot,
     get_watch,
+    get_watch_by_snapshot,
     update_watch,
 )
 from trader.knowledge.store import KnowledgeStore
 from trader.models.watch import WatchBuilder
 from trader.online.event_bus import EventBus, PipelineEvent
+from trader.reflection.eval_record import build_eval_record
 from trader.web.sse import sse_response
 
 
@@ -103,10 +105,16 @@ def create_app(
         snap = get_snapshot(db, snapshot_id)
         if snap is None:
             return HTMLResponse("<h3>Snapshot not found</h3>", status_code=404)
+        watch = get_watch_by_snapshot(db, snapshot_id)
+        timeline = build_eval_record(snap, watch)
         return templates.TemplateResponse(
             request=request,
             name="snapshot_detail.html",
-            context={"active_page": "snapshots", "s": _DictObj(snap)},
+            context={
+                "active_page": "snapshots",
+                "s": _DictObj(snap),
+                "timeline": timeline,
+            },
         )
 
     @app.get("/costs", response_class=HTMLResponse)
@@ -165,6 +173,14 @@ def create_app(
                 "knowledge_dir": str(knowledge.knowledge_dir),
                 "files": files,
             },
+        )
+
+    @app.get("/reflection", response_class=HTMLResponse)
+    async def reflection_page(request: Request):
+        return templates.TemplateResponse(
+            request=request,
+            name="reflection.html",
+            context={"active_page": "reflection"},
         )
 
     # ------------------------------------------------------------------
@@ -436,6 +452,100 @@ def create_app(
         return get_recent_events(db, limit=min(limit, 500))
 
     # ------------------------------------------------------------------
+    # Reflection API
+    # ------------------------------------------------------------------
+
+    @app.get("/api/reflection/snapshots", response_class=HTMLResponse)
+    async def api_reflection_snapshots(request: Request):
+        """Return snapshot table with checkboxes for the reflection page."""
+        snaps = get_all_snapshots(db)
+        return templates.TemplateResponse(
+            request=request,
+            name="partials/_reflection_snapshots.html",
+            context={"snapshots": [_DictObj(s) for s in snaps]},
+        )
+
+    @app.post("/api/reflection/evaluate", response_class=HTMLResponse)
+    async def api_reflection_evaluate(request: Request):
+        """Trigger LLM evaluation on selected snapshots."""
+        body = await request.json()
+        snapshot_ids: list[str] = body.get("snapshot_ids", [])
+        if not snapshot_ids:
+            return HTMLResponse("<div class='alert alert-warning'>No snapshots selected.</div>")
+
+        try:
+            from trader.reflection.evaluator import evaluate_snapshots
+
+            result = evaluate_snapshots(
+                snapshot_ids=snapshot_ids,
+                db=db,
+                knowledge=knowledge,
+                model=app.state.settings.reflection_model,
+            )
+            return templates.TemplateResponse(
+                request=request,
+                name="partials/_reflection_results.html",
+                context={"evaluation": result},
+            )
+        except Exception as e:
+            return templates.TemplateResponse(
+                request=request,
+                name="partials/_reflection_results.html",
+                context={"error": f"Evaluation failed: {e}"},
+            )
+
+    @app.post("/api/reflection/apply", response_class=HTMLResponse)
+    async def api_reflection_apply(request: Request, action_json: str = Form(...)):
+        """Apply a Tier A insight to knowledge files."""
+        try:
+            action = json.loads(action_json)
+            atype = action.get("type", "")
+            if atype == "add_skip_keyword":
+                knowledge.append_skip_keywords([action["keyword"]])
+                msg = f"Added skip keyword: {action['keyword']}"
+            elif atype == "add_signal_pattern":
+                knowledge.append_to_list("signal_patterns.json", "patterns", action["pattern"])
+                msg = f"Added signal pattern"
+            elif atype == "add_anti_pattern":
+                knowledge.append_to_list("anti_patterns.json", "patterns", action["pattern"])
+                msg = f"Added anti-pattern"
+            elif atype == "add_search_template":
+                knowledge.append_to_list("search_strategies.json", "templates", action["template"])
+                msg = f"Added search template"
+            elif atype == "add_model_note":
+                knowledge.append_to_list("model_notes.json", "notes", action["note"])
+                msg = f"Added model note"
+            else:
+                return HTMLResponse(f"<div class='alert alert-warning'>Unknown action type: {atype}</div>")
+
+            bus.publish(PipelineEvent(type="knowledge_updated", payload={"action": atype}))
+            return HTMLResponse(f"<div class='alert alert-success'>{msg}</div>")
+        except Exception as e:
+            return HTMLResponse(f"<div class='alert alert-danger'>Apply failed: {e}</div>")
+
+    @app.post("/api/reflection/save", response_class=HTMLResponse)
+    async def api_reflection_save(
+        request: Request,
+        text: str = Form(...),
+        category: str = Form("general"),
+    ):
+        """Save a Tier B suggestion to markdown."""
+        try:
+            suggestions_dir = Path(app.state.settings.data_dir) / "reflection" / "suggestions"
+            suggestions_dir.mkdir(parents=True, exist_ok=True)
+            ts = datetime.now(tz=timezone.utc).strftime("%Y%m%dT%H%M%S")
+            filepath = suggestions_dir / f"{ts}_{category}.md"
+            filepath.write_text(
+                f"# Suggestion ({category})\n\n{text}\n\n---\nGenerated: {ts}\n",
+                encoding="utf-8",
+            )
+            return HTMLResponse(
+                f"<div class='alert alert-success'>Saved suggestion to {filepath.name}</div>"
+            )
+        except Exception as e:
+            return HTMLResponse(f"<div class='alert alert-danger'>Save failed: {e}</div>")
+
+    # ------------------------------------------------------------------
     # SSE stream
     # ------------------------------------------------------------------
 
@@ -492,6 +602,7 @@ def _settings_groups(s: Settings) -> list[tuple[str, list[tuple[str, Any]]]]:
                 "watch_max_retro_minutes", "watch_checkin_model",
             ],
         ),
+        ("Reflection", ["reflection_model"]),
     ]
     result: list[tuple[str, list[tuple[str, Any]]]] = []
     for group_name, field_names in groups_map:

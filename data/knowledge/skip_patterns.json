@@ -1,8 +1,11 @@
 {
-  "headline_keywords": [],
+  "headline_keywords": [
+    "EV sales decline",
+    "monthly EV sales data"
+  ],
   "sources_to_skip": [],
   "symbol_contexts": {},
-  "last_updated": "2026-02-09T22:32:35.891919+00:00",
-  "auto_learned": 0,
+  "last_updated": "2026-02-13T05:23:43.260283+00:00",
+  "auto_learned": 2,
   "human_edited": 0
 }

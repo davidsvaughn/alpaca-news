@@ -58,6 +58,17 @@ watches_table = Table(
 )
 
 
+evaluations_table = Table(
+    "evaluations",
+    metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("evaluation_id", String, unique=True, nullable=False),
+    Column("created_at", DateTime(timezone=True), server_default=func.now(), nullable=False),
+    Column("snapshot_ids", String, nullable=False),  # comma-separated
+    Column("evaluation_json", JSON, nullable=False),
+)
+
+
 @dataclass(frozen=True)
 class Database:
     engine: Engine
@@ -178,6 +189,19 @@ def get_watch(db: Database, watch_id: str) -> dict[str, Any] | None:
         row = conn.execute(
             text("SELECT watch_json FROM watches WHERE watch_id = :wid"),
             {"wid": watch_id},
+        ).fetchone()
+    if row is None:
+        return None
+    raw = row[0]
+    return json.loads(raw) if isinstance(raw, str) else raw
+
+
+def get_watch_by_snapshot(db: Database, snapshot_id: str) -> dict[str, Any] | None:
+    """Fetch a watch linked to the given entry_snapshot_id."""
+    with db.engine.connect() as conn:
+        row = conn.execute(
+            text("SELECT watch_json FROM watches WHERE entry_snapshot_id = :sid LIMIT 1"),
+            {"sid": snapshot_id},
         ).fetchone()
     if row is None:
         return None
@@ -408,3 +432,52 @@ def prune_old_events(db: Database, *, keep_days: int = 7) -> int:
             {"offset": f"-{keep_days} days"},
         )
     return result.rowcount
+
+
+# ---------------------------------------------------------------------------
+# Evaluations
+# ---------------------------------------------------------------------------
+
+
+def insert_evaluation(
+    db: Database,
+    *,
+    evaluation_id: str,
+    snapshot_ids: list[str],
+    evaluation: dict[str, Any],
+) -> None:
+    """Persist an LLM evaluation result."""
+    with db.engine.begin() as conn:
+        conn.execute(
+            text(
+                "INSERT INTO evaluations (evaluation_id, snapshot_ids, evaluation_json) "
+                "VALUES (:eid, :sids, :ejson)"
+            ),
+            {
+                "eid": evaluation_id,
+                "sids": ",".join(snapshot_ids),
+                "ejson": json.dumps(evaluation, ensure_ascii=False),
+            },
+        )
+
+
+def get_recent_evaluations(db: Database, *, limit: int = 20) -> list[dict[str, Any]]:
+    """Return recent evaluations, newest first."""
+    with db.engine.connect() as conn:
+        rows = conn.execute(
+            text(
+                "SELECT evaluation_id, snapshot_ids, evaluation_json, created_at "
+                "FROM evaluations ORDER BY id DESC LIMIT :lim"
+            ),
+            {"lim": limit},
+        ).fetchall()
+    result = []
+    for row in rows:
+        ejson = json.loads(row[2]) if isinstance(row[2], str) else row[2]
+        result.append({
+            "evaluation_id": row[0],
+            "snapshot_ids": row[1].split(",") if row[1] else [],
+            "evaluation": ejson,
+            "created_at": str(row[3]) if row[3] else None,
+        })
+    return result

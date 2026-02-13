@@ -23,7 +23,7 @@
 | **Database (SQLite)** | DONE | Snapshots + watches tables, idempotent inserts |
 | **Dashboard (FastAPI + SSE + HTMX)** | DONE | Full monitoring + control UI (6 pages, charts, editor) |
 | **Schwab market data** | DONE | Quotes, candles, streaming, options, fundamentals, movers, market hours |
-| **Knowledge store** | PARTIAL | skip_patterns, reliable_sources exist; insights.json TODO |
+| **Knowledge store** | PARTIAL | skip_patterns, reliable_sources, generic append_to_list; insights.json TODO |
 | **Explorer (multi-agent pipeline)** | DONE | Sequential Grok→OpenAI→Gemini pipeline — wired into orchestrator |
 | **yfinance data layer** | DONE | Free data: fundamentals, insider tx, price history, news, technicals |
 | **BM25 situation memory** | TODO | New — learned from TradingAgents |
@@ -31,7 +31,8 @@
 | **insights.json** | TODO | Flat scored insights for prompt injection |
 | **Watch lifecycle** | DONE | Full lifecycle: model, DB, creation, monitoring scheduler, retrospective, sealing |
 | **Signal extraction step** | DONE (by design) | Built into PydanticAI output_type=TradingSignal |
-| **Offline loop** | TODO | Labeling, hop scoring, reflection |
+| **Reflection / Evaluation** | DONE | On-demand LLM evaluation, nested decision tree, Tier A/B insights |
+| **Offline loop** | TODO | Labeling, hop scoring, automated reflection scheduling |
 | **Bull/bear prompt pattern** | TODO | New — lightweight adversarial reasoning |
 | **Data vendor fallback** | DONE | Schwab → yfinance fallback via MarketDataService |
 | **Training-ready data capture** | DONE | Modality tags, rounds in snapshot, data_modalities index, richer x_search |
@@ -94,13 +95,49 @@ Full position management from entry to retrospective.
    - Full lifecycle test: holding → exited → retrospective → sealed via consecutive check cycles
    - 20 watcher tests total (8 new for retrospective + sealing)
 
-## Phase D: Offline loop — TODO
+## Phase D-1: Reflection & Evaluation — DONE
 
-Close the learning feedback loop.
+On-demand decision evaluation with nested decision tree and two-tier insights.
+
+1. **DONE** — Fill data capture gaps:
+   - Store triage decision in snapshot (`snapshot.py` + `orchestrator.py`)
+   - Store system_prompt + user_message per agent round (`agent_pipeline.py`)
+   - Store watch check-in history (`watch.py` + `watcher.py`)
+
+2. **DONE** — Decision timeline / EvalRecord (`trader/reflection/eval_record.py`):
+   - `build_eval_record(snapshot, watch)` → nested JSON tree
+   - Each node: `{type, summary, detail, children}`
+   - Node types: triage, agent_round, tool_call, prediction, watch_entry, watch_checkin, watch_exit, retrospective
+   - `eval_record_to_markdown()` for LLM evaluator prompt
+
+3. **DONE** — Pipeline Timeline UI on snapshot detail page:
+   - Recursive Jinja macro (`_timeline_node.html`) renders nested Bootstrap accordions
+   - Color-coded badges by node type, expandable details + prompts
+   - Linked watch data (if any) included in timeline
+
+4. **DONE** — Reflection page (`/reflection`):
+   - Snapshot table with checkboxes, symbol filter, select all/none
+   - "Evaluate Selected" button triggers LLM evaluation
+   - Results partial shows per-snapshot grades, node assessments, insights
+
+5. **DONE** — LLM evaluator (`trader/reflection/evaluator.py`):
+   - Gemini-based (configurable via `REFLECTION_MODEL`)
+   - Builds markdown timelines, sends to LLM, parses structured JSON response
+   - Per-snapshot: grade (A-F), summary, per-node assessments
+   - Insights: Tier A (auto-apply to knowledge) + Tier B (save to markdown)
+   - Evaluations persisted to DB (`evaluations` table)
+
+6. **DONE** — KnowledgeStore extensions:
+   - Generic `append_to_list(filename, key, item)` for all knowledge files
+   - Supports signal_patterns, anti_patterns, search_strategies, model_notes
+
+## Phase D-2: Offline loop — TODO
+
+Close the automated learning feedback loop.
 
 1. Outcome labeler (attach +15m/+60m/+1d returns to Snapshots)
 2. Hop scorer (per-trace and per-sequence value estimation)
-3. Reflection prompt (review scored Snapshots + sealed Watches)
+3. Automated reflection scheduling (periodic batch evaluation)
 4. Insight update pipeline (reinforce/weaken/create insights)
 5. Memory update (store new situation/lesson tuples)
 

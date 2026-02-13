@@ -214,6 +214,11 @@ class WatchMonitor:
 
         # Auto-exit on extreme loss (-10%) as a safety net
         if pnl < -10.0:
+            builder.checkin_history.append({
+                "time": _utc_now(), "depth": "lightweight",
+                "action": "auto_stop_loss", "reason": f"Auto stop-loss: {pnl:.1f}%",
+                "price": current_price, "pnl_pct": pnl, "model": None,
+            })
             builder.record_exit(
                 price=current_price,
                 reason=f"Auto stop-loss: {pnl:.1f}% unrealized loss",
@@ -230,6 +235,11 @@ class WatchMonitor:
             ))
             return
 
+        builder.checkin_history.append({
+            "time": _utc_now(), "depth": "lightweight",
+            "action": "hold", "reason": None,
+            "price": current_price, "pnl_pct": pnl, "model": None,
+        })
         updated = builder.to_watch()
         update_watch(self.db, wid, updated.to_dict())
         self.bus.publish(PipelineEvent(
@@ -266,9 +276,18 @@ class WatchMonitor:
 
         builder = WatchBuilder.from_dict(watch_dict)
         builder.last_checkin_at = _utc_now()
+        current_price = self._get_current_price(symbol)
+
+        builder.checkin_history.append({
+            "time": _utc_now(), "depth": depth,
+            "action": decision.action,
+            "reason": decision.reason,
+            "price": current_price,
+            "pnl_pct": decision.unrealized_pnl_pct,
+            "model": self.settings.watch_checkin_model,
+        })
 
         if decision.action == "exit":
-            current_price = self._get_current_price(symbol)
             exit_price = current_price if current_price is not None else entry["price"]
             builder.record_exit(price=exit_price, reason=decision.reason)
             updated = builder.to_watch()

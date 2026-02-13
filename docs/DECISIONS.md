@@ -21,6 +21,10 @@
 | Data redundancy | Schwab primary, yfinance fallback | Schwab has best real-time data; yfinance provides free resilience |
 | Technical indicators | Computed locally (stockstats) | Zero cost; LLM selects which are relevant per situation |
 | Trading mode | Paper-first | Build confidence before live execution |
+| Reflection trigger | On-demand (user-controlled) | Automated evaluation too early; user wants to inspect + control inputs |
+| Evaluation data format | Nested JSON tree (EvalRecord) | Same structure serves both human UI (accordions) and LLM evaluator (markdown) |
+| Insight tiers | Tier A (auto-apply) + Tier B (code changes) | Separates what can be learned without code changes from what needs development |
+| Evaluation model | Gemini (configurable) | Cheap, fast, good at structured JSON output; avoids using pipeline models as self-evaluators |
 
 ---
 

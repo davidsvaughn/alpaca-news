@@ -2,6 +2,11 @@
 
 {% block title %}alpaca-news | Dashboard{% endblock %}
 
+{% block extra_css %}
+.feed-dim { color: #adb5bd; font-size: 0.82rem; }
+#event-feed .text-muted { color: #9e9e9e !important; }
+{% endblock %}
+
 {% block content %}
 <h2 class="mb-3">Dashboard</h2>
 
@@ -70,9 +75,9 @@
     watch_retrospective_checkin: 'secondary',
     triage_decision: 'info',
     exploration_complete: 'success',
-    news_received: 'light',
-    watching: 'light',
-    monitoring_started: 'light',
+    news_received: 'secondary',
+    watching: 'secondary',
+    monitoring_started: 'secondary',
     x_stream_configured: 'info',
     x_burst_start: 'info',
     x_post: 'info',
@@ -98,11 +103,11 @@
     switch(type) {
       case 'triage_decision':
         return symBadges(p.symbols) + ' \u2192 ' + p.action + ' (' + ((p.confidence||0)*100).toFixed(0) + '%) '
-          + '<span class="text-muted small">' + (p.reasoning || '').slice(0, 80) + '</span>';
+          + '<span class="feed-dim">' + (p.reasoning || '').slice(0, 80) + '</span>';
       case 'snapshot_sealed':
         return symBadges(p.symbols) + snapLink(p.snapshot_id)
           + (p.direction ? ' \u2192 ' + p.direction + ' (' + ((p.confidence||0)*100).toFixed(0) + '%)' : '')
-          + (p.headline ? ' <span class="text-muted small">' + p.headline.slice(0, 60) + '</span>' : '');
+          + (p.headline ? ' <span class="feed-dim">' + p.headline.slice(0, 60) + '</span>' : '');
       case 'watch_created':
         return '<span class="badge bg-primary">' + p.symbol + '</span> '
           + p.direction + ' @ $' + (p.entry_price||0).toFixed(2) + ' (conf ' + ((p.confidence||0)*100).toFixed(0) + '%) '
@@ -124,13 +129,25 @@
           + ' (since exit ' + (p.pnl_since_exit_pct||0).toFixed(2) + '%)';
       case 'news_received':
         return symBadges(p.symbols) + snapLink(p.snapshot_id)
-          + ' <span class="text-muted small">' + (p.headline || (p.path || '').split('/').pop() || '').slice(0, 80) + '</span>';
+          + ' <span class="feed-dim">' + (p.headline || (p.path || '').split('/').pop() || '').slice(0, 80) + '</span>';
       case 'exploration_complete':
         return symBadges(p.symbols) + snapLink(p.snapshot_id) + ' \u2192 ' + (p.direction || '?')
           + ' (conf ' + ((p.confidence||0)*100).toFixed(0) + '%, '
           + (p.agents||0) + ' agents, ' + (p.tool_calls||0) + ' tools)';
       case 'watching':
-        return 'Watching ' + (p.dir || '');
+        return '<span class="feed-dim">Watching ' + (p.dir || '') + '</span>';
+      case 'monitoring_started':
+        return '<span class="feed-dim">Monitor loop started</span>';
+      case 'x_stream_configured':
+        return 'mode=' + (p.mode || '?') + ' burst_ttl=' + (p.burst_ttl_minutes || '?') + 'min'
+          + ' max_bursts=' + (p.max_bursts_per_day || '?') + '/day';
+      case 'x_usage':
+        var u = (p.usage || {}).data || p.usage || {};
+        var parts = [];
+        if (u.tweet_cap !== undefined) parts.push('cap: ' + u.tweet_cap);
+        if (u.daily_project_usage !== undefined) parts.push('used: ' + u.daily_project_usage);
+        if (u.cap_reset_day !== undefined) parts.push('reset: day ' + u.cap_reset_day);
+        return parts.length ? parts.join(' | ') : '<span class="feed-dim">usage update</span>';
       case 'manual_explore_started':
         return (p.headline || '').slice(0, 60) + ' [' + (p.symbols || []).join(',') + ']';
       case 'manual_explore_complete':
@@ -142,7 +159,7 @@
       case 'x_burst_quality':
         return (p.relevant ? '\u2705 RELEVANT' : '\u274c IRRELEVANT')
           + ' (' + ((p.confidence||0)*100).toFixed(0) + '%) '
-          + '<span class="text-muted small">' + (p.reasoning || '').slice(0, 100) + '</span>'
+          + '<span class="feed-dim">' + (p.reasoning || '').slice(0, 100) + '</span>'
           + (p.attempt ? ' <span class="badge bg-secondary">attempt ' + p.attempt + '/' + p.max_retries + '</span>' : '')
           + (p.revised_rule_values ? ' <span class="text-info small">retrying: ' + p.revised_rule_values.join('; ').slice(0, 80) + '</span>' : '');
       case 'x_post':
@@ -158,9 +175,10 @@
         var metrics = d.public_metrics || {};
         return symBadges(tags)
           + ' <strong>@' + handle + '</strong> '
-          + '<span class="text-muted small">' + text.slice(0, 100) + (text.length > 100 ? '...' : '') + '</span>';
+          + '<span class="feed-dim">' + text.slice(0, 100) + (text.length > 100 ? '...' : '') + '</span>';
       default:
-        return JSON.stringify(p).slice(0, 120);
+        var s = JSON.stringify(p);
+        return '<span class="feed-dim">' + (s.length > 100 ? s.slice(0, 97) + '...' : s) + '</span>';
     }
   }
 

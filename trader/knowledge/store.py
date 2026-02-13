@@ -68,6 +68,20 @@ class KnowledgeStore:
         self.ensure_defaults()
         return _read_json(self.knowledge_dir / "skip_patterns.json")
 
+    def append_to_list(
+        self, filename: str, key: str, item: Any
+    ) -> None:
+        """Append an item to a list field in a knowledge JSON file (dedup by equality)."""
+        self.ensure_defaults()
+        path = self.knowledge_dir / filename
+        data = _read_json(path)
+        lst = data.get(key, [])
+        if item not in lst:
+            lst.append(item)
+            data[key] = lst
+            data["last_updated"] = _utc_now_iso()
+            _write_json(path, data)
+
     def append_skip_keywords(self, keywords: list[str]) -> None:
         if not keywords:
             return

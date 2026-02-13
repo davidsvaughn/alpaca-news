@@ -59,6 +59,7 @@ class Watch:
     created_at: str
     last_checkin_at: str | None
     lifecycle_sealed_at: str | None
+    checkin_history: list[dict[str, Any]]
     retrospective_data: dict[str, Any] | None
 
     def to_dict(self) -> dict[str, Any]:
@@ -108,6 +109,7 @@ class WatchBuilder:
         self.created_at = _utc_now()
         self.last_checkin_at: str | None = None
         self.lifecycle_sealed_at: str | None = None
+        self.checkin_history: list[dict[str, Any]] = []
         self.retrospective_data: dict[str, Any] | None = None
 
     @classmethod
@@ -142,6 +144,7 @@ class WatchBuilder:
         builder.monitoring_snapshot_ids = list(d.get("monitoring_snapshot_ids", []))
         builder.retrospective_snapshot_ids = list(d.get("retrospective_snapshot_ids", []))
         builder.lifecycle_sealed_at = d.get("lifecycle_sealed_at")
+        builder.checkin_history = list(d.get("checkin_history", []))
         builder.retrospective_data = d.get("retrospective_data")
         if d.get("exit"):
             builder.exit = WatchExit(**d["exit"])
@@ -207,5 +210,6 @@ class WatchBuilder:
             created_at=self.created_at,
             last_checkin_at=self.last_checkin_at,
             lifecycle_sealed_at=self.lifecycle_sealed_at,
+            checkin_history=list(self.checkin_history),
             retrospective_data=self.retrospective_data,
         )

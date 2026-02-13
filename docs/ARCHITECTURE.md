@@ -387,32 +387,101 @@ Most systems stop after exit. But the richest learning comes from counterfactual
 
 ---
 
-## 8. Offline Loop
+## 8. Reflection & Evaluation — DONE
 
-### 8a. Outcome labeling
+**Status: DONE** — `trader/reflection/`
+
+On-demand LLM evaluation of pipeline decision quality with nested decision trees
+and two-tier actionable insights.
+
+### 8a. Decision Timeline (EvalRecord)
+
+`trader/reflection/eval_record.py` — transforms a snapshot + optional watch into
+a nested JSON tree. Same data structure drives both the UI and LLM evaluator.
+
+Each node: `{type, summary, detail, children}`
+
+```
+triage (85% investigate)
+├── agent_round (grok | 8 tools | 45k tokens)
+│   ├── tool_call (web_search → 'TWLO earnings')
+│   ├── tool_call (check_price → TWLO $111.89)
+│   └── ...
+├── agent_round (openai | 5 tools | 32k tokens)
+│   └── ...
+├── prediction (bullish 78% — 60m horizon)
+├── watch_entry (TWLO @ $111.89 bullish)
+│   ├── watch_checkin (hold — +0.4% lightweight)
+│   ├── watch_checkin (hold — +0.8% medium)
+│   └── ...
+└── watch_exit (+1.39% — momentum exhausting)
+```
+
+**Backward compatible:** Old snapshots missing `triage`, `system_prompt`, or
+`user_message` show `[not captured]` in those nodes.
+
+### 8b. Pipeline Timeline UI
+
+Added to snapshot detail page (`/snapshots/{id}`). Renders the EvalRecord tree
+as nested Bootstrap accordions via recursive Jinja macro (`_timeline_node.html`).
+Color-coded badges by node type. Expandable detail with prompts, tool outputs,
+and usage stats.
+
+### 8c. LLM Evaluator
+
+`trader/reflection/evaluator.py` — Gemini-based (configurable via `REFLECTION_MODEL`).
+
+1. User selects snapshots on `/reflection` page
+2. Builds markdown timeline for each snapshot via `eval_record_to_markdown()`
+3. Sends batch to Gemini with structured evaluation prompt
+4. Returns per-snapshot grades (A-F), per-node assessments, and insights
+5. Evaluation persisted to `evaluations` DB table
+
+### 8d. Two-tier Insights
+
+| Tier | Description | Action |
+|------|-------------|--------|
+| **A** | Auto-applicable (no code changes) | Applied to knowledge JSON files via `KnowledgeStore.append_to_list()` |
+| **B** | Requires code changes | Saved to `data/reflection/suggestions/{timestamp}.md` for coding agent |
+
+Tier A action types: `add_skip_keyword`, `add_signal_pattern`, `add_anti_pattern`,
+`add_search_template`, `add_model_note`.
+
+### 8e. Data Capture for Evaluation
+
+Added to support full decision tree reconstruction:
+- **Triage decision** stored in snapshot (`builder.set_triage()`)
+- **System prompt + user message** stored per agent round
+- **Check-in history** stored in watch (`checkin_history[]`)
+
+---
+
+## 9. Offline Loop — TODO
+
+### 9a. Outcome labeling
 
 Volatility-adjusted, multi-horizon (+15m, +60m, +4h). Normalize returns by
 rolling 20-period volatility. Discretize into 5 classes. Also compute MFE/MAE.
 
-### 8b. Hop scoring
+### 9b. Hop scoring
 
 Per-trace: novelty, prediction improvement, cost-effectiveness.
 Per-sequence: which tool chains produced good outcomes.
 
-### 8c. Reflection
+### 9c. Automated Reflection
 
-LLM reviews batches of scored Snapshots + sealed Watches:
-reinforce/weaken/propose insights, update BM25 memory. Human review before merge.
+Scheduled batch evaluation of recent snapshots + sealed watches.
+Builds on Phase D-1 on-demand evaluation.
 
 ---
 
-## 9. Infrastructure
+## 10. Infrastructure
 
-### 9a. Database — DONE
+### 10a. Database — DONE
 
-`trader/db/database.py` — SQLite with `snapshots` + `watches` tables.
+`trader/db/database.py` — SQLite with `snapshots`, `watches`, `event_log`, and `evaluations` tables.
 
-### 9b. Dashboard — DONE
+### 10b. Dashboard — DONE
 
 `trader/web/` — FastAPI + HTMX + Bootstrap 5 + Chart.js. Server-side rendered,
 no build step.
@@ -421,10 +490,11 @@ no build step.
 |------|-----|----------|
 | Dashboard | `/` | Stats cards (HTMX polling), active watches, manual explore form, live SSE event feed |
 | Watches | `/watches` | Filterable table by status, force-exit buttons, detail pages with full lifecycle view |
-| Snapshots | `/snapshots` | Filterable table by symbol, detail pages with collapsible agent rounds + tool traces |
+| Snapshots | `/snapshots` | Filterable table by symbol, detail pages with pipeline timeline + collapsible agent rounds + tool traces |
 | Costs | `/costs` | Budget progress bar, Chart.js daily trend + tool breakdown doughnut, history table |
-| Config | `/config` | Read-only grouped settings display (9 categories, 46 fields) |
+| Config | `/config` | Read-only grouped settings display (10 categories, 47 fields) |
 | Knowledge | `/knowledge` | JSON file viewer/editor with Save/Cancel for 7 knowledge files |
+| Reflection | `/reflection` | Snapshot multi-select, LLM evaluation trigger, grade/insight results |
 
 **Control actions (POST):**
 - Force exit watch at current market price
@@ -434,18 +504,18 @@ no build step.
 **Real-time:** SSE connection with green/red indicator, toast notifications for key events
 (watch created/exited, snapshot sealed, explore complete/error), HTMX auto-refresh panels.
 
-### 9c. Cost Control — DONE
+### 10c. Cost Control — DONE
 
 `trader/llm/cost_tracker.py` — per-call estimation, per-tool breakdown,
 daily + per-item budget enforcement. Wired into pipeline.
 
-### 9d. Backfill — DONE
+### 10d. Backfill — DONE
 
 `trader/online/backfill.py` — batch driver for processing existing news files.
 
 ---
 
-## 10. Project Structure
+## 11. Project Structure
 
 ```
 trader/
@@ -473,6 +543,9 @@ trader/
 │   ├── yfinance_client.py          # yfinance wrapper
 │   └── indicators.py               # Technical indicators via stockstats
 ├── evidence/                       # URL extraction + fetch + persist
+├── reflection/
+│   ├── eval_record.py              # Nested decision tree builder
+│   └── evaluator.py                # LLM evaluation + insight generation
 ├── knowledge/
 │   ├── store.py                    # JSON knowledge file management
 │   └── memory.py                   # BM25 situation memory (TODO)
@@ -482,7 +555,7 @@ trader/
 ├── web/                            # FastAPI dashboard (HTMX + Bootstrap 5)
 │   ├── app.py                     # Routes (pages, API fragments, control actions)
 │   ├── sse.py                     # SSE helpers
-│   └── templates/                 # Jinja2: base, 6 pages, 6 partials
+│   └── templates/                 # Jinja2: base, 7 pages, 9 partials
 └── data/                           # Runtime data (gitignored)
     ├── snapshots/                  # Sealed Snapshot JSON files
     ├── watches/                    # Watch JSON files

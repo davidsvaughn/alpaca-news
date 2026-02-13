@@ -122,6 +122,9 @@ class Settings:
     watch_max_retro_minutes: int
     watch_checkin_model: str
 
+    # Reflection / Evaluation
+    reflection_model: str
+
 
 def load_settings(*, dotenv_path: str | None = None, override: bool = False) -> Settings:
     """Load settings from environment.
@@ -208,6 +211,8 @@ def load_settings(*, dotenv_path: str | None = None, override: bool = False) -> 
     watch_max_retro_minutes = _env_int("WATCH_MAX_RETRO_MINUTES", 60)
     watch_checkin_model = _env_str("WATCH_CHECKIN_MODEL", "gemini-3-flash") or "gemini-3-flash"
 
+    reflection_model = _env_str("REFLECTION_MODEL", "gemini-3-flash-preview") or "gemini-3-flash-preview"
+
     return Settings(
         learning_mode=learning_mode,
         trading_mode=trading_mode,  # type: ignore[arg-type]
@@ -259,4 +264,6 @@ def load_settings(*, dotenv_path: str | None = None, override: bool = False) -> 
         watch_max_hold_minutes=watch_max_hold_minutes,
         watch_max_retro_minutes=watch_max_retro_minutes,
         watch_checkin_model=watch_checkin_model,
+
+        reflection_model=reflection_model,
     )

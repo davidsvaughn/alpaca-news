@@ -19,9 +19,11 @@ from __future__ import annotations
 import os
 import time
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from typing import Any
 
 from pydantic_ai import Agent, UsageLimits, WebSearchTool
+from pydantic_ai.messages import ModelResponse
 from pydantic_ai.models.openai import OpenAIResponsesModel
 from pydantic_ai.providers.openai import OpenAIProvider
 
@@ -36,6 +38,64 @@ from trader.online.explorer_agent import (
 )
 
 DEBUG = os.getenv("DEBUG", "false").lower() in ("true", "1")
+
+
+# ---------------------------------------------------------------------------
+# Builtin tool extraction
+# ---------------------------------------------------------------------------
+
+
+def _extract_builtin_tool_traces(
+    messages: list[Any],
+    deps: ExplorerDeps,
+) -> list[dict[str, Any]]:
+    """Extract builtin tool calls (e.g. web_search) from message history.
+
+    PydanticAI's WebSearchTool is a server-side builtin tool that doesn't
+    go through TracingToolset. We recover those calls from the message
+    history as BuiltinToolCallPart / BuiltinToolReturnPart pairs.
+    """
+    from pydantic_ai.messages import BuiltinToolCallPart, BuiltinToolReturnPart
+
+    traces: list[dict[str, Any]] = []
+
+    for msg in messages:
+        if not isinstance(msg, ModelResponse):
+            continue
+        # Use the convenience property if available
+        for call_part, return_part in msg.builtin_tool_calls:
+            hop = deps.hop_index
+            deps.hop_index += 1
+
+            # Serialize the return content
+            content = return_part.content
+            if hasattr(content, "model_dump"):
+                content = content.model_dump()
+            elif not isinstance(content, (str, dict, list)):
+                content = str(content)
+
+            trace: dict[str, Any] = {
+                "trace_id": f"trace_{hop}",
+                "hop_index": hop,
+                "timestamp": (return_part.timestamp or datetime.now(tz=timezone.utc)).isoformat(),
+                "modality": "web_research",
+                "action": {
+                    "tool": call_part.tool_name,
+                    "args": call_part.args if isinstance(call_part.args, dict) else {"query": call_part.args},
+                },
+                "execution": {
+                    "start_time": (msg.timestamp or datetime.now(tz=timezone.utc)).isoformat(),
+                    "end_time": (return_part.timestamp or datetime.now(tz=timezone.utc)).isoformat(),
+                    "duration_s": 0.0,  # server-side, no client timing
+                    "cost_usd": 0.0,
+                },
+                "raw_tool_output": content,
+                "error": None,
+                "builtin": True,
+            }
+            traces.append(trace)
+
+    return traces
 
 
 # ---------------------------------------------------------------------------
@@ -131,7 +191,7 @@ def build_default_pipeline() -> PipelineConfig:
     # web evidence without calling web_search itself.
     google_key = os.getenv("GOOGLE_API_KEY")
     if google_key:
-        gemini_model = os.getenv("SYNTHESIS_MODEL", "gemini-2.5-flash")
+        gemini_model = os.getenv("SYNTHESIS_MODEL", "gemini-3-flash-preview")
         agents.append(AgentSpec(
             name="gemini",
             model=f"google-gla:{gemini_model}",
@@ -348,6 +408,12 @@ async def run_pipeline(
             total_usage["requests"] += usage.requests or 0
             total_usage["tool_calls"] += usage.tool_calls or 0
 
+            # Extract builtin tool calls (e.g. web_search) from message history
+            builtin_traces = _extract_builtin_tool_traces(
+                result.all_messages(), deps,
+            )
+            deps.tool_traces.extend(builtin_traces)
+
             # Collect traces and findings
             all_tool_traces.extend(deps.tool_traces)
 
@@ -362,6 +428,8 @@ async def run_pipeline(
                 "agent": spec.name,
                 "model": model_name,
                 "round": round_num + 1,
+                "system_prompt": system_prompt,
+                "user_message": user_message,
                 "findings": str(result.output) if not spec.is_final else "",
                 "tool_traces": deps.tool_traces,
                 "usage": {
@@ -468,7 +536,7 @@ def _extract_model_for_pricing(spec_name: str, model_string: str) -> tuple[str, 
     Handles:
       - "grok" agent name → provider "grok", model from model_string
       - "openai-responses:gpt-5-mini" → ("openai", "gpt-5-mini")
-      - "google-gla:gemini-2.5-flash" → ("gemini", "gemini-2.5-flash")
+      - "google-gla:gemini-3-flash-preview" → ("gemini", "gemini-3-flash-preview")
       - OpenAIResponsesModel objects → model_name attribute
     """
     provider = _AGENT_TO_PROVIDER.get(spec_name, spec_name)

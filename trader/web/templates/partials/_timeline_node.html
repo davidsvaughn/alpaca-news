@@ -1,0 +1,85 @@
+{# Recursive macro for rendering eval_record timeline nodes as nested accordions. #}
+{% macro render_node(node, depth, parent_id, idx) %}
+{% set ntype = node.get('type', '?') if node is mapping else node.type if node.type is defined else '?' %}
+{% set summary = node.get('summary', '') if node is mapping else node.summary if node.summary is defined else '' %}
+{% set detail = node.get('detail', {}) if node is mapping else node.detail if node.detail is defined else {} %}
+{% set children = node.get('children', []) if node is mapping else node.children if node.children is defined else [] %}
+{% set node_id = parent_id ~ '-' ~ idx %}
+
+{% set badge_colors = {
+  'triage': 'info',
+  'agent_round': 'primary',
+  'tool_call': 'secondary',
+  'prediction': 'success',
+  'watch_entry': 'warning',
+  'watch_checkin': 'secondary',
+  'watch_exit': 'danger',
+  'retrospective': 'dark'
+} %}
+{% set badge_color = badge_colors.get(ntype, 'secondary') if badge_colors is mapping else 'secondary' %}
+
+<div class="accordion-item">
+  <h2 class="accordion-header">
+    <button class="accordion-button collapsed py-2" type="button"
+            data-bs-toggle="collapse" data-bs-target="#tl-{{ node_id }}"
+            style="font-size: 0.85rem;">
+      <span class="badge bg-{{ badge_color }} me-2">{{ ntype }}</span>
+      {{ summary }}
+      {% if children %}
+      <span class="badge bg-light text-dark border ms-2">{{ children|length }} sub</span>
+      {% endif %}
+    </button>
+  </h2>
+  <div id="tl-{{ node_id }}" class="accordion-collapse collapse">
+    <div class="accordion-body py-2 px-3" style="font-size: 0.82rem;">
+      {# Detail fields #}
+      {% if detail %}
+      <dl class="row mb-2">
+        {% for key in detail.keys() if detail is mapping %}
+          {% set val = detail[key] %}
+          {% if key in ('system_prompt', 'user_message', 'findings') %}
+            <dt class="col-sm-2">{{ key }}</dt>
+            <dd class="col-sm-10">
+              <details>
+                <summary class="small text-muted">Show {{ key }} ({{ (val|string|length)|string }} chars)</summary>
+                <pre class="trace-output bg-light p-2 rounded border mt-1 mb-0" style="max-height:300px; overflow-y:auto; white-space:pre-wrap; word-break:break-word;">{{ val|string|truncate(5000, True, '... [truncated]') }}</pre>
+              </details>
+            </dd>
+          {% elif key == 'raw_output' %}
+            <dt class="col-sm-2">{{ key }}</dt>
+            <dd class="col-sm-10">
+              <details>
+                <summary class="small text-muted">Show output</summary>
+                {% if val is mapping or val is sequence and val is not string %}
+                <pre class="trace-output bg-light p-2 rounded border mt-1 mb-0" style="max-height:300px; overflow-y:auto;">{{ val|to_json(indent=2) }}</pre>
+                {% else %}
+                <pre class="trace-output bg-light p-2 rounded border mt-1 mb-0" style="max-height:300px; overflow-y:auto;">{{ val|string|truncate(3000, True, '... [truncated]') }}</pre>
+                {% endif %}
+              </details>
+            </dd>
+          {% elif key == 'args' and val is mapping %}
+            <dt class="col-sm-2">{{ key }}</dt>
+            <dd class="col-sm-10"><code>{{ val|to_json }}</code></dd>
+          {% elif val is mapping %}
+            <dt class="col-sm-2">{{ key }}</dt>
+            <dd class="col-sm-10"><code>{{ val|to_json }}</code></dd>
+          {% else %}
+            <dt class="col-sm-2">{{ key }}</dt>
+            <dd class="col-sm-10">{{ val }}</dd>
+          {% endif %}
+        {% endfor %}
+      </dl>
+      {% endif %}
+
+      {# Nested children #}
+      {% if children %}
+      <div class="accordion ms-2" id="tl-acc-{{ node_id }}">
+        {% for child in children %}
+          {{ render_node(child, depth + 1, node_id, loop.index) }}
+        {% endfor %}
+      </div>
+      {% endif %}
+    </div>
+  </div>
+</div>
+{% endmacro %}

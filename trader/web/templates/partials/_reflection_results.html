@@ -1,0 +1,80 @@
+{# Rendered server-side after LLM evaluation completes. #}
+{% if error %}
+<div class="alert alert-danger">{{ error }}</div>
+{% elif evaluation %}
+<div class="card border-info mb-4">
+  <div class="card-header bg-info text-white d-flex align-items-center">
+    <strong class="me-auto">Evaluation Results</strong>
+    <span class="badge bg-light text-dark">{{ evaluation.snapshots|length }} snapshots</span>
+  </div>
+  <div class="card-body">
+    {# Per-snapshot assessments #}
+    {% for snap_eval in evaluation.snapshots %}
+    <div class="card mb-3">
+      <div class="card-header d-flex align-items-center">
+        <span class="grade-{{ snap_eval.grade }} fs-5 me-2">{{ snap_eval.grade }}</span>
+        <code class="me-2">{{ snap_eval.snapshot_id[:12] }}</code>
+        <span class="text-muted small">{{ snap_eval.summary }}</span>
+      </div>
+      {% if snap_eval.assessments %}
+      <div class="card-body p-0">
+        <table class="table table-sm mb-0" style="font-size: 0.82rem;">
+          <thead class="table-light">
+            <tr><th>Node</th><th>Agent</th><th>Rating</th><th>Note</th></tr>
+          </thead>
+          <tbody>
+            {% for a in snap_eval.assessments %}
+            <tr>
+              <td><span class="badge bg-secondary">{{ a.node_type }}</span></td>
+              <td>{{ a.get('agent', '') }}</td>
+              <td>
+                {% if a.rating == 'good' %}
+                  <span class="badge bg-success">good</span>
+                {% elif a.rating == 'ok' %}
+                  <span class="badge bg-warning text-dark">ok</span>
+                {% else %}
+                  <span class="badge bg-danger">poor</span>
+                {% endif %}
+              </td>
+              <td class="small">{{ a.note }}</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      {% endif %}
+    </div>
+    {% endfor %}
+
+    {# Insights #}
+    {% if evaluation.insights %}
+    <h5 class="mt-3">Insights</h5>
+    {% for insight in evaluation.insights %}
+    <div class="card mb-2">
+      <div class="card-body py-2 px-3">
+        <div class="d-flex align-items-start">
+          <span class="badge bg-{{ 'success' if insight.tier == 'A' else 'info' }} me-2">Tier {{ insight.tier }}</span>
+          <span class="badge bg-secondary me-2">{{ insight.category }}</span>
+          <span class="small flex-grow-1">{{ insight.text }}</span>
+          {% if insight.tier == 'A' and insight.action %}
+          <form class="ms-2" style="display:inline;" method="POST" action="/api/reflection/apply">
+            <input type="hidden" name="action_json" value="{{ insight.action|to_json }}">
+            <button type="submit" class="btn btn-sm btn-outline-success" title="Auto-apply to knowledge">Apply</button>
+          </form>
+          {% elif insight.tier == 'B' %}
+          <form class="ms-2" style="display:inline;" method="POST" action="/api/reflection/save">
+            <input type="hidden" name="text" value="{{ insight.text }}">
+            <input type="hidden" name="category" value="{{ insight.category }}">
+            <button type="submit" class="btn btn-sm btn-outline-info" title="Save to suggestions file">Save</button>
+          </form>
+          {% endif %}
+        </div>
+      </div>
+    </div>
+    {% endfor %}
+    {% endif %}
+  </div>
+</div>
+{% else %}
+<div class="alert alert-warning">No evaluation results.</div>
+{% endif %}

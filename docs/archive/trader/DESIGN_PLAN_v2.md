@@ -204,7 +204,7 @@ All agents share:
 - Gemini **cannot** mix Google grounding with function tools in a single agent,
   but can participate via a **two-instance approach**: one Gemini with Google
   grounding only (web search), one with function tools only (market data, etc.).
-  Both gemini-2.5-flash and gemini-3-flash-preview tested and working with
+  Both gemini-3-flash-preview and gemini-3-flash-preview tested and working with
   function tools alone.
 
 #### Context flow between agents

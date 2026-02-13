@@ -92,6 +92,7 @@ TOOL_MODALITY: dict[str, str] = {
     "check_insider_activity": "fundamentals",
     "get_company_news": "news",
     "url_fetch": "web_research",
+    "web_search": "web_research",
     "x_search": "social",
     "x_stream_cache": "social",
 }
@@ -451,12 +452,12 @@ Then weigh these against each other to reach your conclusion.
 # ---------------------------------------------------------------------------
 
 
-def build_explorer_agent(model: str = "google-gla:gemini-2.5-flash") -> Agent[ExplorerDeps, TradingSignal]:
+def build_explorer_agent(model: str = "google-gla:gemini-3-flash-preview") -> Agent[ExplorerDeps, TradingSignal]:
     """Create the explorer agent.
 
     Args:
         model: PydanticAI model string, e.g.:
-            - 'google-gla:gemini-2.5-flash'
+            - 'google-gla:gemini-3-flash-preview'
             - 'anthropic:claude-sonnet-4-5'
             - 'openai:gpt-5-mini'
     """
@@ -475,7 +476,7 @@ async def explore(
     *,
     news: dict[str, Any],
     symbols: list[str],
-    model: str = "google-gla:gemini-2.5-flash",
+    model: str = "google-gla:gemini-3-flash-preview",
     market: MarketDataService | None = None,
     request_limit: int = 20,
     tool_calls_limit: int = 30,
