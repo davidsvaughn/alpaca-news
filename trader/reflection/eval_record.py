@@ -20,8 +20,10 @@ from typing import Any
 def build_eval_record(
     snapshot: dict[str, Any],
     watch: dict[str, Any] | None = None,
+    *,
+    follow_ups: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    """Transform a snapshot dict + optional watch dict into a nested tree."""
+    """Transform a snapshot dict + optional watch dict + follow-ups into a nested tree."""
     trigger = snapshot.get("trigger") or {}
     nodes: list[dict[str, Any]] = []
 
@@ -40,6 +42,10 @@ def build_eval_record(
     # 4. Watch lifecycle (if linked)
     if watch is not None:
         nodes.extend(_watch_nodes(watch))
+
+    # 5. Follow-up data collections
+    for fu in follow_ups or []:
+        nodes.extend(_follow_up_nodes(fu))
 
     return {
         "snapshot_id": snapshot.get("snapshot_id", ""),
@@ -259,6 +265,62 @@ def _checkin_children(watch: dict[str, Any]) -> list[dict[str, Any]]:
             "children": [],
         })
     return children
+
+
+# ---------------------------------------------------------------------------
+# Follow-up nodes
+# ---------------------------------------------------------------------------
+
+
+def _follow_up_nodes(fu: dict[str, Any]) -> list[dict[str, Any]]:
+    """Build follow_up parent node with collection children."""
+    fu_json = fu.get("follow_up_json") or fu  # DB row vs raw dict
+    if isinstance(fu_json, str):
+        import json
+        fu_json = json.loads(fu_json)
+
+    reason = fu_json.get("reason", "?")
+    status = fu_json.get("status", "?")
+    n_collections = len(fu_json.get("collections", []))
+    total_cost = fu_json.get("total_cost_usd", 0.0)
+    symbols = ", ".join(fu_json.get("symbols", []))
+
+    children: list[dict[str, Any]] = []
+    for c in fu_json.get("collections", []):
+        offset = c.get("offset_label", "?")
+        cost = c.get("cost_usd", 0.0)
+        n_web = len(c.get("web_results", []))
+        n_x = len(c.get("x_results", []))
+        price_syms = list(c.get("price", {}).keys())
+        price_hint = ", ".join(price_syms) if price_syms else "none"
+
+        children.append({
+            "type": "follow_up_collection",
+            "summary": f"{offset} | {n_web} web + {n_x} x | ${cost:.4f}",
+            "detail": {
+                "offset_label": offset,
+                "collected_at": c.get("collected_at", ""),
+                "price_symbols": price_hint,
+                "web_queries": [r.get("query", "") for r in c.get("web_results", [])],
+                "x_queries": [r.get("query", "") for r in c.get("x_results", [])],
+                "cost_usd": cost,
+            },
+            "children": [],
+        })
+
+    return [{
+        "type": "follow_up",
+        "summary": f"{reason} | {symbols} | {n_collections} collections | ${total_cost:.4f} | {status}",
+        "detail": {
+            "follow_up_id": fu_json.get("follow_up_id", ""),
+            "reason": reason,
+            "status": status,
+            "schedule": fu_json.get("schedule", []),
+            "started_at": fu_json.get("started_at", ""),
+            "total_cost_usd": total_cost,
+        },
+        "children": children,
+    }]
 
 
 # ---------------------------------------------------------------------------

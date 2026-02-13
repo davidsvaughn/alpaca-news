@@ -122,6 +122,16 @@ class Settings:
     watch_max_retro_minutes: int
     watch_checkin_model: str
 
+    # Follow-up data collection
+    follow_up_enabled: bool
+    follow_up_schedule: str                     # comma-separated: "+1h,+4h,+1d,+3d,+5d"
+    follow_up_web_searches: int                 # web searches per collection
+    follow_up_x_searches: int                   # x searches per collection
+    follow_up_max_cost: float                   # max USD per follow-up
+    follow_up_max_concurrent: int
+    follow_up_collector_interval_s: int          # polling interval in seconds
+    follow_up_planner_model: str                # model for query planning
+
     # Pipeline per-agent limits
     pipeline_request_limit: int
     pipeline_tool_calls_limit: int
@@ -218,6 +228,16 @@ def load_settings(*, dotenv_path: str | None = None, override: bool = False) -> 
     watch_max_retro_minutes = _env_int("WATCH_MAX_RETRO_MINUTES", 60)
     watch_checkin_model = _env_str("WATCH_CHECKIN_MODEL", "gemini-3-flash") or "gemini-3-flash"
 
+    # Follow-up data collection
+    follow_up_enabled = _env_bool("FOLLOW_UP_ENABLED", True)
+    follow_up_schedule = _env_str("FOLLOW_UP_SCHEDULE", "+1h,+4h,+1d,+3d,+5d") or "+1h,+4h,+1d,+3d,+5d"
+    follow_up_web_searches = _env_int("FOLLOW_UP_WEB_SEARCHES", 2)
+    follow_up_x_searches = _env_int("FOLLOW_UP_X_SEARCHES", 1)
+    follow_up_max_cost = _env_float("FOLLOW_UP_MAX_COST", 0.20)
+    follow_up_max_concurrent = _env_int("FOLLOW_UP_MAX_CONCURRENT", 20)
+    follow_up_collector_interval_s = _env_int("FOLLOW_UP_COLLECTOR_INTERVAL_S", 300)
+    follow_up_planner_model = _env_str("FOLLOW_UP_PLANNER_MODEL", "gemini-3-flash") or "gemini-3-flash"
+
     # Pipeline per-agent limits
     pipeline_request_limit = _env_int("PIPELINE_REQUEST_LIMIT", 15)
     pipeline_tool_calls_limit = _env_int("PIPELINE_TOOL_CALLS_LIMIT", 25)
@@ -276,6 +296,15 @@ def load_settings(*, dotenv_path: str | None = None, override: bool = False) -> 
         watch_max_hold_minutes=watch_max_hold_minutes,
         watch_max_retro_minutes=watch_max_retro_minutes,
         watch_checkin_model=watch_checkin_model,
+
+        follow_up_enabled=follow_up_enabled,
+        follow_up_schedule=follow_up_schedule,
+        follow_up_web_searches=follow_up_web_searches,
+        follow_up_x_searches=follow_up_x_searches,
+        follow_up_max_cost=follow_up_max_cost,
+        follow_up_max_concurrent=follow_up_max_concurrent,
+        follow_up_collector_interval_s=follow_up_collector_interval_s,
+        follow_up_planner_model=follow_up_planner_model,
 
         pipeline_request_limit=pipeline_request_limit,
         pipeline_tool_calls_limit=pipeline_tool_calls_limit,

@@ -183,6 +183,7 @@ def process_news_file(
         source=str(news.get("source") or "") if news.get("source") else None,
         symbols=[str(x) for x in (news.get("symbols") or [])],
         raw=news,
+        source_file=path.name,
     )
 
     builder = SnapshotBuilder(trigger=trigger, snapshot_id=snap_id)
@@ -520,6 +521,60 @@ def process_news_file(
                 raise
             print(f"WARN: Watch creation failed: {e}")
 
+    # --- Stage 4: Follow-up for no-buy decisions ---
+    watch_was_created = (
+        settings.watch_enabled
+        and signal is not None
+        and signal.direction != "neutral"
+        and signal.confidence >= settings.watch_confidence_threshold
+    )
+    if settings.follow_up_enabled and not watch_was_created:
+        try:
+            from trader.db.database import insert_follow_up
+            from trader.models.follow_up import FollowUpBuilder
+
+            schedule = [s.strip() for s in settings.follow_up_schedule.split(",")]
+            fu_config: dict[str, Any] = {
+                "web_searches": settings.follow_up_web_searches,
+                "x_searches": settings.follow_up_x_searches,
+            }
+            # Pass prediction context for the query planner
+            if signal is not None:
+                fu_config["direction"] = signal.direction
+                fu_config["confidence"] = round(signal.confidence * 100)
+                fu_config["key_catalyst"] = signal.key_catalyst
+            # Summarize agent findings for query planner context
+            if hasattr(snapshot, "rounds") and snapshot.rounds:
+                findings = [r.get("findings", "") for r in snapshot.rounds if r.get("findings")]
+                if findings:
+                    fu_config["findings_summary"] = " | ".join(
+                        f[:200] for f in findings
+                    )[:600]
+
+            fu_builder = FollowUpBuilder(
+                snapshot_id=snapshot.snapshot_id,
+                symbols=trigger.symbols[:3],
+                reason="no_buy",
+                schedule=schedule,
+                config=fu_config,
+                headline=trigger.headline,
+            )
+            insert_follow_up(db, follow_up=fu_builder.to_follow_up().to_dict())
+            bus.publish(PipelineEvent(
+                type="follow_up_created",
+                payload={
+                    "follow_up_id": fu_builder.follow_up_id,
+                    "snapshot_id": snapshot.snapshot_id,
+                    "symbols": trigger.symbols[:3],
+                    "reason": "no_buy",
+                    "schedule": schedule,
+                },
+            ))
+        except Exception as e:
+            if DEBUG:
+                raise
+            print(f"WARN: Follow-up creation failed: {e}")
+
 
 # ---------------------------------------------------------------------------
 # Watchdog + worker queue
@@ -624,6 +679,19 @@ def run_watch_loop(
         )
         monitor_thread.start()
         bus.publish(PipelineEvent(type="monitoring_started", payload={}))
+
+    # Follow-up collector thread
+    if settings.follow_up_enabled:
+        from trader.online.follow_up_collector import FollowUpCollector, collector_loop
+
+        fu_collector = FollowUpCollector(settings=settings, db=db, bus=bus)
+        fu_thread = threading.Thread(
+            target=collector_loop,
+            args=(fu_collector, settings.follow_up_collector_interval_s),
+            daemon=True,
+        )
+        fu_thread.start()
+        bus.publish(PipelineEvent(type="follow_up_collector_started", payload={}))
 
     try:
         while True:

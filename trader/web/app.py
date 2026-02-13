@@ -21,10 +21,12 @@ from trader.db.database import (
     count_snapshots_today,
     count_watches_by_status,
     get_active_watches,
+    get_all_follow_ups,
     get_all_snapshots,
     get_all_watches,
     get_daily_cost_history,
     get_daily_cost_today,
+    get_follow_ups_by_snapshot,
     get_recent_events,
     get_snapshot,
     get_watch,
@@ -106,7 +108,8 @@ def create_app(
         if snap is None:
             return HTMLResponse("<h3>Snapshot not found</h3>", status_code=404)
         watch = get_watch_by_snapshot(db, snapshot_id)
-        timeline = build_eval_record(snap, watch)
+        follow_ups = get_follow_ups_by_snapshot(db, snapshot_id)
+        timeline = build_eval_record(snap, watch, follow_ups=follow_ups)
         return templates.TemplateResponse(
             request=request,
             name="snapshot_detail.html",
@@ -450,6 +453,39 @@ def create_app(
     async def api_events_recent(limit: int = 200):
         """Return recent persisted events as JSON (newest first)."""
         return get_recent_events(db, limit=min(limit, 500))
+
+    # ------------------------------------------------------------------
+    # Snapshot export (combined snapshot + watch + follow-ups as single JSON blob)
+    # ------------------------------------------------------------------
+
+    @app.get("/api/snapshots/{snapshot_id}/export")
+    async def api_snapshot_export(snapshot_id: str):
+        """Export a snapshot + linked watch + follow-ups as a single JSON blob.
+
+        Returns the complete investigation record: trigger, triage, pipeline
+        rounds, tool traces, prediction, cost summary, watch lifecycle
+        (if created), and follow-up data collections.
+        """
+        snap = get_snapshot(db, snapshot_id)
+        if snap is None:
+            return {"error": f"Snapshot {snapshot_id} not found"}
+        watch = get_watch_by_snapshot(db, snapshot_id)
+        follow_ups = get_follow_ups_by_snapshot(db, snapshot_id)
+        blob: dict[str, Any] = {
+            "snapshot": snap,
+            "watch": watch,  # None if no watch was created
+            "follow_ups": follow_ups,
+        }
+        return blob
+
+    # ------------------------------------------------------------------
+    # Follow-ups API
+    # ------------------------------------------------------------------
+
+    @app.get("/api/follow-ups")
+    async def api_follow_ups(status: str | None = None, limit: int = 50):
+        """Return follow-ups, optionally filtered by status."""
+        return get_all_follow_ups(db, status=status, limit=min(limit, 500))
 
     # ------------------------------------------------------------------
     # Reflection API

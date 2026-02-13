@@ -69,6 +69,21 @@ evaluations_table = Table(
 )
 
 
+follow_ups_table = Table(
+    "follow_ups",
+    metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("follow_up_id", String, unique=True, nullable=False),
+    Column("snapshot_id", String, nullable=False),
+    Column("symbols", String, nullable=False),       # comma-separated
+    Column("reason", String, nullable=False),         # "no_buy" | "post_exit"
+    Column("status", String, nullable=False),         # "active" | "complete"
+    Column("created_at", DateTime(timezone=True), server_default=func.now(), nullable=False),
+    Column("updated_at", DateTime(timezone=True), server_default=func.now(), nullable=False),
+    Column("follow_up_json", JSON, nullable=False),
+)
+
+
 @dataclass(frozen=True)
 class Database:
     engine: Engine
@@ -233,6 +248,115 @@ def get_active_watches(db: Database) -> list[dict[str, Any]]:
         raw = row[0]
         result.append(json.loads(raw) if isinstance(raw, str) else raw)
     return result
+
+
+# ---------------------------------------------------------------------------
+# Follow-ups
+# ---------------------------------------------------------------------------
+
+
+def insert_follow_up(db: Database, *, follow_up: dict[str, Any]) -> bool:
+    """Insert a follow-up. Returns True if inserted, False if duplicate."""
+    with db.engine.begin() as conn:
+        result = conn.execute(
+            text(
+                "INSERT OR IGNORE INTO follow_ups "
+                "(follow_up_id, snapshot_id, symbols, reason, status, follow_up_json) "
+                "VALUES (:fuid, :sid, :syms, :reason, :status, :fujson)"
+            ),
+            {
+                "fuid": follow_up["follow_up_id"],
+                "sid": follow_up["snapshot_id"],
+                "syms": ",".join(follow_up.get("symbols", [])),
+                "reason": follow_up["reason"],
+                "status": follow_up["status"],
+                "fujson": json.dumps(follow_up, ensure_ascii=False),
+            },
+        )
+    return result.rowcount > 0
+
+
+def update_follow_up(db: Database, follow_up_id: str, follow_up: dict[str, Any]) -> None:
+    """Update a follow-up's JSON, status, and updated_at."""
+    with db.engine.begin() as conn:
+        conn.execute(
+            text(
+                "UPDATE follow_ups SET status = :status, follow_up_json = :fujson, "
+                "updated_at = CURRENT_TIMESTAMP WHERE follow_up_id = :fuid"
+            ),
+            {
+                "fuid": follow_up_id,
+                "status": follow_up["status"],
+                "fujson": json.dumps(follow_up, ensure_ascii=False),
+            },
+        )
+
+
+def get_follow_up(db: Database, follow_up_id: str) -> dict[str, Any] | None:
+    """Fetch a single follow-up by ID."""
+    with db.engine.connect() as conn:
+        row = conn.execute(
+            text("SELECT follow_up_json FROM follow_ups WHERE follow_up_id = :fuid"),
+            {"fuid": follow_up_id},
+        ).fetchone()
+    if row is None:
+        return None
+    raw = row[0]
+    return json.loads(raw) if isinstance(raw, str) else raw
+
+
+def get_active_follow_ups(db: Database) -> list[dict[str, Any]]:
+    """Fetch all follow-ups in 'active' status."""
+    with db.engine.connect() as conn:
+        rows = conn.execute(
+            text(
+                "SELECT follow_up_json FROM follow_ups "
+                "WHERE status = 'active' ORDER BY created_at"
+            ),
+        ).fetchall()
+    return [json.loads(r[0]) if isinstance(r[0], str) else r[0] for r in rows]
+
+
+def get_follow_ups_by_snapshot(db: Database, snapshot_id: str) -> list[dict[str, Any]]:
+    """Fetch all follow-ups linked to a snapshot."""
+    with db.engine.connect() as conn:
+        rows = conn.execute(
+            text("SELECT follow_up_json FROM follow_ups WHERE snapshot_id = :sid"),
+            {"sid": snapshot_id},
+        ).fetchall()
+    return [json.loads(r[0]) if isinstance(r[0], str) else r[0] for r in rows]
+
+
+def get_all_follow_ups(
+    db: Database, *, status: str | None = None, limit: int = 50, offset: int = 0,
+) -> list[dict[str, Any]]:
+    """Fetch follow-ups ordered by created_at DESC, with optional status filter."""
+    if status:
+        sql = (
+            "SELECT follow_up_json FROM follow_ups WHERE status = :status "
+            "ORDER BY created_at DESC LIMIT :lim OFFSET :off"
+        )
+        params: dict[str, Any] = {"status": status, "lim": limit, "off": offset}
+    else:
+        sql = "SELECT follow_up_json FROM follow_ups ORDER BY created_at DESC LIMIT :lim OFFSET :off"
+        params = {"lim": limit, "off": offset}
+    with db.engine.connect() as conn:
+        rows = conn.execute(text(sql), params).fetchall()
+    return [json.loads(r[0]) if isinstance(r[0], str) else r[0] for r in rows]
+
+
+def count_active_follow_ups(db: Database) -> int:
+    """Count follow-ups currently in 'active' status."""
+    with db.engine.connect() as conn:
+        row = conn.execute(
+            text("SELECT COUNT(*) FROM follow_ups WHERE status = 'active'"),
+        ).fetchone()
+    return row[0] if row else 0
+
+
+# ---------------------------------------------------------------------------
+# Watch stats
+# ---------------------------------------------------------------------------
 
 
 def count_watches_by_status(db: Database) -> dict[str, int]:

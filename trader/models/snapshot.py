@@ -37,6 +37,7 @@ class Trigger:
     source: str | None
     symbols: list[str]
     raw: dict[str, Any] = field(default_factory=dict)
+    source_file: str | None = None  # original alpaca JSON filename
 
 
 @dataclass(frozen=True)

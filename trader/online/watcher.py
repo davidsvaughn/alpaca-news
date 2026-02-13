@@ -503,6 +503,49 @@ class WatchMonitor:
             },
         ))
 
+        # Create post-exit follow-up for continued data collection
+        if self.settings.follow_up_enabled:
+            try:
+                from trader.db.database import insert_follow_up
+                from trader.models.follow_up import FollowUpBuilder
+
+                schedule = [
+                    s.strip()
+                    for s in self.settings.follow_up_schedule.split(",")
+                ]
+                fu_config: dict[str, Any] = {
+                    "web_searches": self.settings.follow_up_web_searches,
+                    "x_searches": self.settings.follow_up_x_searches,
+                    "direction": entry.get("direction", ""),
+                    "confidence": round(entry.get("confidence", 0) * 100),
+                }
+                fu_builder = FollowUpBuilder(
+                    snapshot_id=entry.get("snapshot_id", ""),
+                    symbols=[symbol],
+                    reason="post_exit",
+                    schedule=schedule,
+                    config=fu_config,
+                    watch_id=wid,
+                    headline=entry.get("thesis", ""),
+                )
+                insert_follow_up(
+                    self.db, follow_up=fu_builder.to_follow_up().to_dict()
+                )
+                self.bus.publish(PipelineEvent(
+                    type="follow_up_created",
+                    payload={
+                        "follow_up_id": fu_builder.follow_up_id,
+                        "snapshot_id": entry.get("snapshot_id", ""),
+                        "symbols": [symbol],
+                        "reason": "post_exit",
+                        "watch_id": wid,
+                    },
+                ))
+            except Exception as e:
+                if DEBUG:
+                    raise
+                print(f"WARN: Post-exit follow-up creation failed: {e}")
+
     # ------------------------------------------------------------------
     # Helpers
     # ------------------------------------------------------------------

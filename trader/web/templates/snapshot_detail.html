@@ -154,6 +154,10 @@
           <dt class="col-sm-4">Time</dt>
           <dd class="col-sm-8">{{ s.trigger.alpaca_timestamp }}</dd>
           {% endif %}
+          {% if s.trigger.source_file %}
+          <dt class="col-sm-4">File</dt>
+          <dd class="col-sm-8"><code class="small">{{ s.trigger.source_file }}</code></dd>
+          {% endif %}
           {% if s.trigger.raw and s.trigger.raw.url %}
           <dt class="col-sm-4">Article</dt>
           <dd class="col-sm-8"><a href="{{ s.trigger.raw.url }}" target="_blank" rel="noopener">View article &rarr;</a></dd>
@@ -550,6 +554,8 @@
             {% endfor %}
           </dd>
           {% endif %}
+          <dt class="col-sm-4">Export</dt>
+          <dd class="col-sm-8"><a href="/api/snapshots/{{ s.snapshot_id }}/export" target="_blank">Download JSON &darr;</a></dd>
         </dl>
       </div>
     </div>
