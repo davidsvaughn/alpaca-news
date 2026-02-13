@@ -129,7 +129,12 @@ All agents share:
   structured output, budget enforcement
 - **Tool tracing:** `TracingToolset` (WrapperToolset subclass) intercepts every
   tool call across all agents, recording ToolTrace with `raw_tool_output`
-- **Budget:** `UsageLimits` per agent + total pipeline budget
+- **Budget:** `UsageLimits` per agent + total pipeline budget (configurable
+  via `PIPELINE_REQUEST_LIMIT`, `PIPELINE_TOOL_CALLS_LIMIT`, `PIPELINE_TOTAL_TOKENS_LIMIT`)
+- **Budget awareness:** `TracingToolset` appends real-time usage stats to tool
+  results using `ctx.usage` (PydanticAI's live cumulative counters), so agents
+  see `[Budget: 43k/80k tokens | 7/15 requests | x_search: 2 used]` after
+  each tool call and can self-regulate
 - **Dependencies:** `RunContext[ExplorerDeps]` carries `MarketDataService`,
   tool traces, and accumulated context into tool functions
 
@@ -145,9 +150,10 @@ All agents share:
 #### Context flow between agents
 
 Each agent receives a prompt containing:
-1. The original news event
-2. All findings from prior agents (accumulated `context.rounds[]`)
-3. System prompt with tool definitions, budget, and learned insights
+1. The original news event (headline + article content when available)
+2. Auto-fetched context: FinnHub company news and earnings data for primary symbols
+3. All findings from prior agents (accumulated `context.rounds[]`)
+4. System prompt with tool definitions, budget, and learned insights
 
 Each agent's output (str findings) becomes part of the next agent's input.
 No separate "blackboard" needed — the accumulated context IS the shared state.
@@ -194,6 +200,8 @@ The final agent must produce a valid `TradingSignal` or the run fails.
 | `get_technical_indicators(symbol, indicators)` | DONE | RSI, MACD, BBands, ATR, VWMA, MFI |
 | `check_price_spike(symbol)` | DONE | Intraday spike detection |
 | `check_volume_regime(symbol)` | DONE | Abnormal volume detection |
+| `get_finnhub_news(symbol)` | DONE | FinnHub company news (free tier, 60 req/min) |
+| `get_analyst_ratings(symbol)` | DONE | Analyst recommendation trends — buy/hold/sell distribution (FinnHub free tier) |
 
 ### Agent prompt design
 
@@ -235,15 +243,27 @@ Free, no API key. Complements Schwab and serves as fallback.
 Computed locally from yfinance OHLCV via `stockstats`. Zero cost.
 RSI, MACD, Bollinger Bands, ATR, VWMA, MFI, SMA/EMA.
 
-### 4e. Data Vendor Fallback — DONE
+### 4e. FinnHub Data — DONE
+
+`trader/market/finnhub_client.py` — free tier (60 req/min, `FINNHUB_API_KEY`).
+
+Complements Schwab/yfinance with data they don't carry:
+- **Company news** — auto-fetched into user message + available as tool
+- **Earnings surprises** — last 4 quarters beat/miss history (auto-fetched)
+- **Earnings calendar** — next/last earnings date + estimates (auto-fetched)
+- **Recommendation trends** — monthly buy/hold/sell analyst distribution (on-demand tool)
+
+Note: News sentiment, price targets, and upgrade/downgrade endpoints are premium-only (403).
+
+### 4f. Data Vendor Fallback — DONE
 
 `trader/market/data_service.py` — `MarketDataService` with Schwab → yfinance fallback.
 
-### 4f. Evidence Acquisition — DONE
+### 4g. Evidence Acquisition — DONE
 
 `trader/evidence/` — URL extraction → fetch → extract → persist via trafilatura.
 
-### 4g. X API Stream — DONE
+### 4h. X API Stream — DONE
 
 `trader/xapi/` + `trader/online/x_stream_service.py` — filtered stream, burst mode, guardrails.
 
@@ -541,6 +561,7 @@ trader/
 │   ├── data_service.py             # MarketDataService (Schwab → yfinance)
 │   ├── schwab_client.py            # Schwab wrapper
 │   ├── yfinance_client.py          # yfinance wrapper
+│   ├── finnhub_client.py           # FinnHub free tier (news, earnings, analyst)
 │   └── indicators.py               # Technical indicators via stockstats
 ├── evidence/                       # URL extraction + fetch + persist
 ├── reflection/

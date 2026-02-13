@@ -25,6 +25,9 @@
 | **Schwab market data** | DONE | Quotes, candles, streaming, options, fundamentals, movers, market hours |
 | **Knowledge store** | PARTIAL | skip_patterns, reliable_sources, generic append_to_list; insights.json TODO |
 | **Explorer (multi-agent pipeline)** | DONE | Sequential Grok→OpenAI→Gemini pipeline — wired into orchestrator |
+| **FinnHub data integration** | DONE | Company news, earnings context (auto-fetch), analyst ratings (tool) |
+| **Budget awareness** | DONE | Real-time token/request usage injected into tool results via ctx.usage |
+| **Pipeline env var config** | DONE | PIPELINE_REQUEST_LIMIT, PIPELINE_TOOL_CALLS_LIMIT, PIPELINE_TOTAL_TOKENS_LIMIT |
 | **yfinance data layer** | DONE | Free data: fundamentals, insider tx, price history, news, technicals |
 | **BM25 situation memory** | TODO | New — learned from TradingAgents |
 | **Schwab Tier 1 expansion** | DONE | Options IV, fundamentals, movers, market hours, enhanced context |
@@ -130,6 +133,23 @@ On-demand decision evaluation with nested decision tree and two-tier insights.
 6. **DONE** — KnowledgeStore extensions:
    - Generic `append_to_list(filename, key, item)` for all knowledge files
    - Supports signal_patterns, anti_patterns, search_strategies, model_notes
+
+## Phase D-1.5: Data enrichment & budget awareness — DONE
+
+1. **DONE** — FinnHub free tier integration (`trader/market/finnhub_client.py`):
+   - Company news auto-fetched into user message
+   - Earnings context (surprises + calendar) auto-fetched into user message
+   - `get_analyst_ratings` tool for on-demand recommendation trends
+   - Premium endpoints (news sentiment, price targets, upgrades) confirmed 403 — skipped
+2. **DONE** — Budget awareness via `ctx.usage`:
+   - `TracingToolset.call_tool()` appends real-time budget summary to tool results
+   - Shows tokens used/limit, requests used/limit, expensive tool counts
+   - Agents self-regulate based on visible budget consumption
+3. **DONE** — Pipeline limits as env vars:
+   - `PIPELINE_REQUEST_LIMIT` (default 15), `PIPELINE_TOOL_CALLS_LIMIT` (25),
+     `PIPELINE_TOTAL_TOKENS_LIMIT` (80,000) — wired into ExplorerDeps + UsageLimits
+4. **DONE** — Article content inclusion:
+   - HTML-stripped article body included in user message when available
 
 ## Phase D-2: Offline loop — TODO
 

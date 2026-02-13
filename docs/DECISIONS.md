@@ -25,6 +25,10 @@
 | Evaluation data format | Nested JSON tree (EvalRecord) | Same structure serves both human UI (accordions) and LLM evaluator (markdown) |
 | Insight tiers | Tier A (auto-apply) + Tier B (code changes) | Separates what can be learned without code changes from what needs development |
 | Evaluation model | Gemini (configurable) | Cheap, fast, good at structured JSON output; avoids using pipeline models as self-evaluators |
+| FinnHub as data source | Complement Schwab/yfinance | Free tier provides data neither has: earnings surprises, calendar, analyst consensus. Premium endpoints (sentiment, targets, upgrades) are 403 |
+| Auto-fetch vs tool pattern | Always-relevant data auto-fetched; on-demand data as tools | Earnings context goes in every prompt (always relevant); analyst ratings is an agent tool (sometimes relevant) |
+| Budget awareness approach | Append to tool results via ctx.usage | Preserves prefix caching (no system prompt changes); agents naturally see budget after each tool call; uses PydanticAI's real cumulative counters |
+| Include potentially redundant data | Yes — let reflection loop evaluate | FinnHub news + analyst data may overlap with existing sources, but including them tests whether the self-improvement loop can identify and weed out low-value inputs |
 
 ---
 
@@ -114,7 +118,7 @@ From `docs/refs/LLMFactor.pdf` — ideas worth revisiting once we have operation
 |------|--------|-------------|
 | ~~Full adversarial debate~~ | TradingAgents | **ADOPTED** — multi-agent pipeline provides natural adversarial reasoning |
 | Three-way risk debate | TradingAgents | Subsumed by multi-agent pipeline |
-| Alpha Vantage NEWS_SENTIMENT | TradingAgents | Limited free tier; yfinance news + web_search cover this |
+| Alpha Vantage NEWS_SENTIMENT | TradingAgents | Limited free tier; FinnHub news sentiment also premium-only (403). yfinance news + FinnHub company news + web_search cover this space |
 | Postgres / Supabase | Original design | SQLite sufficient for single-process v1 |
 | Streamlit offline workbench | Original design | FastAPI dashboard is primary |
 | ~~Contextual bandits~~ | Original design | **PLANNED (Phase D+)** — see above |
