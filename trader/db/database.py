@@ -71,6 +71,30 @@ def snapshot_exists(db: Database, snapshot_id: str) -> bool:
     return row is not None
 
 
+def delete_snapshot(db: Database, snapshot_id: str) -> bool:
+    """Delete a snapshot by ID. Returns True if a row was deleted."""
+    with db.engine.begin() as conn:
+        result = conn.execute(
+            text("DELETE FROM snapshots WHERE snapshot_id = :sid"),
+            {"sid": snapshot_id},
+        )
+    return result.rowcount > 0
+
+
+def is_mock_snapshot(db: Database, snapshot_id: str) -> bool:
+    """Check if a snapshot was created with MOCK_LLM (model='test' in rounds)."""
+    with db.engine.connect() as conn:
+        row = conn.execute(
+            text("SELECT snapshot_json FROM snapshots WHERE snapshot_id = :sid"),
+            {"sid": snapshot_id},
+        ).fetchone()
+    if row is None:
+        return False
+    data = json.loads(row[0]) if isinstance(row[0], str) else row[0]
+    rounds = data.get("rounds") or []
+    return any(r.get("model") == "test" for r in rounds)
+
+
 def insert_snapshot(db: Database, *, snapshot: dict[str, Any]) -> bool:
     """Insert a snapshot. Returns True if inserted, False if duplicate (idempotent).
 

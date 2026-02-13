@@ -1,6 +1,12 @@
 start 
 python alpaca/news_websocket.py
 
+# Kill existing
+pkill -f "trader.main"
+
+# Relaunch
+BACKFILL_ON_START=false nohup uv run python -m trader.main > /tmp/alpaca-dashboard.log 2>&1 &
+
 ------------------------------------------------------
 
 jq -r '{id, signal_strength} | [.id, .signal_strength] | @tsv' ./labels/*.jsonl | sort -k1 -n > signal.tsv

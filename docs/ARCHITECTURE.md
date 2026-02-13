@@ -247,6 +247,12 @@ RSI, MACD, Bollinger Bands, ATR, VWMA, MFI, SMA/EMA.
 
 `trader/xapi/` + `trader/online/x_stream_service.py` — filtered stream, burst mode, guardrails.
 
+**Quality gate:** LLM-based relevance monitor (`trader/online/stream_quality.py`).
+After N tweets (configurable, default 5), a cheap LLM (gemini-3-flash) evaluates
+whether tweets match the target stock/news. If irrelevant, the stream is killed and
+auto-retried with LLM-suggested revised filter rules (up to 3 retries, configurable).
+Stale/backfill news skips streaming entirely (uses `x_search` instead).
+
 ---
 
 ## 5. Knowledge & Learning
@@ -451,7 +457,8 @@ trader/
 │   ├── agent_pipeline.py           # Multi-agent sequential pipeline
 │   ├── watcher.py                  # Watch monitoring scheduler
 │   ├── backfill.py                 # Batch reprocessing
-│   └── x_stream_service.py         # X stream burst service
+│   ├── x_stream_service.py         # X stream burst service
+│   └── stream_quality.py           # LLM quality gate for stream bursts
 ├── models/
 │   ├── snapshot.py                 # Snapshot + SnapshotBuilder
 │   ├── watch.py                    # Watch + WatchBuilder

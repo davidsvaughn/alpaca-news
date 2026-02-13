@@ -22,14 +22,15 @@ import json
 import os
 import queue
 import time
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from watchdog.events import FileSystemEventHandler
 from watchdog.observers import Observer
 
 from trader.config import Settings
-from trader.db.database import Database, insert_snapshot, insert_watch, count_holding_watches, snapshot_exists
+from trader.db.database import Database, insert_snapshot, insert_watch, count_holding_watches, snapshot_exists, is_mock_snapshot, delete_snapshot
 from trader.knowledge.store import KnowledgeStore
 from trader.llm.client import LLMClient
 from trader.llm.cost_tracker import CostTracker
@@ -47,9 +48,56 @@ from trader.online.agent_pipeline import (
 )
 from trader.online.triage import run_triage
 from trader.online.event_bus import EventBus, PipelineEvent
-from trader.online.x_stream_service import XStreamService, build_rules_for_symbols
+from trader.online.x_stream_service import QualityVerdict, XStreamService, build_rules_for_symbols
 
 DEBUG = os.getenv("DEBUG", "false").lower() in ("true", "1")
+
+# Max age (minutes) for news to be considered "fresh" enough for X stream burst.
+# Older news should rely on x_search (historical) rather than live streaming.
+_X_STREAM_MAX_NEWS_AGE_MINUTES = 15
+
+
+def _news_is_fresh(trigger: "Trigger", max_age_minutes: int = _X_STREAM_MAX_NEWS_AGE_MINUTES) -> bool:
+    """Return True if the news trigger is recent enough for live X streaming."""
+    ts = trigger.alpaca_timestamp
+    if not ts:
+        return False  # no timestamp → can't verify freshness → skip stream
+    try:
+        # Alpaca timestamps are ISO 8601 (e.g. "2026-02-12T15:30:00Z")
+        news_dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+        age_minutes = (datetime.now(timezone.utc) - news_dt).total_seconds() / 60
+        return age_minutes <= max_age_minutes
+    except (ValueError, TypeError):
+        return False
+
+
+def _make_quality_callback(
+    *,
+    headline: str,
+    symbols: list[str],
+    summary: str,
+    llm: object,
+    model: str,
+) -> "Callable[[list[dict[str, Any]], list], QualityVerdict]":
+    """Create a closure that checks stream quality against news context."""
+    from trader.online.stream_quality import check_stream_quality
+
+    def callback(posts: list[dict[str, Any]], current_rules: list) -> QualityVerdict:
+        # MockLLMClient doesn't have query_gemini — return "relevant"
+        if not hasattr(llm, "query_gemini"):
+            return QualityVerdict(relevant=True, confidence=1.0, reasoning="mock mode")
+
+        return check_stream_quality(
+            posts=posts,
+            headline=headline,
+            symbols=symbols,
+            summary=summary,
+            current_rules=current_rules,
+            llm=llm,  # type: ignore[arg-type]
+            model=model,
+        )
+
+    return callback
 
 
 # ---------------------------------------------------------------------------
@@ -117,11 +165,15 @@ def process_news_file(
     # Deterministic ID → idempotent on re-run
     snap_id = deterministic_snapshot_id(news)
 
-    # Skip if already processed (backfill safety)
+    # Skip if already processed (backfill safety) — but replace mock snapshots
     if snapshot_exists(db, snap_id):
-        if DEBUG:
-            print(f"SKIP (already processed): {snap_id} from {path}")
-        return
+        if not settings.mock_llm and is_mock_snapshot(db, snap_id):
+            delete_snapshot(db, snap_id)
+            print(f"REPLACED mock snapshot: {snap_id} from {path}")
+        else:
+            if DEBUG:
+                print(f"SKIP (already processed): {snap_id} from {path}")
+            return
 
     trigger = Trigger(
         type="alpaca_news",
@@ -135,7 +187,12 @@ def process_news_file(
 
     builder = SnapshotBuilder(trigger=trigger, snapshot_id=snap_id)
 
-    bus.publish(PipelineEvent(type="news_received", payload={"path": str(path), "snapshot_id": snap_id}))
+    bus.publish(PipelineEvent(type="news_received", payload={
+        "path": str(path),
+        "snapshot_id": snap_id,
+        "headline": trigger.headline,
+        "symbols": trigger.symbols,
+    }))
 
     cost_tracker = CostTracker(
         max_daily_cost=settings.max_daily_cost,
@@ -179,18 +236,34 @@ def process_news_file(
         symbols = triage.symbols if triage.symbols else trigger.symbols
 
         # Optional: start a conservative X stream burst (runs in background).
-        # This is intentionally gated to avoid runaway usage/cost.
+        # Only for fresh news — stale/backfill items should use x_search instead.
         if (
             xstream is not None
             and settings.x_stream_enabled
             and settings.x_stream_mode == "burst"
             and triage.confidence >= settings.x_min_triage_confidence_for_burst
             and symbols
+            and _news_is_fresh(trigger)
         ):
             try:
                 rules = build_rules_for_symbols(symbols=symbols)
                 if rules:
-                    xstream.start_burst(rules=rules, remove_rules_after=True)
+                    quality_cb = None
+                    if settings.x_stream_quality_check_enabled:
+                        quality_cb = _make_quality_callback(
+                            headline=trigger.headline,
+                            symbols=symbols,
+                            summary=trigger.summary or "",
+                            llm=llm,
+                            model=settings.x_stream_quality_check_model,
+                        )
+                    xstream.start_burst(
+                        rules=rules,
+                        remove_rules_after=True,
+                        quality_check=quality_cb,
+                        quality_check_after=settings.x_stream_quality_check_after,
+                        max_quality_retries=settings.x_stream_quality_max_retries,
+                    )
             except Exception as e:
                 if DEBUG:
                     raise
@@ -276,6 +349,8 @@ def process_news_file(
             type="exploration_complete",
             payload={
                 "snapshot_id": snap_id,
+                "symbols": triage.symbols,
+                "headline": trigger.headline,
                 "direction": signal.direction,
                 "confidence": signal.confidence,
                 "agents": len(pipeline_result.rounds),
@@ -304,9 +379,8 @@ def process_news_file(
                 bus.publish(PipelineEvent(type="evidence_acquire_error", payload={"error": str(e)}))
 
         # Optional: attach a small snapshot of X cache as evidence.
-        # Note: because the burst runs asynchronously, this may be empty. It's still useful
-        # for learning once we tune the timing/strategy.
-        if xstream is not None and settings.x_stream_enabled:
+        # Only relevant for fresh news where a burst was actually started.
+        if xstream is not None and settings.x_stream_enabled and _news_is_fresh(trigger):
             try:
                 x_items = xstream.get_recent_posts(key="_all", limit=10)
                 if x_items:
@@ -365,7 +439,14 @@ def process_news_file(
     insert_snapshot(db, snapshot=snapshot.to_dict())
 
     bus.publish(
-        PipelineEvent(type="snapshot_sealed", payload={"snapshot_id": snapshot.snapshot_id, "path": str(out_path)})
+        PipelineEvent(type="snapshot_sealed", payload={
+            "snapshot_id": snapshot.snapshot_id,
+            "path": str(out_path),
+            "symbols": trigger.symbols,
+            "headline": trigger.headline,
+            "direction": snapshot.prediction.get("direction") if snapshot.prediction else None,
+            "confidence": snapshot.prediction.get("confidence") if snapshot.prediction else None,
+        })
     )
 
     # --- Stage 3: Watch creation (if high confidence) ---

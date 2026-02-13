@@ -103,6 +103,10 @@ class Settings:
     x_burst_ttl_minutes: int
     x_usage_poll_interval_s: int
     x_min_triage_confidence_for_burst: float
+    x_stream_quality_check_enabled: bool
+    x_stream_quality_check_after: int
+    x_stream_quality_check_model: str
+    x_stream_quality_max_retries: int
 
     # Evidence acquisition (optional)
     evidence_acquire_enabled: bool
@@ -119,13 +123,15 @@ class Settings:
     watch_checkin_model: str
 
 
-def load_settings(*, dotenv_path: str | None = None) -> Settings:
+def load_settings(*, dotenv_path: str | None = None, override: bool = False) -> Settings:
     """Load settings from environment.
 
     If dotenv_path is None, loads from default `.env` if present.
+    Set override=True to re-read a changed .env file (by default,
+    existing env vars are NOT overwritten by load_dotenv).
     """
 
-    load_dotenv(dotenv_path=dotenv_path)
+    load_dotenv(dotenv_path=dotenv_path, override=override)
 
     learning_mode = _env_bool("LEARNING_MODE", False)
     trading_mode = (os.getenv("TRADING_MODE") or "paper").strip().lower()
@@ -182,6 +188,10 @@ def load_settings(*, dotenv_path: str | None = None) -> Settings:
     x_burst_ttl_minutes = _env_int("X_BURST_TTL_MINUTES", 5)
     x_usage_poll_interval_s = _env_int("X_USAGE_POLL_INTERVAL_S", 300)
     x_min_triage_confidence_for_burst = _env_float("X_MIN_TRIAGE_CONFIDENCE_FOR_BURST", 0.75)
+    x_stream_quality_check_enabled = _env_bool("X_STREAM_QUALITY_CHECK_ENABLED", True)
+    x_stream_quality_check_after = _env_int("X_STREAM_QUALITY_CHECK_AFTER", 5)
+    x_stream_quality_check_model = _env_str("X_STREAM_QUALITY_CHECK_MODEL", "gemini-3-flash") or "gemini-3-flash"
+    x_stream_quality_max_retries = _env_int("X_STREAM_QUALITY_MAX_RETRIES", 3)
 
     evidence_acquire_enabled = _env_bool("EVIDENCE_ACQUIRE_ENABLED", False)
     evidence_max_docs_per_item = _env_int("EVIDENCE_MAX_DOCS_PER_ITEM", 3)
@@ -233,6 +243,10 @@ def load_settings(*, dotenv_path: str | None = None) -> Settings:
         x_burst_ttl_minutes=x_burst_ttl_minutes,
         x_usage_poll_interval_s=x_usage_poll_interval_s,
         x_min_triage_confidence_for_burst=x_min_triage_confidence_for_burst,
+        x_stream_quality_check_enabled=x_stream_quality_check_enabled,
+        x_stream_quality_check_after=x_stream_quality_check_after,
+        x_stream_quality_check_model=x_stream_quality_check_model,
+        x_stream_quality_max_retries=x_stream_quality_max_retries,
 
         evidence_acquire_enabled=evidence_acquire_enabled,
         evidence_max_docs_per_item=evidence_max_docs_per_item,

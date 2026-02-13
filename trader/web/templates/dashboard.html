@@ -77,34 +77,58 @@
     x_burst_start: 'info',
     x_post: 'info',
     x_usage: 'secondary',
+    x_burst_quality: 'warning',
+    x_burst_quality_error: 'danger',
     manual_explore_started: 'primary',
     manual_explore_complete: 'success',
     manual_explore_error: 'danger',
     knowledge_updated: 'info'
   };
 
+  function snapLink(id, label) {
+    if (!id) return label || '?';
+    var text = label || id.slice(0, 12);
+    return '<a href="/snapshots/' + id + '" class="text-info">' + text + '</a>';
+  }
+  function symBadges(syms) {
+    return (syms || []).map(function(s) { return '<span class="badge bg-primary me-1">' + s + '</span>'; }).join('');
+  }
+
   function fmt(type, p) {
     switch(type) {
       case 'triage_decision':
-        return (p.symbols || []).join(',') + ' \u2192 ' + p.action + ' (' + ((p.confidence||0)*100).toFixed(0) + '%)';
+        return symBadges(p.symbols) + ' \u2192 ' + p.action + ' (' + ((p.confidence||0)*100).toFixed(0) + '%) '
+          + '<span class="text-muted small">' + (p.reasoning || '').slice(0, 80) + '</span>';
       case 'snapshot_sealed':
-        return 'Snapshot ' + (p.snapshot_id || '').slice(0, 12);
+        return symBadges(p.symbols) + snapLink(p.snapshot_id)
+          + (p.direction ? ' \u2192 ' + p.direction + ' (' + ((p.confidence||0)*100).toFixed(0) + '%)' : '')
+          + (p.headline ? ' <span class="text-muted small">' + p.headline.slice(0, 60) + '</span>' : '');
       case 'watch_created':
-        return p.symbol + ' ' + p.direction + ' @ $' + (p.entry_price||0).toFixed(2) + ' (conf ' + ((p.confidence||0)*100).toFixed(0) + '%)';
+        return '<span class="badge bg-primary">' + p.symbol + '</span> '
+          + p.direction + ' @ $' + (p.entry_price||0).toFixed(2) + ' (conf ' + ((p.confidence||0)*100).toFixed(0) + '%) '
+          + snapLink(p.snapshot_id, 'snapshot');
       case 'watch_checkin':
-        return p.symbol + ' P&L: ' + (p.pnl_pct||0).toFixed(2) + '% (' + p.depth + ')';
+        return '<span class="badge bg-primary">' + p.symbol + '</span> P&L: '
+          + '<span class="' + ((p.pnl_pct||0) >= 0 ? 'pnl-positive' : 'pnl-negative') + '">'
+          + (p.pnl_pct||0).toFixed(2) + '%</span> (' + p.depth + ')';
       case 'watch_exited':
-        return p.symbol + ' exited: ' + p.reason + ' (' + (p.pnl_pct||0).toFixed(2) + '%)';
+        return '<span class="badge bg-primary">' + p.symbol + '</span> exited: ' + p.reason
+          + ' (<span class="' + ((p.pnl_pct||0) >= 0 ? 'pnl-positive' : 'pnl-negative') + '">'
+          + (p.pnl_pct||0).toFixed(2) + '%</span>)';
       case 'watch_sealed':
-        return p.symbol + ' sealed (MFE ' + (p.mfe_pct||0).toFixed(2) + '% / MAE ' + (p.mae_pct||0).toFixed(2) + '%)';
+        return '<span class="badge bg-primary">' + p.symbol + '</span> sealed (MFE ' + (p.mfe_pct||0).toFixed(2) + '% / MAE ' + (p.mae_pct||0).toFixed(2) + '%)';
       case 'watch_retrospective_started':
-        return p.symbol + ' retro started @ $' + (p.exit_price||0).toFixed(2);
+        return '<span class="badge bg-primary">' + p.symbol + '</span> retro started @ $' + (p.exit_price||0).toFixed(2);
       case 'watch_retrospective_checkin':
-        return p.symbol + ' $' + (p.current_price||0).toFixed(2) + ' (since exit ' + (p.pnl_since_exit_pct||0).toFixed(2) + '%)';
+        return '<span class="badge bg-primary">' + p.symbol + '</span> $' + (p.current_price||0).toFixed(2)
+          + ' (since exit ' + (p.pnl_since_exit_pct||0).toFixed(2) + '%)';
       case 'news_received':
-        return (p.snapshot_id || '').slice(0, 12) + ' from ' + (p.path || '').split('/').pop();
+        return symBadges(p.symbols) + snapLink(p.snapshot_id)
+          + ' <span class="text-muted small">' + (p.headline || (p.path || '').split('/').pop() || '').slice(0, 80) + '</span>';
       case 'exploration_complete':
-        return (p.snapshot_id || '').slice(0, 12) + ' \u2192 ' + (p.direction || '?') + ' (conf ' + ((p.confidence||0)*100).toFixed(0) + '%, ' + (p.rounds_completed||0) + ' rounds)';
+        return symBadges(p.symbols) + snapLink(p.snapshot_id) + ' \u2192 ' + (p.direction || '?')
+          + ' (conf ' + ((p.confidence||0)*100).toFixed(0) + '%, '
+          + (p.agents||0) + ' agents, ' + (p.tool_calls||0) + ' tools)';
       case 'watching':
         return 'Watching ' + (p.dir || '');
       case 'manual_explore_started':
@@ -115,11 +139,32 @@
         return (p.headline || '').slice(0, 40) + ' ERROR: ' + (p.error || '').slice(0, 60);
       case 'knowledge_updated':
         return p.filename + ' saved';
+      case 'x_burst_quality':
+        return (p.relevant ? '\u2705 RELEVANT' : '\u274c IRRELEVANT')
+          + ' (' + ((p.confidence||0)*100).toFixed(0) + '%) '
+          + '<span class="text-muted small">' + (p.reasoning || '').slice(0, 100) + '</span>'
+          + (p.attempt ? ' <span class="badge bg-secondary">attempt ' + p.attempt + '/' + p.max_retries + '</span>' : '')
+          + (p.revised_rule_values ? ' <span class="text-info small">retrying: ' + p.revised_rule_values.join('; ').slice(0, 80) + '</span>' : '');
+      case 'x_post':
+        var d = (p.post || {}).data || {};
+        var users = ((p.post || {}).includes || {}).users || [];
+        var rules = (p.post || {}).matching_rules || [];
+        var author = users.length ? users[0] : {};
+        var handle = author.username || '?';
+        var name = author.name || handle;
+        var text = (d.text || '').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+        var tags = rules.map(function(r) { return r.tag; }).filter(Boolean);
+        var tweetId = d.id || '';
+        var metrics = d.public_metrics || {};
+        return symBadges(tags)
+          + ' <strong>@' + handle + '</strong> '
+          + '<span class="text-muted small">' + text.slice(0, 100) + (text.length > 100 ? '...' : '') + '</span>';
       default:
         return JSON.stringify(p).slice(0, 120);
     }
   }
 
+  var xPostCounter = 0;
   document.body.addEventListener('sse:any', function(e) {
     var type = e.detail.type;
     var payload = e.detail.payload;
@@ -127,9 +172,44 @@
     var time = new Date().toLocaleTimeString();
     var row = document.createElement('div');
     row.className = 'mb-1';
-    row.innerHTML = '<small class="text-muted">' + time + '</small> '
+
+    var summary = '<small class="text-muted">' + time + '</small> '
       + '<span class="badge bg-' + color + '">' + type + '</span> '
       + fmt(type, payload);
+
+    // For x_post events, add expandable full tweet detail
+    if (type === 'x_post') {
+      var post = (payload.post || {});
+      var d = post.data || {};
+      var users = (post.includes || {}).users || [];
+      var rules = post.matching_rules || [];
+      var author = users.length ? users[0] : {};
+      var text = (d.text || '').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\n/g, '<br>');
+      var metrics = d.public_metrics || {};
+      var tweetId = d.id || '';
+      var xid = 'xpost-' + (++xPostCounter);
+
+      row.innerHTML = '<div style="cursor:pointer" data-bs-toggle="collapse" data-bs-target="#' + xid + '">'
+        + summary + '</div>'
+        + '<div class="collapse ms-3 mt-1" id="' + xid + '">'
+        + '<div class="p-2 rounded" style="background:#1a1a2e; border-left: 3px solid #1da1f2;">'
+        + '<div class="mb-1"><strong style="color:#1da1f2;">@' + (author.username || '?') + '</strong>'
+        + ' <span class="text-muted small">(' + (author.name || '') + ')</span>'
+        + (tweetId ? ' <a href="https://x.com/' + (author.username || 'i') + '/status/' + tweetId + '" target="_blank" class="text-info small ms-1" onclick="event.stopPropagation()">open on X &#8599;</a>' : '')
+        + '</div>'
+        + '<div class="small" style="color:#e0e0e0; white-space:pre-wrap; word-break:break-word;">' + text + '</div>'
+        + '<div class="mt-1 small text-muted">'
+        + '\u2764 ' + (metrics.like_count || 0)
+        + '  \ud83d\udd01 ' + (metrics.retweet_count || 0)
+        + '  \ud83d\udcac ' + (metrics.reply_count || 0)
+        + '  \ud83d\udc41 ' + (metrics.impression_count || 0)
+        + (rules.length ? '  | rules: ' + rules.map(function(r) { return r.tag; }).join(', ') : '')
+        + '  | lang: ' + (d.lang || '?')
+        + '</div></div></div>';
+    } else {
+      row.innerHTML = summary;
+    }
+
     feed.prepend(row);
     while (feed.children.length > MAX_ENTRIES) feed.lastChild.remove();
   });

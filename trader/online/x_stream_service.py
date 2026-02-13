@@ -5,6 +5,8 @@ Design goals:
 - Strict guardrails to avoid blowing through credits.
 - Provide a tiny in-memory cache for the explorer ("x_stream_cache" tool).
 - Publish SSE events for visibility.
+- LLM-based quality gate: after N tweets, check relevance and auto-retry
+  with revised filter rules if content is noise.
 
 We intentionally start with BURST mode only:
 - For a given set of rules, connect to the stream for N minutes
@@ -22,7 +24,7 @@ from collections import defaultdict, deque
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from trader.online.event_bus import EventBus, PipelineEvent
 from trader.xapi.client import XApiClient
@@ -40,6 +42,20 @@ class XStreamGuards:
     max_bursts_per_day: int = 10
     burst_ttl_minutes: int = 5
     usage_poll_interval_s: int = 300
+
+
+@dataclass(frozen=True)
+class QualityVerdict:
+    """Result of an LLM quality check on streamed tweets."""
+    relevant: bool
+    confidence: float
+    reasoning: str
+    revised_rule_values: list[str] | None = None
+
+
+# Type alias for the quality callback.
+# Receives (collected_posts, current_rules) → QualityVerdict
+QualityCheckFn = Callable[[list[dict[str, Any]], list[StreamRule]], QualityVerdict]
 
 
 class XStreamService:
@@ -67,6 +83,7 @@ class XStreamService:
         self._day = date.today()
         self._bursts_today = 0
         self._stop_evt = threading.Event()
+        self._burst_stop_evt = threading.Event()
         self._current_burst_thread: threading.Thread | None = None
 
         # Usage polling state
@@ -129,10 +146,16 @@ class XStreamService:
         rules: list[StreamRule],
         remove_rules_after: bool = True,
         stream_params: StreamParams | None = None,
+        quality_check: QualityCheckFn | None = None,
+        quality_check_after: int = 5,
+        max_quality_retries: int = 3,
     ) -> None:
         """Start a burst in a background thread.
 
-        This method returns immediately.
+        This method returns immediately. If ``quality_check`` is provided,
+        the burst will evaluate tweet relevance after ``quality_check_after``
+        tweets arrive. On failure, it auto-retries with LLM-suggested revised
+        rules up to ``max_quality_retries`` times.
         """
 
         self._can_start_burst()
@@ -142,6 +165,7 @@ class XStreamService:
 
         ttl_s = float(max(1, self.guards.burst_ttl_minutes) * 60)
         self._bursts_today += 1
+        self._burst_stop_evt.clear()
 
         t = threading.Thread(
             target=self._run_burst,
@@ -150,6 +174,9 @@ class XStreamService:
                 "remove_rules_after": remove_rules_after,
                 "ttl_s": ttl_s,
                 "stream_params": stream_params,
+                "quality_check": quality_check,
+                "quality_check_after": quality_check_after,
+                "max_quality_retries": max_quality_retries,
             },
             daemon=True,
         )
@@ -163,96 +190,176 @@ class XStreamService:
         remove_rules_after: bool,
         ttl_s: float,
         stream_params: StreamParams | None,
+        quality_check: QualityCheckFn | None = None,
+        quality_check_after: int = 5,
+        max_quality_retries: int = 3,
     ) -> None:
-        # 1) Add rules
-        self.bus.publish(PipelineEvent(type="x_burst_start", payload={"rules": [r.to_dict() for r in rules]}))
-
-        add_resp = add_rules(client=self.client, rules=rules, dry_run=False)
-        created: list[dict[str, Any]] = list(add_resp.get("data") or [])
-        created_ids = [str(x.get("id")) for x in created if x.get("id")]
-
-        # 2) Connect stream for TTL
-        # Log stream payloads to JSONL (optional but useful)
         log_dir = self.data_dir / "x" / "stream"
         log_dir.mkdir(parents=True, exist_ok=True)
         log_path = log_dir / f"{time.strftime('%Y-%m-%d')}.jsonl"
 
-        posts_seen = 0
-        start = time.time()
-        try:
-            for obj in stream_posts(client=self.client, params=stream_params, stop_after_s=ttl_s):
-                posts_seen += 1
+        global_start = time.time()
+        total_posts = 0
+        current_rules = list(rules)
 
-                # Guardrail: if posts explode, stop early
-                if posts_seen > self.guards.max_posts_per_day:
-                    raise RuntimeError(
-                        f"X posts guard tripped within burst: posts_seen={posts_seen} max_posts_per_day={self.guards.max_posts_per_day}"
-                    )
+        self.bus.publish(PipelineEvent(
+            type="x_burst_start",
+            payload={"rules": [r.to_dict() for r in current_rules]},
+        ))
 
-                # Persist JSONL
-                with log_path.open("a", encoding="utf-8") as f:
-                    f.write(json.dumps(obj, ensure_ascii=False) + "\n")
+        for attempt in range(max_quality_retries + 1):
+            # Shared TTL across retries
+            elapsed = time.time() - global_start
+            remaining_ttl = ttl_s - elapsed
+            if remaining_ttl <= 0 or self._burst_stop_evt.is_set():
+                break
 
-                # Cache keying: rule tags are not guaranteed to show in stream payload.
-                # We cache by a simple derived key if possible (author/user/symbol parsing later).
-                # For now, store in a generic "_all" bucket.
-                with self._lock:
-                    self._cache["_all"].append(obj)
+            # 1) Add current rules
+            add_resp = add_rules(client=self.client, rules=current_rules, dry_run=False)
+            created: list[dict[str, Any]] = list(add_resp.get("data") or [])
+            created_ids = [str(x.get("id")) for x in created if x.get("id")]
 
-                self.bus.publish(PipelineEvent(type="x_post", payload={"post": obj}))
+            # 2) Stream + quality gate
+            collected: list[dict[str, Any]] = []
+            quality_passed = False
+            verdict: QualityVerdict | None = None
 
-                # TTL check (stop_after_s already does it, but keep belt+suspenders)
-                if time.time() - start >= ttl_s:
-                    break
-
-        finally:
-            # 3) Optionally delete the rules we added
-            if remove_rules_after and created_ids:
-                try:
-                    delete_rules(client=self.client, ids=created_ids, dry_run=False)
-                except Exception as e:
-                    if DEBUG:
-                        raise
-                    self.bus.publish(PipelineEvent(type="x_burst_rule_delete_error", payload={"error": str(e)}))
-
-            # publish a final usage poll snapshot if we have it
             try:
-                usage = get_usage(client=self.client, days=7)
-                self._usage_last = usage
-                self.bus.publish(PipelineEvent(type="x_usage", payload={"usage": usage}))
-            except Exception as e:
-                if DEBUG:
-                    raise
-                self.bus.publish(PipelineEvent(type="x_usage_error", payload={"error": str(e)}))
+                for obj in stream_posts(client=self.client, params=stream_params, stop_after_s=remaining_ttl):
+                    if self._burst_stop_evt.is_set():
+                        break
 
-            self.bus.publish(
-                PipelineEvent(
-                    type="x_burst_end",
-                    payload={
-                        "posts_seen": posts_seen,
-                        "duration_s": round(time.time() - start, 3),
-                        "created_rule_ids": created_ids,
-                    },
-                )
+                    total_posts += 1
+                    collected.append(obj)
+
+                    # Guardrail: if posts explode, stop early
+                    if total_posts > self.guards.max_posts_per_day:
+                        raise RuntimeError(
+                            f"X posts guard tripped: total_posts={total_posts} max={self.guards.max_posts_per_day}"
+                        )
+
+                    # Persist JSONL
+                    with log_path.open("a", encoding="utf-8") as f:
+                        f.write(json.dumps(obj, ensure_ascii=False) + "\n")
+
+                    # Cache
+                    with self._lock:
+                        self._cache["_all"].append(obj)
+
+                    self.bus.publish(PipelineEvent(type="x_post", payload={"post": obj}))
+
+                    # Quality gate: check once per attempt after N tweets
+                    if (
+                        not quality_passed
+                        and quality_check is not None
+                        and len(collected) >= quality_check_after
+                    ):
+                        try:
+                            verdict = quality_check(collected, current_rules)
+                            self.bus.publish(PipelineEvent(
+                                type="x_burst_quality",
+                                payload={
+                                    "relevant": verdict.relevant,
+                                    "confidence": verdict.confidence,
+                                    "reasoning": verdict.reasoning,
+                                    "revised_rule_values": verdict.revised_rule_values,
+                                    "posts_checked": len(collected),
+                                    "attempt": attempt + 1,
+                                    "max_retries": max_quality_retries,
+                                },
+                            ))
+                            if verdict.relevant:
+                                quality_passed = True
+                            else:
+                                break  # stop streaming, will retry below
+                        except Exception as e:
+                            if DEBUG:
+                                raise
+                            self.bus.publish(PipelineEvent(
+                                type="x_burst_quality_error",
+                                payload={"error": str(e), "attempt": attempt + 1},
+                            ))
+                            # Quality check failure is non-fatal; continue streaming
+                            quality_passed = True
+
+                    # Global TTL check
+                    if time.time() - global_start >= ttl_s:
+                        break
+            finally:
+                # Always clean up this attempt's rules
+                if remove_rules_after and created_ids:
+                    try:
+                        delete_rules(client=self.client, ids=created_ids, dry_run=False)
+                    except Exception as e:
+                        if DEBUG:
+                            raise
+                        self.bus.publish(PipelineEvent(
+                            type="x_burst_rule_delete_error",
+                            payload={"error": str(e)},
+                        ))
+
+            # Decide: success, give up, or retry
+            if quality_passed or verdict is None:
+                break  # quality passed or no quality check configured/triggered
+
+            # Retry with revised rules if available
+            if verdict.revised_rule_values and attempt < max_quality_retries:
+                current_rules = [
+                    StreamRule(value=v, tag=f"qc_{attempt + 1}_{i}")
+                    for i, v in enumerate(verdict.revised_rule_values)
+                ]
+            else:
+                break  # no suggestions or max retries reached
+
+        # Final cleanup: usage snapshot + burst_end event
+        try:
+            usage = get_usage(client=self.client, days=7)
+            self._usage_last = usage
+            self.bus.publish(PipelineEvent(type="x_usage", payload={"usage": usage}))
+        except Exception as e:
+            if DEBUG:
+                raise
+            self.bus.publish(PipelineEvent(type="x_usage_error", payload={"error": str(e)}))
+
+        self.bus.publish(
+            PipelineEvent(
+                type="x_burst_end",
+                payload={
+                    "posts_seen": total_posts,
+                    "duration_s": round(time.time() - global_start, 3),
+                    "attempts": attempt + 1,
+                },
             )
+        )
+
+    def stop_burst(self) -> None:
+        """Signal the current burst to stop early."""
+        self._burst_stop_evt.set()
 
     def stop(self) -> None:
         self._stop_evt.set()
+        self._burst_stop_evt.set()
 
 
 def build_rules_for_symbols(*, symbols: list[str]) -> list[StreamRule]:
-    """Very conservative starter rules.
+    """Build X stream filter rules for stock symbols.
 
-    We keep rules tight:
-    - exclude retweets
-    - English only
+    Strategy:
+    - Always include $TICKER cashtag (high signal)
+    - Only include bare TICKER word for longer/uncommon tickers (5+ chars)
+      to avoid matching common words (PARA, AI, ON, A, F, etc.)
+    - Exclude retweets, English only
     """
     out: list[StreamRule] = []
     for s in symbols[:3]:  # cap tightness in the rule set
         sym = s.strip().upper()
         if not sym:
             continue
-        # Verified with dry_run: bare $TSLA cashtag token is accepted by your plan.
-        value = f"({sym} OR ${sym}) -is:retweet lang:en"
+        if len(sym) >= 5:
+            # Longer tickers are unlikely to be common words
+            value = f"({sym} OR ${sym}) -is:retweet lang:en"
+        else:
+            # Short tickers: cashtag only to avoid noise
+            value = f"${sym} -is:retweet lang:en"
         out.append(StreamRule(value=value, tag=sym))
     return out

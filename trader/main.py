@@ -65,12 +65,27 @@ def main() -> None:
     )
     t.start()
 
-    # Optional: process last N existing files on startup
+    # Optional: process last N existing files on startup (background thread)
     if settings.backfill_on_start:
-        root = Path(settings.alpaca_output_dir)
-        files = sorted([p for p in root.glob("*.json") if p.is_file()])
-        for p in files[-settings.backfill_limit :]:
-            process_news_file(path=p, settings=settings, db=db, knowledge=knowledge, bus=bus, xstream=xstream)
+        def _backfill():
+            root = Path(settings.alpaca_output_dir)
+            files = sorted([p for p in root.glob("*.json") if p.is_file()])
+            targets = files[-settings.backfill_limit :]
+            print(f"Backfill: processing {len(targets)} files in background...")
+            ok = 0
+            for i, p in enumerate(targets, 1):
+                print(f"Backfill [{i}/{len(targets)}]: {p.name}")
+                try:
+                    process_news_file(path=p, settings=settings, db=db, knowledge=knowledge, bus=bus, xstream=None)
+                    ok += 1
+                except Exception as exc:
+                    print(f"Backfill [{i}/{len(targets)}] FAILED: {exc}")
+                    bus.publish(PipelineEvent(type="manual_explore_error", payload={
+                        "headline": p.name, "error": f"Backfill failed: {exc}",
+                    }))
+            print(f"Backfill complete: {ok}/{len(targets)} succeeded.")
+
+        threading.Thread(target=_backfill, daemon=True).start()
 
     app = create_app(settings=settings, bus=bus, db=db, knowledge=knowledge)
     uvicorn.run(app, host="127.0.0.1", port=8000, log_level="info")

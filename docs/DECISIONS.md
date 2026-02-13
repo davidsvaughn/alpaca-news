@@ -32,6 +32,9 @@
 
 2. **X stream in explorer:** X stream is inherently async (runs N minutes). Should
    the LLM start a stream and continue investigating (parallel), or does it block?
+   **Partially resolved:** Burst runs in background thread (parallel with pipeline).
+   Quality gate added: after N tweets, cheap LLM checks relevance and auto-retries
+   with revised rules if content is noise. Stale/backfill news skips streaming entirely.
 
 3. **Triage + explorer boundary:** Does triage stay as a separate Stage 1 (cheap
    filter before expensive exploration), or merge into the free-form loop?

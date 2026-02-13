@@ -3,8 +3,18 @@
 {% block title %}alpaca-news | Config{% endblock %}
 
 {% block content %}
-<h2 class="mb-4">Configuration <span class="badge bg-secondary fs-6">read-only</span></h2>
-<p class="text-muted small mb-4">Values loaded from environment variables at startup. Restart the server to apply changes.</p>
+<div class="d-flex align-items-center mb-3">
+  <h2 class="mb-0">Configuration</h2>
+  <button class="btn btn-outline-primary btn-sm ms-3"
+          hx-post="/api/reload-settings"
+          hx-target="#reload-result"
+          hx-swap="innerHTML"
+          hx-indicator="#reload-spinner">
+    <span id="reload-spinner" class="spinner-border spinner-border-sm htmx-indicator me-1"></span>
+    Reload from .env
+  </button>
+</div>
+<div id="reload-result" class="mb-3"></div>
 
 {% for group_name, fields in groups %}
 <div class="card mb-3">

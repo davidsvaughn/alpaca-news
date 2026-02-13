@@ -19,7 +19,7 @@
 | **Cost tracker** | DONE | Per-tool, per-item, daily budgets |
 | **LLM client (OpenAI/Gemini/Grok)** | DONE | Unified multi-provider interface |
 | **Evidence acquirer** | DONE | URL extraction, trafilatura |
-| **X API stream** | DONE | Filtered stream, burst mode, rules |
+| **X API stream** | DONE | Filtered stream, burst mode, rules, LLM quality gate with auto-retry |
 | **Database (SQLite)** | DONE | Snapshots + watches tables, idempotent inserts |
 | **Dashboard (FastAPI + SSE + HTMX)** | DONE | Full monitoring + control UI (6 pages, charts, editor) |
 | **Schwab market data** | DONE | Quotes, candles, streaming, options, fundamentals, movers, market hours |

@@ -8,6 +8,8 @@
         <th>Symbols</th>
         <th>Direction</th>
         <th>Confidence</th>
+        <th>Agents</th>
+        <th>Tools</th>
         <th>Cost</th>
         <th></th>
       </tr>
@@ -41,6 +43,17 @@
           {% else %}
             <span class="text-muted">&mdash;</span>
           {% endif %}
+        </td>
+        <td class="small">
+          {% if s.rounds %}
+            {{ s.rounds|length }}
+            <span class="text-muted">({{ s.rounds|map(attribute='agent')|join(', ') }})</span>
+          {% else %}
+            <span class="text-muted">&mdash;</span>
+          {% endif %}
+        </td>
+        <td class="small">
+          {% if s.tool_traces %}{{ s.tool_traces|length }}{% else %}<span class="text-muted">&mdash;</span>{% endif %}
         </td>
         <td class="small">
           {% if s.cost_summary and s.cost_summary.total_usd is defined %}

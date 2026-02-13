@@ -13,7 +13,7 @@ from fastapi import FastAPI, Form, Request
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
 
-from trader.config import Settings
+from trader.config import Settings, load_settings
 from trader.db.database import (
     Database,
     count_all_watches,
@@ -43,9 +43,18 @@ def create_app(
     knowledge: KnowledgeStore,
 ) -> FastAPI:
     app = FastAPI(title="alpaca-news dashboard")
+    app.state.settings = settings  # mutable ref for hot-reload
 
     templates_dir = Path(__file__).parent / "templates"
     templates = Jinja2Templates(directory=str(templates_dir))
+
+    # Custom filter: safely convert _DictObj (or plain dict) to JSON for templates
+    def _to_json(value: Any, indent: int | None = None) -> str:
+        if isinstance(value, _DictObj):
+            value = value.to_dict()
+        return json.dumps(value, indent=indent, default=str, ensure_ascii=False)
+
+    templates.env.filters["to_json"] = _to_json
 
     # ------------------------------------------------------------------
     # Page routes
@@ -123,14 +132,14 @@ def create_app(
                 "today_cost": today_cost,
                 "today_count": today_count,
                 "today_by_tool": today_by_tool,
-                "max_daily": settings.max_daily_cost,
+                "max_daily": app.state.settings.max_daily_cost,
                 "daily_history": daily_history,
             },
         )
 
     @app.get("/config", response_class=HTMLResponse)
     async def config_page(request: Request):
-        groups = _settings_groups(settings)
+        groups = _settings_groups(app.state.settings)
         return templates.TemplateResponse(
             request=request,
             name="config.html",
@@ -173,7 +182,7 @@ def create_app(
                 "retro_count": counts.get("retrospective", 0),
                 "snapshots_today": count_snapshots_today(db),
                 "daily_cost": get_daily_cost_today(db),
-                "max_daily_cost": settings.max_daily_cost,
+                "max_daily_cost": app.state.settings.max_daily_cost,
             },
         )
 
@@ -187,7 +196,7 @@ def create_app(
                 "holding_count": counts.get("holding", 0),
                 "snapshots_today": count_snapshots_today(db),
                 "daily_cost": get_daily_cost_today(db),
-                "max_daily_cost": settings.max_daily_cost,
+                "max_daily_cost": app.state.settings.max_daily_cost,
             },
         )
 
@@ -221,6 +230,58 @@ def create_app(
     # ------------------------------------------------------------------
     # Control actions (POST)
     # ------------------------------------------------------------------
+
+    @app.post("/api/reload-settings", response_class=HTMLResponse)
+    async def api_reload_settings(request: Request):
+        """Re-read .env and replace Settings. Returns HTML diff of changes."""
+        old = app.state.settings
+        try:
+            new = load_settings(override=True)
+        except Exception as e:
+            return HTMLResponse(
+                f"<div class='alert alert-danger'>Failed to reload: {e}</div>",
+            )
+
+        # Compute diff
+        changes: list[tuple[str, Any, Any]] = []
+        for field in dataclasses.fields(old):
+            old_val = getattr(old, field.name)
+            new_val = getattr(new, field.name)
+            if old_val != new_val:
+                changes.append((field.name, old_val, new_val))
+
+        app.state.settings = new
+
+        if not changes:
+            return HTMLResponse(
+                "<div class='alert alert-info'>Settings reloaded — no changes detected.</div>"
+            )
+
+        rows = "".join(
+            f"<tr><td><code>{name}</code></td>"
+            f"<td><code>{old_v}</code></td>"
+            f"<td><strong><code>{new_v}</code></strong></td></tr>"
+            for name, old_v, new_v in changes
+        )
+        restart_fields = {"mock_llm", "sqlite_path", "data_dir", "backfill_on_start",
+                          "backfill_limit", "x_stream_enabled", "x_stream_mode"}
+        needs_restart = any(name in restart_fields for name, _, _ in changes)
+        restart_note = (
+            "<div class='alert alert-warning mt-2'>"
+            "Some changed settings (marked above) only take full effect after a server restart."
+            "</div>"
+            if needs_restart else ""
+        )
+
+        return HTMLResponse(
+            f"<div class='alert alert-success'>Settings reloaded — {len(changes)} change(s):</div>"
+            "<table class='table table-sm'><thead><tr>"
+            "<th>Setting</th><th>Old</th><th>New</th>"
+            "</tr></thead><tbody>"
+            f"{rows}</tbody></table>"
+            f"{restart_note}"
+            "<script>setTimeout(() => location.reload(), 3000)</script>"
+        )
 
     @app.post("/api/watches/{watch_id}/exit", response_class=HTMLResponse)
     async def api_force_exit_watch(request: Request, watch_id: str):
@@ -299,13 +360,13 @@ def create_app(
 
                 # Write temp file to trigger the standard pipeline
                 import tempfile
-                tmp = Path(tempfile.mktemp(suffix=".json", dir=settings.alpaca_output_dir))
+                tmp = Path(tempfile.mktemp(suffix=".json", dir=app.state.settings.alpaca_output_dir))
                 tmp.parent.mkdir(parents=True, exist_ok=True)
                 tmp.write_text(json.dumps(news, ensure_ascii=False), encoding="utf-8")
 
                 process_news_file(
                     path=tmp,
-                    settings=settings,
+                    settings=app.state.settings,
                     db=db,
                     knowledge=knowledge,
                     bus=bus,
@@ -374,7 +435,7 @@ def create_app(
 
     @app.get("/events")
     async def events():
-        return sse_response(bus=bus, ping_interval_s=settings.sse_ping_interval_s)
+        return sse_response(bus=bus, ping_interval_s=app.state.settings.sse_ping_interval_s)
 
     return app
 
