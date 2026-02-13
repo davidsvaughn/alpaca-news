@@ -16,7 +16,7 @@ from pathlib import Path
 import uvicorn
 
 from trader.config import load_settings
-from trader.db.database import open_sqlite
+from trader.db.database import insert_event, open_sqlite, prune_old_events
 from trader.knowledge.store import KnowledgeStore
 from trader.online.event_bus import EventBus, PipelineEvent
 from trader.online.orchestrator import process_news_file, run_watch_loop
@@ -31,6 +31,16 @@ def main() -> None:
     knowledge.ensure_defaults()
 
     bus = EventBus()
+
+    # Persist events to SQLite (survives restarts + tab navigation)
+    def _persist_event(evt: PipelineEvent) -> None:
+        try:
+            insert_event(db, event_type=evt.type, payload=evt.payload)
+        except Exception:
+            pass  # Don't let persistence failures break the pipeline
+
+    bus.subscribe(_persist_event)
+    prune_old_events(db, keep_days=7)
 
     xstream: XStreamService | None = None
     if settings.x_stream_enabled and settings.x_stream_mode != "off":

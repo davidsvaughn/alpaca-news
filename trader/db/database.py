@@ -34,6 +34,16 @@ snapshots_table = Table(
 )
 
 
+event_log_table = Table(
+    "event_log",
+    metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("created_at", DateTime(timezone=True), server_default=func.now(), nullable=False),
+    Column("event_type", String, nullable=False),
+    Column("payload_json", JSON, nullable=False),
+)
+
+
 watches_table = Table(
     "watches",
     metadata,
@@ -354,3 +364,47 @@ def get_snapshot(db: Database, snapshot_id: str) -> dict[str, Any] | None:
         return None
     raw = row[0]
     return json.loads(raw) if isinstance(raw, str) else raw
+
+
+# ---------------------------------------------------------------------------
+# Event log
+# ---------------------------------------------------------------------------
+
+
+def insert_event(db: Database, *, event_type: str, payload: dict[str, Any]) -> None:
+    """Persist a pipeline event to the event_log table."""
+    with db.engine.begin() as conn:
+        conn.execute(
+            text(
+                "INSERT INTO event_log (event_type, payload_json) VALUES (:etype, :pjson)"
+            ),
+            {"etype": event_type, "pjson": json.dumps(payload, ensure_ascii=False)},
+        )
+
+
+def get_recent_events(db: Database, *, limit: int = 200) -> list[dict[str, Any]]:
+    """Return recent events, newest first."""
+    with db.engine.connect() as conn:
+        rows = conn.execute(
+            text(
+                "SELECT event_type, payload_json, created_at "
+                "FROM event_log ORDER BY id DESC LIMIT :lim"
+            ),
+            {"lim": limit},
+        ).fetchall()
+    result = []
+    for row in rows:
+        payload = json.loads(row[1]) if isinstance(row[1], str) else row[1]
+        ts = row[2]
+        result.append({"type": row[0], "payload": payload, "ts": str(ts) if ts else None})
+    return result
+
+
+def prune_old_events(db: Database, *, keep_days: int = 7) -> int:
+    """Delete events older than keep_days. Returns rows deleted."""
+    with db.engine.begin() as conn:
+        result = conn.execute(
+            text("DELETE FROM event_log WHERE created_at < datetime('now', :offset)"),
+            {"offset": f"-{keep_days} days"},
+        )
+    return result.rowcount

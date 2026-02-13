@@ -165,11 +165,10 @@
   }
 
   var xPostCounter = 0;
-  document.body.addEventListener('sse:any', function(e) {
-    var type = e.detail.type;
-    var payload = e.detail.payload;
+
+  function addEvent(type, payload, timestamp) {
     var color = EVENT_COLORS[type] || 'secondary';
-    var time = new Date().toLocaleTimeString();
+    var time = timestamp || new Date().toLocaleTimeString();
     var row = document.createElement('div');
     row.className = 'mb-1';
 
@@ -177,7 +176,6 @@
       + '<span class="badge bg-' + color + '">' + type + '</span> '
       + fmt(type, payload);
 
-    // For x_post events, add expandable full tweet detail
     if (type === 'x_post') {
       var post = (payload.post || {});
       var d = post.data || {};
@@ -212,6 +210,22 @@
 
     feed.prepend(row);
     while (feed.children.length > MAX_ENTRIES) feed.lastChild.remove();
+  }
+
+  // Load persisted events from DB on page load
+  fetch('/api/events/recent?limit=200')
+    .then(function(r) { return r.json(); })
+    .then(function(events) {
+      // events are newest-first; reverse so prepend builds correct order
+      events.reverse().forEach(function(ev) {
+        var ts = ev.ts ? new Date(ev.ts + 'Z').toLocaleTimeString() : '?';
+        addEvent(ev.type, ev.payload, ts);
+      });
+    })
+    .catch(function() {});
+
+  document.body.addEventListener('sse:any', function(e) {
+    addEvent(e.detail.type, e.detail.payload, null);
   });
 })();
 </script>

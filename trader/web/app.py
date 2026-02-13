@@ -25,6 +25,7 @@ from trader.db.database import (
     get_all_watches,
     get_daily_cost_history,
     get_daily_cost_today,
+    get_recent_events,
     get_snapshot,
     get_watch,
     update_watch,
@@ -428,6 +429,11 @@ def create_app(
             f"<div class='alert alert-success'>Saved {filename} successfully.</div>"
             "<script>setTimeout(() => location.reload(), 1000)</script>",
         )
+
+    @app.get("/api/events/recent")
+    async def api_events_recent(limit: int = 200):
+        """Return recent persisted events as JSON (newest first)."""
+        return get_recent_events(db, limit=min(limit, 500))
 
     # ------------------------------------------------------------------
     # SSE stream
