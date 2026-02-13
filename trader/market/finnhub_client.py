@@ -1,6 +1,10 @@
-"""FinnHub API client — free tier company news.
+"""FinnHub API client — free tier endpoints.
 
-Uses the REST endpoint `/company-news` (free, 60 req/min).
+Free endpoints used (60 req/min rate limit):
+- /company-news — company news articles
+- /stock/earnings — historical earnings surprises
+- /calendar/earnings — upcoming/recent earnings dates
+- /stock/recommendation — analyst recommendation trends
 """
 
 from __future__ import annotations
@@ -56,6 +60,128 @@ def get_company_news(
         return []
     except Exception:
         return []
+
+
+def get_earnings_surprises(
+    symbol: str,
+    *,
+    limit: int = 4,
+    api_key: str | None = None,
+) -> list[dict[str, Any]]:
+    """Fetch historical earnings surprises (actual vs estimate EPS).
+
+    Returns list of dicts with: actual, estimate, surprise, surprisePercent,
+    period, quarter, year, symbol.
+    """
+    key = api_key or os.getenv("FINNHUB_API_KEY")
+    if not key:
+        return []
+    try:
+        resp = httpx.get(
+            f"{_BASE_URL}/stock/earnings",
+            params={"symbol": symbol.upper(), "limit": limit, "token": key},
+            timeout=10,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        return data if isinstance(data, list) else []
+    except Exception:
+        return []
+
+
+def get_earnings_calendar(
+    symbol: str,
+    *,
+    api_key: str | None = None,
+) -> list[dict[str, Any]]:
+    """Fetch earnings calendar entries for a symbol.
+
+    Returns list of dicts with: date, epsActual, epsEstimate, hour (bmo/amc),
+    quarter, year, revenueActual, revenueEstimate, symbol.
+    """
+    key = api_key or os.getenv("FINNHUB_API_KEY")
+    if not key:
+        return []
+    try:
+        resp = httpx.get(
+            f"{_BASE_URL}/calendar/earnings",
+            params={"symbol": symbol.upper(), "token": key},
+            timeout=10,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        calendar = data.get("earningsCalendar", [])
+        return calendar if isinstance(calendar, list) else []
+    except Exception:
+        return []
+
+
+def get_recommendation_trends(
+    symbol: str,
+    *,
+    api_key: str | None = None,
+) -> list[dict[str, Any]]:
+    """Fetch analyst recommendation trends (buy/hold/sell distribution).
+
+    Returns list of monthly dicts with: buy, hold, sell, strongBuy,
+    strongSell, period, symbol. Most recent first.
+    """
+    key = api_key or os.getenv("FINNHUB_API_KEY")
+    if not key:
+        return []
+    try:
+        resp = httpx.get(
+            f"{_BASE_URL}/stock/recommendation",
+            params={"symbol": symbol.upper(), "token": key},
+            timeout=10,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        return data if isinstance(data, list) else []
+    except Exception:
+        return []
+
+
+def format_earnings_for_prompt(
+    surprises: list[dict[str, Any]],
+    calendar: list[dict[str, Any]],
+) -> str:
+    """Format earnings data into a concise text block for an LLM prompt."""
+    lines: list[str] = []
+
+    if calendar:
+        next_entry = calendar[0]
+        date = next_entry.get("date", "?")
+        hour = next_entry.get("hour", "?")
+        hour_label = {"bmo": "before market open", "amc": "after market close", "dmh": "during market hours"}.get(hour, hour)
+        eps_est = next_entry.get("epsEstimate")
+        rev_est = next_entry.get("revenueEstimate")
+        eps_actual = next_entry.get("epsActual")
+
+        if eps_actual is not None:
+            lines.append(f"Last earnings: {date} ({hour_label}) — EPS actual: ${eps_actual:.2f}" +
+                         (f" vs est: ${eps_est:.2f}" if eps_est else ""))
+        elif eps_est is not None:
+            lines.append(f"Next earnings: {date} ({hour_label}) — EPS estimate: ${eps_est:.2f}")
+        else:
+            lines.append(f"Earnings date: {date} ({hour_label})")
+
+        if rev_est and not next_entry.get("revenueActual"):
+            lines.append(f"  Revenue estimate: ${rev_est / 1e9:.1f}B")
+
+    if surprises:
+        beats = sum(1 for s in surprises if (s.get("surprise") or 0) > 0)
+        misses = sum(1 for s in surprises if (s.get("surprise") or 0) < 0)
+        total = len(surprises)
+        lines.append(f"Earnings track record (last {total} quarters): {beats} beats, {misses} misses")
+        # Show most recent surprise
+        latest = surprises[0]
+        pct = latest.get("surprisePercent", 0)
+        direction = "beat" if pct > 0 else "missed"
+        lines.append(f"  Most recent ({latest.get('period', '?')}): {direction} by {abs(pct):.1f}%"
+                      f" (actual ${latest.get('actual', '?'):.2f} vs est ${latest.get('estimate', '?'):.2f})")
+
+    return "\n".join(lines)
 
 
 def format_news_for_prompt(
