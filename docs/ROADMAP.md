@@ -20,7 +20,7 @@
 | **LLM client (OpenAI/Gemini/Grok)** | DONE | Unified multi-provider interface |
 | **Evidence acquirer** | DONE | URL extraction, trafilatura |
 | **X API stream** | DONE | Filtered stream, burst mode, rules, LLM quality gate with auto-retry |
-| **Database (SQLite)** | DONE | Snapshots + watches tables, idempotent inserts |
+| **Database (SQLite)** | DONE | Snapshots + watches + follow_ups tables, idempotent inserts |
 | **Dashboard (FastAPI + SSE + HTMX)** | DONE | Full monitoring + control UI (6 pages, charts, editor) |
 | **Schwab market data** | DONE | Quotes, candles, streaming, options, fundamentals, movers, market hours |
 | **Knowledge store** | PARTIAL | skip_patterns, reliable_sources, generic append_to_list; insights.json TODO |
@@ -38,6 +38,7 @@
 | **Watch lifecycle** | DONE | Full lifecycle: model, DB, creation, monitoring scheduler, retrospective, sealing |
 | **Signal extraction step** | DONE (by design) | Built into PydanticAI output_type=TradingSignal |
 | **Reflection / Evaluation** | DONE | On-demand LLM evaluation, nested decision tree, Tier A/B insights |
+| **Follow-up data collection** | DONE | Scheduled post-event data collection (no-buy + post-exit), LLM query planner, query effectiveness tracking |
 | **Offline loop** | TODO | Labeling, hop scoring, automated reflection scheduling |
 | **Bull/bear prompt pattern** | TODO | New — lightweight adversarial reasoning |
 | **Data vendor fallback** | DONE | Schwab → yfinance fallback via MarketDataService |
@@ -183,6 +184,50 @@ Eliminate redundant tool calls, survive agent failures, and control costs.
    - Gemini uses `WebSearchTool()` (Google grounding) instead of function tools
    - With pre-fetched data + tool ledger, Gemini doesn't need function tools
    - `function_tools=False` flag on AgentSpec; TracingToolset conditionally skipped
+
+## Phase C-2: Follow-up Data Collection — DONE
+
+Scheduled post-event data collection for both no-buy and post-exit cases.
+
+1. **DONE** — FollowUp data model (`trader/models/follow_up.py`):
+   - `FollowUp`, `FollowUpCollection` frozen dataclasses + `FollowUpBuilder`
+   - `parse_offset_to_minutes()` for schedule parsing (+1h → 60, +1d → 1440)
+   - Builder pattern with `from_dict()` roundtrip, `next_offset_label()`, `complete()`
+
+2. **DONE** — Database (`trader/db/database.py`):
+   - `follow_ups` table (follow_up_id, snapshot_id, symbols, reason, status, follow_up_json)
+   - 7 CRUD functions: insert, update, get, get_active, get_by_snapshot, get_all, count_active
+
+3. **DONE** — Config (`trader/config.py`):
+   - 8 `follow_up_*` settings: enabled, schedule, web_searches, x_searches, max_cost,
+     max_concurrent, collector_interval_s, planner_model
+
+4. **DONE** — FollowUpCollector (`trader/online/follow_up_collector.py`):
+   - Two-phase collection: LLM query planner (gemini-3-flash) → mechanical data gathering
+   - Query planner uses PydanticAI Agent with `QueryPlan` structured output
+   - Mechanical: price + news (free) + web_search + x_search (direct httpx to Grok API)
+   - Query effectiveness tracking: quality ratings fed back to planner for subsequent collections
+   - Fallback template queries if LLM planner fails
+   - Daemon thread (`collector_loop`) alongside WatchMonitor
+
+5. **DONE** — Orchestrator integration (`trader/online/orchestrator.py`):
+   - No-buy follow-up created after snapshot seal when no Watch was created
+   - Collector daemon thread started in `run_watch_loop()`
+
+6. **DONE** — Watcher integration (`trader/online/watcher.py`):
+   - Post-exit follow-up created in `_seal_watch()` after Watch lifecycle completes
+
+7. **DONE** — Web API (`trader/web/app.py`):
+   - Export endpoint includes follow_ups: `{snapshot, watch, follow_ups}`
+   - Snapshot detail page passes follow_ups to eval_record
+   - New `/api/follow-ups` endpoint with status filter
+
+8. **DONE** — Eval record (`trader/reflection/eval_record.py`):
+   - `build_eval_record()` accepts `follow_ups` parameter
+   - Follow-up nodes with collection children in decision tree
+
+9. **DONE** — 18 new tests (`tests/test_follow_up.py`):
+   - Model (parse_offset, builder, roundtrip), DB CRUD, eval_record integration
 
 ## Phase D-2: Offline loop — TODO
 

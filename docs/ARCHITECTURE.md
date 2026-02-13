@@ -38,27 +38,36 @@
               │  WATCH?       │   │  DASHBOARD       │  ← DONE
               │  confidence   │   │  (FastAPI + SSE)  │
               │  >= threshold │   └──────────────────┘
-              └──────┬───────┘
-                     │ yes
-          ┌──────────▼──────────┐
-          │  WATCH LIFECYCLE     │
-          │  hold → exit →       │
-          │  retrospective →     │
-          │  sealed Watch        │
-          └──────────┬──────────┘
-                     │
-          ┌──────────▼──────────┐
-          │  OFFLINE LOOP        │
-          │  label → score →     │
-          │  reflect → update    │
-          │  insights.json       │
-          └─────────────────────┘
+              └──┬────────┬──┘
+                 │ yes    │ no
+      ┌──────────▼──┐  ┌─▼───────────────┐
+      │ WATCH        │  │ FOLLOW-UP        │  ← DONE
+      │ LIFECYCLE    │  │ (no-buy)         │
+      │ hold → exit  │  │ scheduled data   │
+      │ → retro →    │  │ collection       │
+      │ sealed Watch │  └─────────────────┘
+      └──────┬───────┘
+             │
+      ┌──────▼──────────┐
+      │ FOLLOW-UP        │  ← DONE
+      │ (post-exit)      │
+      │ scheduled data   │
+      │ collection       │
+      └──────┬──────────┘
+             │
+      ┌──────▼──────────┐
+      │ OFFLINE LOOP     │
+      │ label → score →  │
+      │ reflect → update │
+      │ insights.json    │
+      └─────────────────┘
 ```
 
 **Core loop:**
 1. **Online:** news arrives → triage → explore (free-form tool use) → seal Snapshot
 2. **Watch:** high-confidence signals → monitored position → exit → retrospective
-3. **Offline:** label outcomes → score traces → reflect → update knowledge
+3. **Follow-up:** scheduled post-event data collection (no-buy and post-exit)
+4. **Offline:** label outcomes → score traces → reflect → update knowledge
 
 **Key design principles:**
 - **Multi-agent free-form tool use** — multiple LLMs (Grok, OpenAI, Gemini) run
@@ -421,6 +430,98 @@ Most systems stop after exit. But the richest learning comes from counterfactual
 
 ---
 
+## 7b. Follow-up Data Collection — DONE
+
+**Status: DONE** — `trader/models/follow_up.py`, `trader/online/follow_up_collector.py`
+
+### Overview
+
+After a snapshot is sealed, ephemeral data (news coverage, Twitter sentiment, analyst
+reactions) fades quickly. The Follow-up system schedules lightweight, periodic data
+collection after snapshots are sealed — for both stocks we chose NOT to buy and stocks
+we exited after watching.
+
+Two trigger cases:
+- **No-buy:** Snapshot sealed, no Watch created (neutral signal or low confidence)
+- **Post-exit:** Watch fully sealed after retrospective phase completes
+
+### Data model
+
+```
+FollowUp (frozen dataclass)
+├── follow_up_id: "fu_{uuid_hex[:12]}"
+├── snapshot_id, symbols, reason ("no_buy" | "post_exit")
+├── schedule: ["+1h", "+4h", "+1d", "+3d", "+5d"]
+├── collections: list[FollowUpCollection]
+│   └── FollowUpCollection
+│       ├── offset_label, collected_at
+│       ├── price: {symbol: quote_data}
+│       ├── news: [company_news_results]
+│       ├── web_results: [{query, answer, citations, quality}]
+│       ├── x_results: [{query, answer, citations, quality}]
+│       ├── query_plan: {web_queries, x_queries, reasoning}
+│       └── cost_usd
+├── status: "active" | "complete"
+└── total_cost_usd
+```
+
+Builder pattern: `FollowUpBuilder` → frozen `FollowUp` (same as Watch/Snapshot).
+
+### Collection process (two phases)
+
+**Phase 1: LLM Query Planner** — cheap gemini-3-flash call (~$0.001) proposes
+targeted search queries informed by:
+- Original headline + symbols + prediction context
+- Key findings from the exploration pipeline
+- Offset label (different time horizons need different queries)
+- Prior collection results with quality ratings (feedback loop)
+
+Output: `QueryPlan(web_queries, x_queries, reasoning)` via PydanticAI structured output.
+
+**Phase 2: Mechanical Data Gathering** — no agent reasoning:
+1. Price — `MarketDataService.get_quote()` per symbol (free)
+2. News — `MarketDataService.get_company_news()` per symbol (free)
+3. Web search — direct httpx calls to Grok API (`web_search_preview` tool)
+4. X search — direct httpx calls to xAI API (`x_search` tool)
+
+### Query effectiveness tracking
+
+Each search result rated by simple heuristic:
+- `"good"` — answer > 100 chars
+- `"empty"` — answer short or generic
+- `"error"` — API error
+
+Prior query quality fed back to the LLM planner for subsequent collections.
+
+### Scheduling
+
+`FollowUpCollector` runs as a daemon thread (same pattern as `WatchMonitor`).
+Default interval: 300s. Checks all active follow-ups, runs collections that are due
+based on `started_at + parse_offset_to_minutes(label)`.
+
+### Budget controls
+
+| Control | Default | Env var |
+|---------|---------|---------|
+| Enabled | true | `FOLLOW_UP_ENABLED` |
+| Schedule | +1h,+4h,+1d,+3d,+5d | `FOLLOW_UP_SCHEDULE` |
+| Web searches per collection | 2 | `FOLLOW_UP_WEB_SEARCHES` |
+| X searches per collection | 1 | `FOLLOW_UP_X_SEARCHES` |
+| Max cost per follow-up | $0.20 | `FOLLOW_UP_MAX_COST` |
+| Max concurrent follow-ups | 20 | `FOLLOW_UP_MAX_CONCURRENT` |
+| Collector interval | 300s | `FOLLOW_UP_COLLECTOR_INTERVAL_S` |
+| Planner model | gemini-3-flash | `FOLLOW_UP_PLANNER_MODEL` |
+
+### Export unit
+
+The evaluation unit is now: `snapshot + watch + follow_ups`
+- Bought stocks: snapshot + watch + post-exit follow-up(s)
+- Not-bought stocks: snapshot + no-buy follow-up(s)
+
+Export endpoint (`/api/snapshots/{id}/export`) returns all three.
+
+---
+
 ## 8. Reflection & Evaluation — DONE
 
 **Status: DONE** — `trader/reflection/`
@@ -430,8 +531,9 @@ and two-tier actionable insights.
 
 ### 8a. Decision Timeline (EvalRecord)
 
-`trader/reflection/eval_record.py` — transforms a snapshot + optional watch into
-a nested JSON tree. Same data structure drives both the UI and LLM evaluator.
+`trader/reflection/eval_record.py` — transforms a snapshot + optional watch +
+follow-ups into a nested JSON tree. Same data structure drives both the UI and
+LLM evaluator.
 
 Each node: `{type, summary, detail, children}`
 
@@ -448,7 +550,11 @@ triage (85% investigate)
 │   ├── watch_checkin (hold — +0.4% lightweight)
 │   ├── watch_checkin (hold — +0.8% medium)
 │   └── ...
-└── watch_exit (+1.39% — momentum exhausting)
+├── watch_exit (+1.39% — momentum exhausting)
+└── follow_up (post_exit | TWLO | 3 collections | $0.04)
+    ├── follow_up_collection (+1h | 2 web + 1 x | $0.015)
+    ├── follow_up_collection (+4h | 2 web + 1 x | $0.015)
+    └── follow_up_collection (+1d | 2 web + 1 x | $0.010)
 ```
 
 **Backward compatible:** Old snapshots missing `triage`, `system_prompt`, or
@@ -513,7 +619,7 @@ Builds on Phase D-1 on-demand evaluation.
 
 ### 10a. Database — DONE
 
-`trader/db/database.py` — SQLite with `snapshots`, `watches`, `event_log`, and `evaluations` tables.
+`trader/db/database.py` — SQLite with `snapshots`, `watches`, `follow_ups`, `event_log`, and `evaluations` tables.
 
 ### 10b. Dashboard — DONE
 
@@ -560,12 +666,14 @@ trader/
 │   ├── explorer_agent.py           # PydanticAI tools, TradingSignal, TracingToolset
 │   ├── agent_pipeline.py           # Multi-agent sequential pipeline
 │   ├── watcher.py                  # Watch monitoring scheduler
+│   ├── follow_up_collector.py      # Follow-up data collection daemon
 │   ├── backfill.py                 # Batch reprocessing
 │   ├── x_stream_service.py         # X stream burst service
 │   └── stream_quality.py           # LLM quality gate for stream bursts
 ├── models/
 │   ├── snapshot.py                 # Snapshot + SnapshotBuilder
 │   ├── watch.py                    # Watch + WatchBuilder
+│   ├── follow_up.py                # FollowUp + FollowUpBuilder
 │   └── tool_trace.py               # ToolTrace per-hop recording
 ├── llm/
 │   ├── client.py                   # Unified LLM client

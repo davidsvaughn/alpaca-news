@@ -34,6 +34,11 @@
 | Budget metric | Output tokens (not total) | Output tokens cost 3-4x more than input; penalizing input discourages richer context. `PIPELINE_OUTPUT_TOKENS_LIMIT=50000` |
 | Tool call ledger | Full results for investigative tools | Downstream agents see complete web_search/x_search/url_fetch results. url_fetch capped at 3000 chars. Pre-fetched data tools omitted (already in prompt) |
 | Gemini tool mode | Google grounding only (no function tools) | With pre-fetched market data + tool ledger, Gemini doesn't need function tools. Google grounding gives independent web search capability |
+| Follow-up vs Watch | Separate data model | Watch = active position management (agent reasoning, hold/exit decisions). FollowUp = passive data collection (mechanical, no decisions). Different enough to warrant separate models, but share scheduling infrastructure pattern |
+| Follow-up: no-buy vs post-exit | Same FollowUp structure, `reason` field distinguishes | Same collection process, same scheduling. Only difference is trigger context (no watch vs sealed watch). Avoids unnecessary type splitting |
+| Follow-up query planning | LLM planner (gemini-3-flash) before mechanical collection | Template queries too generic. LLM planner proposes context-aware queries informed by headline, prediction, prior collection results. ~$0.001 per call |
+| Follow-up search API | Direct httpx to Grok API (no PydanticAI agent) | No agent reasoning needed for mechanical data collection. Direct API calls are simpler, cheaper, and more predictable. Same pattern as x_search function tool |
+| Query effectiveness | Simple heuristic (answer length > 100 chars) | Avoids costly LLM evaluation of search quality. Good enough to identify dead-end queries. LLM planner uses quality feedback to adjust subsequent queries |
 
 ---
 
