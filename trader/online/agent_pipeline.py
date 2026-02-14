@@ -25,8 +25,9 @@ from typing import Any
 
 from pydantic_ai import Agent, UsageLimits, WebSearchTool
 from pydantic_ai.exceptions import AgentRunError, UsageLimitExceeded
-from pydantic_ai.messages import ModelResponse
-from pydantic_ai.models.openai import OpenAIResponsesModel
+from pydantic_ai.messages import ModelResponse, ThinkingPart
+from pydantic_ai.models.google import GoogleModelSettings
+from pydantic_ai.models.openai import OpenAIResponsesModel, OpenAIResponsesModelSettings
 from pydantic_ai.providers.openai import OpenAIProvider
 
 from trader.market.data_service import MarketDataService
@@ -71,7 +72,9 @@ def _extract_builtin_tool_traces(
 
             # Serialize the return content
             content = return_part.content
-            if hasattr(content, "model_dump"):
+            if content is None:
+                content = "[server-side grounding — results not exposed by provider]"
+            elif hasattr(content, "model_dump"):
                 content = content.model_dump()
             elif not isinstance(content, (str, dict, list)):
                 content = str(content)
@@ -88,8 +91,8 @@ def _extract_builtin_tool_traces(
                 "execution": {
                     "start_time": (msg.timestamp or datetime.now(tz=timezone.utc)).isoformat(),
                     "end_time": (return_part.timestamp or datetime.now(tz=timezone.utc)).isoformat(),
-                    "duration_s": 0.0,  # server-side, no client timing
-                    "cost_usd": 0.0,
+                    "duration_s": 0.0,  # server-side, no client timing available
+                    "cost_usd": 0.0,    # baked into provider's token cost
                 },
                 "raw_tool_output": content,
                 "error": None,
@@ -98,6 +101,23 @@ def _extract_builtin_tool_traces(
             traces.append(trace)
 
     return traces
+
+
+def _extract_thinking_content(messages: list[Any]) -> str | None:
+    """Extract reasoning/thinking summaries from model response messages.
+
+    PydanticAI represents reasoning summaries as ThinkingPart objects in
+    ModelResponse.parts. These come from OpenAI's reasoning_summary or
+    Gemini's include_thoughts settings.
+    """
+    parts: list[str] = []
+    for msg in messages:
+        if not isinstance(msg, ModelResponse):
+            continue
+        for part in msg.parts:
+            if isinstance(part, ThinkingPart) and part.content:
+                parts.append(part.content)
+    return "\n\n".join(parts) if parts else None
 
 
 # ---------------------------------------------------------------------------
@@ -117,6 +137,7 @@ class AgentSpec:
     function_tools: bool = True     # False = skip TracingToolset (e.g. Gemini with grounding)
     excluded_tools: frozenset[str] = frozenset()  # tool names to exclude from this agent
     web_search_limit: int = 0       # 0 = unlimited; >0 = prompt-enforced cap
+    model_settings: dict[str, Any] | None = None  # provider-specific settings (reasoning effort, etc.)
 
 
 @dataclass
@@ -237,6 +258,24 @@ def build_default_pipeline() -> PipelineConfig:
             if "gpt-5-mini" in model_str:
                 a.web_search_limit = ws_limit
 
+    # Apply reasoning / thinking settings per provider
+    for a in agents:
+        if a.name == "openai":
+            a.model_settings = OpenAIResponsesModelSettings(
+                openai_reasoning_effort=settings.openai_reasoning_effort,  # type: ignore[arg-type]
+                openai_reasoning_summary="detailed",
+            )
+        elif a.name == "gemini":
+            thinking_level = settings.gemini_thinking_level
+            if thinking_level == "off":
+                thinking_config: dict[str, Any] = {"thinking_budget": 0}
+            elif thinking_level == "dynamic":
+                thinking_config = {"include_thoughts": True}
+            else:
+                # low, medium, high → pass as thinking_level
+                thinking_config = {"thinking_level": thinking_level, "include_thoughts": True}
+            a.model_settings = GoogleModelSettings(google_thinking_config=thinking_config)
+
     return PipelineConfig(
         agents=agents,
         request_limit=settings.pipeline_request_limit,
@@ -304,14 +343,27 @@ def _build_system_prompt(
         "**Background data is ALREADY provided** in the prompt below — current price,",
         "fundamentals, technicals, options, volume, insider activity, analyst ratings,",
         "market context, and news for the primary symbol(s). Do NOT re-fetch this data.",
-        "",
-        "**Your job is to INVESTIGATE beyond the basics:**",
-        "- Search the web for breaking analysis, earnings context, or SEC filings",
-        "- Read important articles with url_fetch for detailed information",
-        "- Use market data tools for OTHER symbols (peers, sector ETFs, competitors)",
-        "- Use get_financial_statements for deep fundamental digs (revenue trends, debt, cash flow)",
-        "- Use get_movers / check_market_context to check sector or market-wide dynamics",
     ])
+
+    if spec.function_tools:
+        parts.extend([
+            "",
+            "**Your job is to INVESTIGATE beyond the basics:**",
+            "- Search the web for breaking analysis, earnings context, or SEC filings",
+            "- Read important articles with url_fetch for detailed information",
+            "- Use market data tools for OTHER symbols (peers, sector ETFs, competitors)",
+            "- Use get_financial_statements for deep fundamental digs (revenue trends, debt, cash flow)",
+            "- Use get_movers / check_market_context to check sector or market-wide dynamics",
+        ])
+    else:
+        parts.extend([
+            "",
+            "**Your job is to SYNTHESIZE and find NEW angles:**",
+            "- Use web search to find perspectives, analysis, or evidence that prior agents missed",
+            "- Cross-reference and verify prior agents' findings against each other",
+            "- Look for contradictions, patterns, or implications that weren't explored",
+            "- You do NOT have market data tools or url_fetch — all data is in the prompt",
+        ])
 
     # Web search budget (prompt-enforced)
     if spec.web_search_limit > 0:
@@ -323,11 +375,15 @@ def _build_system_prompt(
             "Do NOT repeat searches that prior agents already performed.",
         ])
 
+    if spec.function_tools:
+        parts.extend([
+            "",
+            "## Cost awareness",
+            "- web_search and x_search cost per call — use purposefully, not wastefully.",
+            "- All market data tools and url_fetch are **free** — use liberally.",
+        ])
+
     parts.extend([
-        "",
-        "## Cost awareness",
-        "- web_search and x_search cost per call — use purposefully, not wastefully.",
-        "- All market data tools and url_fetch are **free** — use liberally.",
         "",
         "## How to investigate",
         "Think step by step. Focus on areas NOT yet covered by prior agents (if any).",
@@ -493,6 +549,7 @@ async def run_pipeline(
         "total_tokens": 0,
         "requests": 0,
         "tool_calls": 0,
+        "reasoning_tokens": 0,
     }
     signal: TradingSignal | None = None
 
@@ -588,6 +645,7 @@ async def run_pipeline(
                     user_message,
                     deps=deps,
                     usage_limits=usage_limits,
+                    model_settings=spec.model_settings,
                 )
             except (UsageLimitExceeded, AgentRunError) as e:
                 # Graceful degradation: capture partial work and continue
@@ -620,6 +678,10 @@ async def run_pipeline(
             total_usage["total_tokens"] += usage.total_tokens or 0
             total_usage["requests"] += usage.requests or 0
             total_usage["tool_calls"] += usage.tool_calls or 0
+            total_usage["reasoning_tokens"] += (
+                usage.details.get("reasoning_tokens", 0)
+                or usage.details.get("thoughts_tokens", 0)
+            )
 
             # Extract builtin tool calls (e.g. web_search) from message history
             builtin_traces = _extract_builtin_tool_traces(
@@ -639,6 +701,14 @@ async def run_pipeline(
 
             cumulative_cost += agent_cost
 
+            # Extract reasoning data
+            # OpenAI: details['reasoning_tokens'], Gemini: details['thoughts_tokens']
+            reasoning_tokens = (
+                usage.details.get("reasoning_tokens", 0)
+                or usage.details.get("thoughts_tokens", 0)
+            )
+            thinking_summary = _extract_thinking_content(result.all_messages())
+
             round_record = {
                 "agent": spec.name,
                 "model": model_name,
@@ -653,9 +723,12 @@ async def run_pipeline(
                     "total_tokens": usage.total_tokens,
                     "requests": usage.requests,
                     "tool_calls": usage.tool_calls,
+                    "reasoning_tokens": reasoning_tokens,
+                    "details": dict(usage.details),
                 },
                 "cost_usd": agent_cost,
                 "elapsed_s": elapsed,
+                "thinking_summary": thinking_summary,
             }
             all_rounds.append(round_record)
 

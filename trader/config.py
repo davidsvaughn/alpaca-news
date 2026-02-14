@@ -141,6 +141,10 @@ class Settings:
     # OpenAI (gpt-5-mini) web_search cap (0 = unlimited). Prompt-enforced.
     openai_web_search_limit: int
 
+    # Reasoning / thinking controls
+    openai_reasoning_effort: str   # 'low', 'medium', 'high'
+    gemini_thinking_level: str     # 'off', 'low', 'medium', 'high', 'dynamic'
+
     # Reflection / Evaluation
     reflection_model: str
 
@@ -246,6 +250,10 @@ def load_settings(*, dotenv_path: str | None = None, override: bool = False) -> 
     pipeline_max_cost_usd = _env_float("PIPELINE_MAX_COST_USD", 0.50)
     openai_web_search_limit = _env_int("OPENAI_WEB_SEARCH_LIMIT", 10)
 
+    # Reasoning / thinking controls
+    openai_reasoning_effort = _env_str("OPENAI_REASONING_EFFORT", "medium") or "medium"
+    gemini_thinking_level = _env_str("GEMINI_THINKING_LEVEL", "dynamic") or "dynamic"
+
     reflection_model = _env_str("REFLECTION_MODEL", "gemini-3-flash-preview") or "gemini-3-flash-preview"
 
     return Settings(
@@ -313,6 +321,9 @@ def load_settings(*, dotenv_path: str | None = None, override: bool = False) -> 
         pipeline_tool_calls_limit=pipeline_tool_calls_limit,
         pipeline_max_cost_usd=pipeline_max_cost_usd,
         openai_web_search_limit=openai_web_search_limit,
+
+        openai_reasoning_effort=openai_reasoning_effort,
+        gemini_thinking_level=gemini_thinking_level,
 
         reflection_model=reflection_model,
     )

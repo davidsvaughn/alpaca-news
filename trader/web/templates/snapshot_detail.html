@@ -79,12 +79,14 @@
           </tr>
         </thead>
         <tbody>
-          {% set ns = namespace(total_tools=0, total_tokens=0, total_time=0.0, total_cost=0.0) %}
+          {% set ns = namespace(total_tools=0, total_tokens=0, total_reasoning=0, total_time=0.0, total_cost=0.0) %}
           {% for round in s.rounds %}
           {% set u = round.usage or {} %}
           {% set rcost = round.get('cost_usd', 0)|float %}
+          {% set rtok = u.get('reasoning_tokens', 0)|int %}
           {% set ns.total_tools = ns.total_tools + (u.get('tool_calls', 0)|int) %}
           {% set ns.total_tokens = ns.total_tokens + (u.get('total_tokens', 0)|int) %}
+          {% set ns.total_reasoning = ns.total_reasoning + rtok %}
           {% set ns.total_time = ns.total_time + (round.get('elapsed_s', 0)|float) %}
           {% set ns.total_cost = ns.total_cost + rcost %}
           <tr>
@@ -92,7 +94,10 @@
             <td><strong>{{ round.agent or 'agent_' ~ loop.index }}</strong></td>
             <td><code class="small">{{ round.model or '?' }}</code></td>
             <td>{{ u.get('tool_calls', 0) }}</td>
-            <td>{{ "{:,}".format(u.get('input_tokens', 0)|int) }} / {{ "{:,}".format(u.get('output_tokens', 0)|int) }}</td>
+            <td>
+              {{ "{:,}".format(u.get('input_tokens', 0)|int) }} / {{ "{:,}".format(u.get('output_tokens', 0)|int) }}
+              {% if rtok %}<span class="text-warning" title="reasoning tokens">({{ "{:,}".format(rtok) }} reasoning)</span>{% endif %}
+            </td>
             <td>{{ u.get('requests', 0) }}</td>
             <td>${{ "%.4f"|format(rcost) }}</td>
             <td>{{ "%.1f"|format(round.get('elapsed_s', 0)|float) }}s</td>
@@ -101,7 +106,10 @@
           <tr class="table-light fw-bold">
             <td colspan="3">Total</td>
             <td>{{ ns.total_tools }}</td>
-            <td>{{ "{:,}".format(ns.total_tokens) }}</td>
+            <td>
+              {{ "{:,}".format(ns.total_tokens) }}
+              {% if ns.total_reasoning %}<span class="text-warning">({{ "{:,}".format(ns.total_reasoning) }} reasoning)</span>{% endif %}
+            </td>
             <td></td>
             <td>${{ "%.4f"|format(ns.total_cost) }}</td>
             <td>{{ "%.1f"|format(ns.total_time) }}s</td>
@@ -359,6 +367,9 @@
             <code class="text-muted small me-2">{{ round.model or '?' }}</code>
             <span class="badge bg-light text-dark border me-1" title="tool calls">{{ u.get('tool_calls', 0) }} tools</span>
             <span class="badge bg-light text-dark border me-1" title="tokens">{{ "{:,}".format(u.get('total_tokens', 0)|int) }} tok</span>
+            {% if u.get('reasoning_tokens', 0)|int %}
+            <span class="badge bg-warning text-dark border me-1" title="reasoning tokens">{{ "{:,}".format(u.get('reasoning_tokens', 0)|int) }} reasoning</span>
+            {% endif %}
             <span class="badge bg-light text-dark border me-1" title="elapsed">{{ "%.1f"|format(round.get('elapsed_s', 0)|float) }}s</span>
           </button>
         </h2>
@@ -440,6 +451,14 @@
                 </tbody>
               </table>
             </div>
+            {% endif %}
+
+            {# Reasoning/thinking summary (from model) #}
+            {% if round.get('thinking_summary') %}
+            <details class="mb-3">
+              <summary class="fw-bold small text-warning">Reasoning Summary (click to expand)</summary>
+              <pre class="trace-output bg-light p-2 rounded border mt-1 mb-0" style="white-space: pre-wrap; font-size: 0.82rem;">{{ round.thinking_summary }}</pre>
+            </details>
             {% endif %}
 
             {# Agent findings text (rendered as markdown) #}
