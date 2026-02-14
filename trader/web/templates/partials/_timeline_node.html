@@ -42,7 +42,7 @@
             <dd class="col-sm-10">
               <details>
                 <summary class="small text-muted">Show {{ key }} ({{ (val|string|length)|string }} chars)</summary>
-                <div class="findings-text findings-md bg-light p-2 rounded border mt-1 mb-0" style="max-height:300px; overflow-y:auto;">{{ val|string|truncate(5000, True, '... [truncated]') }}</div>
+                <div class="findings-text findings-md bg-light p-2 rounded border mt-1 mb-0" style="max-height:400px; overflow-y:auto;">{{ val|string|truncate(50000, True, '... [truncated]') }}</div>
               </details>
             </dd>
           {% elif key == 'raw_output' %}

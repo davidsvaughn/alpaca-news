@@ -115,6 +115,8 @@ class AgentSpec:
     role_description: str = ""      # injected into the agent's system prompt
     is_final: bool = False          # only the final agent produces TradingSignal
     function_tools: bool = True     # False = skip TracingToolset (e.g. Gemini with grounding)
+    excluded_tools: frozenset[str] = frozenset()  # tool names to exclude from this agent
+    web_search_limit: int = 0       # 0 = unlimited; >0 = prompt-enforced cap
 
 
 @dataclass
@@ -172,7 +174,7 @@ def build_default_pipeline() -> PipelineConfig:
             ),
         ))
 
-    # Agent 2: OpenAI (web_search + strong reasoning)
+    # Agent 2: OpenAI (web_search + function tools, no x_search)
     openai_key = os.getenv("OPENAI_API_KEY")
     if openai_key:
         openai_model = os.getenv("RESEARCH_MODEL", "gpt-5.1")
@@ -187,6 +189,7 @@ def build_default_pipeline() -> PipelineConfig:
                 "Check market data that hasn't been checked yet. Focus on depth "
                 "and verification."
             ),
+            excluded_tools=frozenset({"x_search", "x_stream_cache"}),
         ))
 
     # Agent 3: Gemini (Google grounding web search, no function tools)
@@ -226,6 +229,14 @@ def build_default_pipeline() -> PipelineConfig:
     from trader.config import load_settings
     settings = load_settings()
 
+    # Apply web_search_limit to gpt-5-mini agents only
+    ws_limit = settings.openai_web_search_limit
+    if ws_limit > 0:
+        for a in agents:
+            model_str = a.model if isinstance(a.model, str) else getattr(a.model, "model_name", "")
+            if "gpt-5-mini" in model_str:
+                a.web_search_limit = ws_limit
+
     return PipelineConfig(
         agents=agents,
         request_limit=settings.pipeline_request_limit,
@@ -253,27 +264,75 @@ def _build_system_prompt(
         spec.role_description,
         "",
         "## Your tools",
-        "You have access to real-time market data tools and research tools.",
+    ]
+
+    if spec.function_tools:
+        parts.extend([
+            "**Research tools (cost per call — use purposefully):**",
+            "- web_search — search the web for news, analysis, SEC filings, earnings reports",
+        ])
+        if "x_search" not in spec.excluded_tools:
+            parts.append(
+                "- x_search — search X/Twitter for real-time sentiment and chatter"
+            )
+        parts.extend([
+            "- url_fetch — fetch and read the full text of any web page or article",
+            "",
+            "**Market data tools (free — use liberally for non-primary symbols):**",
+            "- check_price — real-time quote with price, bid/ask, volume, change + trend context",
+            "- get_price_history — historical OHLCV bars (1d–1y periods, 1m–1d intervals)",
+            "- get_fundamentals — P/E, EPS, market cap, beta, 52-week range, dividend yield",
+            "- get_financial_statements — income statement, balance sheet, or cash flow (last 4 periods)",
+            "- get_technical_indicators — RSI, MACD, Bollinger, SMAs, ATR, etc. with interpretation",
+            "- check_options_activity — ATM IV, put/call volume & OI ratios",
+            "- check_volume_regime — current volume vs session average (detects abnormal volume)",
+            "- check_price_spike — detects significant recent price moves (>0.5% in 5 min)",
+            "- check_insider_activity — recent insider buys/sells/grants",
+            "- get_company_news — recent news articles (yfinance)",
+            "- get_finnhub_news — recent news with headlines, summaries, sources (FinnHub)",
+            "- get_analyst_ratings — analyst buy/hold/sell consensus and trends",
+            "- get_movers — top market gainers/losers by index (check for sector-wide moves)",
+            "- check_market_context — SPY, VIX, market session status",
+        ])
+    else:
+        parts.append(
+            "You have web search (Google grounding) for finding new angles."
+        )
+
+    parts.extend([
         "",
         "**Background data is ALREADY provided** in the prompt below — current price,",
-        "fundamentals, technicals, options, volume, insider activity, and news for the",
-        "primary symbol(s). Do NOT re-fetch this data.",
+        "fundamentals, technicals, options, volume, insider activity, analyst ratings,",
+        "market context, and news for the primary symbol(s). Do NOT re-fetch this data.",
         "",
         "**Your job is to INVESTIGATE beyond the basics:**",
-        "- Use web_search to find breaking analysis, earnings reports, SEC filings",
-        "- Use x_search to gauge real-time market sentiment on X/Twitter",
-        "- Use url_fetch to read full articles and press releases",
-        "- Use check_price/get_fundamentals for OTHER symbols (peers, sector, related)",
-        "- Use get_movers to understand sector-wide moves",
+        "- Search the web for breaking analysis, earnings context, or SEC filings",
+        "- Read important articles with url_fetch for detailed information",
+        "- Use market data tools for OTHER symbols (peers, sector ETFs, competitors)",
+        "- Use get_financial_statements for deep fundamental digs (revenue trends, debt, cash flow)",
+        "- Use get_movers / check_market_context to check sector or market-wide dynamics",
+    ])
+
+    # Web search budget (prompt-enforced)
+    if spec.web_search_limit > 0:
+        parts.extend([
+            "",
+            f"## Web search budget",
+            f"You have a STRICT budget of **{spec.web_search_limit} web searches**.",
+            "Plan your searches carefully. Each search should have a clear purpose.",
+            "Do NOT repeat searches that prior agents already performed.",
+        ])
+
+    parts.extend([
         "",
         "## Cost awareness",
-        "- web_search and x_search cost per call — use purposefully.",
-        "- Financial data tools are free but already pre-fetched for primary symbols.",
+        "- web_search and x_search cost per call — use purposefully, not wastefully.",
+        "- All market data tools and url_fetch are **free** — use liberally.",
         "",
         "## How to investigate",
         "Think step by step. Focus on areas NOT yet covered by prior agents (if any).",
         "Stop when you have enough evidence.",
-    ]
+    ])
 
     if spec.is_final:
         parts.extend([
@@ -327,7 +386,7 @@ _PREFETCHED_TOOLS = frozenset({
     "check_price", "get_fundamentals", "get_technical_indicators",
     "check_options_activity", "check_volume_regime", "check_price_spike",
     "check_insider_activity", "get_company_news", "get_finnhub_news",
-    "get_analyst_ratings", "get_price_history",
+    "get_analyst_ratings", "get_price_history", "check_market_context",
 })
 
 # url_fetch can return very long articles — cap to keep prompts reasonable.
@@ -465,12 +524,21 @@ async def run_pipeline(
                 xai_api_key=xai_key,
                 tool_calls_limit=config.tool_calls_limit,
                 request_limit=config.request_limit,
+                web_search_limit=spec.web_search_limit,
             )
 
             # Build agent with appropriate output type
             # Agents with function_tools=False (e.g. Gemini with Google grounding)
             # skip TracingToolset — they can't mix builtin + function tools.
-            toolsets = [TracingToolset(market_toolset)] if spec.function_tools else []
+            if spec.function_tools:
+                base_toolset = market_toolset
+                if spec.excluded_tools:
+                    base_toolset = market_toolset.filtered(
+                        lambda _ctx, td, _excl=spec.excluded_tools: td.name not in _excl,
+                    )
+                toolsets = [TracingToolset(base_toolset)]
+            else:
+                toolsets = []
             system_prompt = _build_system_prompt(
                 spec, agent_index=i, total_agents=len(config.agents),
             )

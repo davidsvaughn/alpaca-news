@@ -76,6 +76,7 @@ class ExplorerDeps:
     # Budget visibility (set by pipeline; 0 = don't show budget line)
     tool_calls_limit: int = 0
     request_limit: int = 0
+    web_search_limit: int = 0          # 0 = unlimited; >0 = prompt-enforced cap
 
 
 # ---------------------------------------------------------------------------
@@ -171,9 +172,45 @@ market_toolset = FunctionToolset()
 
 @market_toolset.tool
 def check_price(ctx: RunContext[ExplorerDeps], symbol: str) -> str:
-    """Get real-time quote for a stock symbol. Returns last price, bid/ask, volume, net change.
-    Free (Schwab). Use this to check current price action."""
-    result = ctx.deps.market.get_quote(symbol)
+    """Get real-time quote with trend context: current price, volume, net change,
+    period returns (1W/1M/3M/6M/1Y), and 52-week range position.
+    Free (Schwab + yfinance). Use this to check current price action and trend."""
+    market = ctx.deps.market
+    result = market.get_quote(symbol)
+    if not result or result.get("error"):
+        return json.dumps(result, default=str)
+
+    last = result.get("last_price") or result.get("lastPrice") or result.get("regularMarketPrice")
+    current_price = float(last) if last else 0.0
+
+    # Add period returns from 1Y daily history
+    if current_price > 0:
+        try:
+            hist = market.get_price_history(symbol, period="1y", interval="1d")
+            bars = hist.get("bars", []) if isinstance(hist, dict) else []
+            if bars:
+                returns_str = _period_returns(bars, current_price)
+                if returns_str:
+                    result["period_returns"] = returns_str
+        except Exception:
+            pass
+
+        # Add 52-week range context
+        try:
+            fund = market.get_fundamentals(symbol)
+            if fund and not fund.get("error"):
+                w52_high = fund.get("week_52_high") or fund.get("52WeekHigh")
+                w52_low = fund.get("week_52_low") or fund.get("52WeekLow")
+                if (w52_high and w52_low
+                        and isinstance(w52_high, (int, float))
+                        and isinstance(w52_low, (int, float))
+                        and w52_high > w52_low):
+                    pct = (current_price - w52_low) / (w52_high - w52_low) * 100
+                    result["52_week_range"] = f"${w52_low:.2f}–${w52_high:.2f}"
+                    result["52_week_position_pct"] = round(pct, 1)
+        except Exception:
+            pass
+
     return json.dumps(result, default=str)
 
 
@@ -305,7 +342,7 @@ def get_price_history(ctx: RunContext[ExplorerDeps], symbol: str, period: str = 
 
 @market_toolset.tool
 def get_technical_indicators(ctx: RunContext[ExplorerDeps], symbol: str, indicators: str = "rsi,macd,boll") -> str:
-    """Get current technical indicator values and signals. Free (computed locally from yfinance data).
+    """Get current technical indicator values with interpretation. Free (computed locally).
 
     Available indicators: rsi, macd, macds, macdh, boll, boll_ub, boll_lb,
     close_50_sma, close_200_sma, close_10_ema, atr, vwma, mfi
@@ -316,6 +353,75 @@ def get_technical_indicators(ctx: RunContext[ExplorerDeps], symbol: str, indicat
     """
     indicator_list = [i.strip() for i in indicators.split(",")]
     result = ctx.deps.market.get_current_technicals(symbol, indicator_list)
+    if not result or result.get("error"):
+        return json.dumps(result, default=str)
+
+    # Add interpretive labels
+    interp: dict[str, str] = {}
+    if "rsi" in result and isinstance(result["rsi"], (int, float)):
+        rsi = result["rsi"]
+        if rsi > 70:
+            interp["rsi"] = "overbought"
+        elif rsi > 60:
+            interp["rsi"] = "elevated"
+        elif rsi < 30:
+            interp["rsi"] = "oversold"
+        elif rsi < 40:
+            interp["rsi"] = "depressed"
+        else:
+            interp["rsi"] = "neutral"
+
+    if "macd" in result and "macds" in result:
+        macd_val = result["macd"]
+        sig_val = result["macds"]
+        if isinstance(macd_val, (int, float)) and isinstance(sig_val, (int, float)):
+            interp["macd"] = "bullish" if macd_val > sig_val else "bearish"
+            if macd_val > 0 and sig_val > 0:
+                interp["macd"] += " (above zero)"
+            elif macd_val < 0 and sig_val < 0:
+                interp["macd"] += " (below zero)"
+
+    # Get current price once for Bollinger + SMA interpretation
+    current_price: float = 0.0
+    needs_price = (
+        ("boll_ub" in result and "boll_lb" in result)
+        or any(result.get(k) for k in ("close_50_sma", "close_200_sma"))
+    )
+    if needs_price:
+        try:
+            quote = ctx.deps.market.get_quote(symbol)
+            current_price = float(quote.get("last_price") or quote.get("lastPrice") or 0)
+        except (TypeError, ValueError):
+            pass
+
+    # Bollinger band position
+    if "boll_ub" in result and "boll_lb" in result and current_price > 0:
+        try:
+            ub = float(result["boll_ub"])
+            lb = float(result["boll_lb"])
+            boll_range = ub - lb
+            if boll_range > 0:
+                pct = (current_price - lb) / boll_range * 100
+                if pct > 80:
+                    interp["bollinger"] = f"near upper band ({pct:.0f}%)"
+                elif pct < 20:
+                    interp["bollinger"] = f"near lower band ({pct:.0f}%)"
+                else:
+                    interp["bollinger"] = f"mid-band ({pct:.0f}%)"
+        except (TypeError, ValueError):
+            pass
+
+    # Price vs SMAs
+    if current_price > 0:
+        for sma_key, label in [("close_50_sma", "vs_50sma"), ("close_200_sma", "vs_200sma")]:
+            sma_val = result.get(sma_key)
+            if sma_val and isinstance(sma_val, (int, float)) and sma_val > 0:
+                pct_diff = (current_price - sma_val) / sma_val * 100
+                interp[label] = f"{pct_diff:+.1f}% ({'above' if pct_diff > 0 else 'below'})"
+
+    if interp:
+        result["interpretation"] = interp
+
     return json.dumps(result, default=str)
 
 
@@ -1086,11 +1192,61 @@ def _prefetch_market_data(symbols: list[str], market: MarketDataService) -> str:
         except Exception:
             pass
 
+        # Analyst ratings (FinnHub)
+        try:
+            from trader.market.finnhub_client import get_recommendation_trends
+            trends = get_recommendation_trends(sym)
+            if trends:
+                latest = trends[0]
+                total = (latest.get("strongBuy", 0) + latest.get("buy", 0)
+                         + latest.get("hold", 0) + latest.get("sell", 0)
+                         + latest.get("strongSell", 0))
+                if total > 0:
+                    parts_r = [
+                        f"Strong Buy: {latest.get('strongBuy', 0)}",
+                        f"Buy: {latest.get('buy', 0)}",
+                        f"Hold: {latest.get('hold', 0)}",
+                        f"Sell: {latest.get('sell', 0)}",
+                        f"Strong Sell: {latest.get('strongSell', 0)}",
+                    ]
+                    period = latest.get("period", "")
+                    header = f"### {sym} — Analyst Ratings"
+                    if period:
+                        header += f" ({period})"
+                    sym_sections.append(f"{header}\n{' | '.join(parts_r)} ({total} analysts)")
+        except Exception:
+            pass
+
         # (Price history is now included via multi-timeframe returns in Price & Trend above.
         #  Agents can call get_price_history tool for raw OHLCV if they need deeper drill-down.)
 
         if sym_sections:
             sections.extend(sym_sections)
+
+    # Market context (once, not per-symbol)
+    try:
+        mkt_ctx = market.build_market_context()
+        if mkt_ctx and not mkt_ctx.get("error"):
+            lines = []
+            if "spy" in mkt_ctx:
+                spy = mkt_ctx["spy"]
+                spy_price = spy.get("last_price") or spy.get("lastPrice", "?")
+                spy_chg = spy.get("net_pct_change") or spy.get("netPercentChange", "")
+                line = f"SPY: ${spy_price}"
+                if spy_chg and isinstance(spy_chg, (int, float)):
+                    line += f" ({spy_chg:+.2f}%)"
+                lines.append(line)
+            if "vix" in mkt_ctx:
+                vix = mkt_ctx["vix"]
+                vix_price = vix.get("last_price") or vix.get("lastPrice", "?")
+                lines.append(f"VIX: {vix_price}")
+            session = mkt_ctx.get("session") or mkt_ctx.get("market_session", "")
+            if session:
+                lines.append(f"Session: {session}")
+            if lines:
+                sections.append(f"### Market Context\n" + " | ".join(lines))
+    except Exception:
+        pass
 
     if not sections:
         return ""
@@ -1126,9 +1282,15 @@ def _budget_summary(ctx: RunContext[ExplorerDeps]) -> str:
         tool_name = trace.get("action", {}).get("tool", "")
         if tool_name in ("x_search", "web_search"):
             expensive[tool_name] = expensive.get(tool_name, 0) + 1
-    for tool_name in ("x_search", "web_search"):
-        if tool_name in expensive:
-            parts.append(f"{tool_name}: {expensive[tool_name]} used")
+    ws_count = expensive.get("web_search", 0)
+    ws_limit = deps.web_search_limit
+    if ws_limit > 0:
+        parts.append(f"web_search: {ws_count}/{ws_limit}")
+    elif ws_count > 0:
+        parts.append(f"web_search: {ws_count} used")
+    xs_count = expensive.get("x_search", 0)
+    if xs_count > 0:
+        parts.append(f"x_search: {xs_count} used")
 
     return f"[Budget: {' | '.join(parts)}]"
 
