@@ -227,3 +227,4 @@ temp_ls_compile.txt
 .playwright-cli/
 data/alpaca_news.db
 # data/x/stream/2026-02-13.jsonl
+trader.db

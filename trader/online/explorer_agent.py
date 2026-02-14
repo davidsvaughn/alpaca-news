@@ -774,12 +774,12 @@ def _prefetch_market_data(symbols: list[str], market: MarketDataService) -> str:
         try:
             quote = market.get_quote(sym)
             if quote and not quote.get("error"):
-                last = quote.get("lastPrice") or quote.get("regularMarketPrice", "?")
-                change = quote.get("netChange", "")
-                change_pct = quote.get("netPercentChange", "")
-                vol = quote.get("totalVolume", "")
-                bid = quote.get("bidPrice", "")
-                ask = quote.get("askPrice", "")
+                last = quote.get("last_price") or quote.get("lastPrice") or quote.get("regularMarketPrice", "?")
+                change = quote.get("net_change") or quote.get("netChange", "")
+                change_pct = quote.get("net_pct_change") or quote.get("netPercentChange", "")
+                vol = quote.get("total_volume") or quote.get("totalVolume", "")
+                bid = quote.get("bid") or quote.get("bidPrice", "")
+                ask = quote.get("ask") or quote.get("askPrice", "")
                 line = f"Last: ${last}"
                 if change_pct:
                     line += f" | Change: {change_pct:+.2f}%" if isinstance(change_pct, (int, float)) else f" | Change: {change_pct}"
@@ -796,19 +796,35 @@ def _prefetch_market_data(symbols: list[str], market: MarketDataService) -> str:
             fund = market.get_fundamentals(sym)
             if fund and not fund.get("error"):
                 parts = []
-                for key, label in [
-                    ("marketCap", "Market Cap"), ("peRatio", "P/E"), ("eps", "EPS"),
-                    ("beta", "Beta"), ("52WeekHigh", "52w High"), ("52WeekLow", "52w Low"),
-                    ("dividendYield", "Div Yield"),
-                ]:
-                    val = fund.get(key)
-                    if val is not None:
-                        if key == "marketCap" and isinstance(val, (int, float)) and val > 1e9:
+                # Support both snake_case (our QuoteSnapshot) and camelCase field names
+                field_map = [
+                    (["market_cap", "marketCap"], "Market Cap"),
+                    (["pe_ratio", "peRatio"], "P/E"),
+                    (["eps"], "EPS"),
+                    (["beta"], "Beta"),
+                    (["week_52_high", "52WeekHigh"], "52w High"),
+                    (["week_52_low", "52WeekLow"], "52w Low"),
+                    (["dividend_yield", "dividendYield"], "Div Yield"),
+                    (["sector"], "Sector"),
+                    (["industry"], "Industry"),
+                ]
+                for keys, label in field_map:
+                    val = next((fund[k] for k in keys if fund.get(k) not in (None, "")), None)
+                    if val is None or val == "":
+                        continue
+                    if label == "Div Yield" and val == 0.0:
+                        continue
+                    if label == "Market Cap" and isinstance(val, (int, float)):
+                        if val > 1e9:
                             parts.append(f"{label}: ${val/1e9:.1f}B")
-                        elif key == "dividendYield" and isinstance(val, (int, float)):
-                            parts.append(f"{label}: {val:.2f}%")
+                        elif val > 1e6:
+                            parts.append(f"{label}: ${val/1e6:.1f}M")
                         else:
-                            parts.append(f"{label}: {val}")
+                            parts.append(f"{label}: ${val:,.0f}")
+                    elif label == "Div Yield" and isinstance(val, (int, float)):
+                        parts.append(f"{label}: {val:.2f}%")
+                    else:
+                        parts.append(f"{label}: {val}")
                 if parts:
                     sym_sections.append(f"### {sym} — Fundamentals\n{' | '.join(parts)}")
         except Exception:
@@ -873,7 +889,7 @@ def _prefetch_market_data(symbols: list[str], market: MarketDataService) -> str:
             if spike and not spike.get("error"):
                 has_spike = spike.get("spike_detected", False)
                 if has_spike:
-                    pct = spike.get("change_pct", "?")
+                    pct = spike.get("price_change_pct") or spike.get("change_pct", "?")
                     sym_sections.append(f"### {sym} — Price Spike\nSpike detected: {pct}% move")
                 else:
                     sym_sections.append(f"### {sym} — Price Spike\nNo significant spike detected")
@@ -888,7 +904,12 @@ def _prefetch_market_data(symbols: list[str], market: MarketDataService) -> str:
                 if txns:
                     lines = []
                     for tx in txns[:5]:
-                        lines.append(f"- {tx.get('insider', '?')}: {tx.get('type', '?')} {tx.get('shares', '?')} shares @ ${tx.get('price', '?')} ({tx.get('date', '?')})")
+                        name = tx.get("insider_name") or tx.get("insider", "?")
+                        action = tx.get("action") or tx.get("type", "?")
+                        shares = tx.get("shares", "?")
+                        value = tx.get("value") or tx.get("price", "?")
+                        date = tx.get("date", "?")
+                        lines.append(f"- {name}: {action} {shares} shares (${value}) ({date})")
                     sym_sections.append(f"### {sym} — Insider Activity\n" + "\n".join(lines))
                 else:
                     sym_sections.append(f"### {sym} — Insider Activity\nNo recent insider transactions")
