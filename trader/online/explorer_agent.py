@@ -753,14 +753,39 @@ def _fetch_earnings_context(symbols: list[str]) -> str:
     return "\n## Earnings context (FinnHub)\n" + "\n\n".join(sections)
 
 
+def _period_returns(bars: list[dict[str, Any]], current_price: float) -> str:
+    """Compute percentage returns at standard timeframes from daily OHLCV bars.
+
+    Returns a compact string like: "1W: -2.3% | 1M: +8.1% | 3M: -15.4%"
+    """
+    if not bars or current_price <= 0:
+        return ""
+    # bars are chronological (oldest first); find closes at approximate offsets
+    n = len(bars)
+    periods = [("1W", 5), ("1M", 21), ("3M", 63), ("6M", 126), ("1Y", 252)]
+    parts = []
+    for label, offset in periods:
+        idx = n - offset
+        if idx < 0:
+            continue
+        old_close = bars[idx].get("c", 0)
+        if old_close and old_close > 0:
+            ret = (current_price - old_close) / old_close * 100
+            parts.append(f"{label}: {ret:+.1f}%")
+    return " | ".join(parts)
+
+
 def _prefetch_market_data(symbols: list[str], market: MarketDataService) -> str:
-    """Pre-fetch basic market data for primary symbols, formatted as markdown.
+    """Pre-fetch market data for primary symbols, formatted as narrative markdown.
 
-    This eliminates redundant tool calls — every agent gets this data upfront
-    instead of each one independently calling check_price, get_fundamentals, etc.
+    Provides each agent with rich context upfront:
+    - Price + multi-timeframe returns + 52-week position
+    - Fundamentals with key ratios
+    - Technical indicators with trend direction and relative interpretation
+    - Options, volume, insider activity
 
-    Only fetches for the first 3 symbols. Investigative tools (web_search,
-    x_search, url_fetch) and cross-symbol lookups remain as agent tools.
+    Only fetches for the first 3 symbols. All data sources are free (Schwab
+    real-time quotes, yfinance history/fundamentals, local stockstats).
     """
     if not symbols:
         return ""
@@ -769,41 +794,76 @@ def _prefetch_market_data(symbols: list[str], market: MarketDataService) -> str:
 
     for sym in symbols[:3]:
         sym_sections: list[str] = []
+        _fund_cache: dict[str, Any] | None = None  # reuse across sections
 
-        # Current price / quote
+        # ----------------------------------------------------------
+        # Price & Trend (quote + 1Y daily history → period returns)
+        # ----------------------------------------------------------
+        current_price: float = 0.0
+        w52_high: float | None = None
+        w52_low: float | None = None
         try:
             quote = market.get_quote(sym)
             if quote and not quote.get("error"):
-                last = quote.get("last_price") or quote.get("lastPrice") or quote.get("regularMarketPrice", "?")
-                change = quote.get("net_change") or quote.get("netChange", "")
+                last = quote.get("last_price") or quote.get("lastPrice") or quote.get("regularMarketPrice")
+                current_price = float(last) if last else 0.0
                 change_pct = quote.get("net_pct_change") or quote.get("netPercentChange", "")
                 vol = quote.get("total_volume") or quote.get("totalVolume", "")
-                bid = quote.get("bid") or quote.get("bidPrice", "")
-                ask = quote.get("ask") or quote.get("askPrice", "")
-                line = f"Last: ${last}"
-                if change_pct:
-                    line += f" | Change: {change_pct:+.2f}%" if isinstance(change_pct, (int, float)) else f" | Change: {change_pct}"
+                vol_str = f"{vol:,.0f}" if isinstance(vol, (int, float)) else str(vol)
+
+                line1 = f"Current: ${current_price:.4g}"
+                if change_pct and isinstance(change_pct, (int, float)):
+                    line1 += f" ({change_pct:+.2f}% today)"
                 if vol:
-                    line += f" | Vol: {vol:,}" if isinstance(vol, (int, float)) else f" | Vol: {vol}"
-                if bid and ask:
-                    line += f" | Bid: ${bid} / Ask: ${ask}"
-                sym_sections.append(f"### {sym} — Current Price\n{line}")
+                    line1 += f" | Vol: {vol_str}"
+
+                # Fetch 1Y daily bars for period returns
+                returns_str = ""
+                try:
+                    hist = market.get_price_history(sym, period="1y", interval="1d")
+                    bars = hist.get("bars", []) if isinstance(hist, dict) else []
+                    if bars and current_price > 0:
+                        returns_str = _period_returns(bars, current_price)
+                except Exception:
+                    pass
+
+                # 52-week range (from fundamentals)
+                range_str = ""
+                try:
+                    _fund_cache = market.get_fundamentals(sym)
+                    if _fund_cache and not _fund_cache.get("error"):
+                        w52_high = _fund_cache.get("week_52_high") or _fund_cache.get("52WeekHigh")
+                        w52_low = _fund_cache.get("week_52_low") or _fund_cache.get("52WeekLow")
+                        if w52_high and w52_low and isinstance(w52_high, (int, float)) and isinstance(w52_low, (int, float)):
+                            rng = w52_high - w52_low
+                            if rng > 0 and current_price > 0:
+                                pct_of_range = (current_price - w52_low) / rng * 100
+                                pos = "near lows" if pct_of_range < 15 else "near highs" if pct_of_range > 85 else "mid-range"
+                                range_str = f"52-week: ${w52_low:.2f}–${w52_high:.2f} (at {pct_of_range:.0f}% — {pos})"
+                except Exception:
+                    pass
+
+                lines = [line1]
+                if returns_str:
+                    lines.append(f"Returns: {returns_str}")
+                if range_str:
+                    lines.append(range_str)
+                sym_sections.append(f"### {sym} — Price & Trend\n" + "\n".join(lines))
         except Exception:
             pass
 
-        # Fundamentals
+        # ----------------------------------------------------------
+        # Fundamentals (reuse _fund_cache if already fetched above)
+        # ----------------------------------------------------------
         try:
-            fund = market.get_fundamentals(sym)
+            fund = _fund_cache if _fund_cache and not _fund_cache.get("error") else market.get_fundamentals(sym)
             if fund and not fund.get("error"):
                 parts = []
-                # Support both snake_case (our QuoteSnapshot) and camelCase field names
                 field_map = [
                     (["market_cap", "marketCap"], "Market Cap"),
                     (["pe_ratio", "peRatio"], "P/E"),
                     (["eps"], "EPS"),
                     (["beta"], "Beta"),
-                    (["week_52_high", "52WeekHigh"], "52w High"),
-                    (["week_52_low", "52WeekLow"], "52w Low"),
                     (["dividend_yield", "dividendYield"], "Div Yield"),
                     (["sector"], "Sector"),
                     (["industry"], "Industry"),
@@ -830,27 +890,96 @@ def _prefetch_market_data(symbols: list[str], market: MarketDataService) -> str:
         except Exception:
             pass
 
-        # Technical indicators
+        # ----------------------------------------------------------
+        # Technical Summary (current snapshot + 10d trend + relative values)
+        # ----------------------------------------------------------
         try:
-            techs = market.get_current_technicals(sym, ["rsi", "macd", "macds", "boll", "boll_ub", "boll_lb", "atr"])
+            techs = market.get_current_technicals(
+                sym, ["rsi", "macd", "macds", "boll", "boll_ub", "boll_lb", "atr",
+                       "close_50_sma", "close_200_sma"],
+            )
             if techs and not techs.get("error"):
-                parts = []
-                if "rsi" in techs:
-                    parts.append(f"RSI(14): {techs['rsi']:.1f}" if isinstance(techs["rsi"], (int, float)) else f"RSI: {techs['rsi']}")
-                if "macd" in techs:
-                    macd_str = f"MACD: {techs['macd']:.3f}" if isinstance(techs["macd"], (int, float)) else f"MACD: {techs['macd']}"
-                    if "macds" in techs:
-                        macd_str += f" (signal: {techs['macds']:.3f})" if isinstance(techs["macds"], (int, float)) else f" (signal: {techs['macds']})"
-                    parts.append(macd_str)
-                if "boll" in techs and "boll_ub" in techs and "boll_lb" in techs:
+                # Fetch 10-day indicator history for trend direction
+                trend_data: dict[str, list[dict[str, Any]]] = {}
+                try:
+                    hist_ind = market.get_technical_indicators(
+                        sym, ["rsi", "macd"], lookback_days=10,
+                    )
+                    if hist_ind and not hist_ind.get("error"):
+                        trend_data = hist_ind.get("indicators", {})
+                except Exception:
+                    pass
+
+                lines = []
+
+                # RSI with trend
+                if "rsi" in techs and isinstance(techs["rsi"], (int, float)):
+                    rsi = techs["rsi"]
+                    signal = "overbought" if rsi > 70 else "oversold" if rsi < 30 else "neutral"
+                    rsi_str = f"RSI(14): {rsi:.1f} ({signal})"
+                    rsi_hist = trend_data.get("rsi", [])
+                    if len(rsi_hist) >= 2:
+                        old_rsi = rsi_hist[0].get("value")
+                        if old_rsi is not None:
+                            direction = "rising" if rsi > old_rsi + 3 else "declining" if rsi < old_rsi - 3 else "flat"
+                            rsi_str += f" — {direction} from {old_rsi:.0f} over {len(rsi_hist)}d"
+                    lines.append(rsi_str)
+
+                # MACD with crossover info
+                if "macd" in techs and "macds" in techs:
+                    macd_val = techs["macd"]
+                    signal_val = techs["macds"]
+                    if isinstance(macd_val, (int, float)) and isinstance(signal_val, (int, float)):
+                        side = "bullish" if macd_val > signal_val else "bearish"
+                        macd_str = f"MACD: {macd_val:.4f} ({side}"
+                        # Check for recent crossover from history
+                        macd_hist = trend_data.get("macd", [])
+                        if len(macd_hist) >= 2:
+                            # Look backwards for sign change in (macd - signal)
+                            # We only have macd history, not signal, so just note direction
+                            old_macd = macd_hist[0].get("value")
+                            if old_macd is not None:
+                                if (macd_val > 0) != (old_macd > 0):
+                                    macd_str += f", crossed zero in last {len(macd_hist)}d"
+                        macd_str += ")"
+                        lines.append(macd_str)
+
+                # Bollinger with position percentage
+                if "boll_ub" in techs and "boll_lb" in techs and "boll" in techs:
                     try:
-                        parts.append(f"BBands: {float(techs['boll_lb']):.2f}/{float(techs['boll']):.2f}/{float(techs['boll_ub']):.2f}")
+                        ub = float(techs["boll_ub"])
+                        lb = float(techs["boll_lb"])
+                        mid = float(techs["boll"])
+                        boll_range = ub - lb
+                        if boll_range > 0 and current_price > 0:
+                            pct = (current_price - lb) / boll_range * 100
+                            pos = "near upper band" if pct > 80 else "near lower band" if pct < 20 else "mid-band"
+                            lines.append(f"Bollinger: at {pct:.0f}% of band ({pos}) — lower: ${lb:.2f}, mid: ${mid:.2f}, upper: ${ub:.2f}")
+                        else:
+                            lines.append(f"Bollinger: ${lb:.2f} / ${mid:.2f} / ${ub:.2f}")
                     except (TypeError, ValueError):
                         pass
-                if "atr" in techs:
-                    parts.append(f"ATR: {techs['atr']:.3f}" if isinstance(techs["atr"], (int, float)) else f"ATR: {techs['atr']}")
-                if parts:
-                    sym_sections.append(f"### {sym} — Technical Indicators\n{' | '.join(parts)}")
+
+                # Price vs SMAs (relative)
+                sma_parts = []
+                for sma_key, sma_label in [("close_50_sma", "50-SMA"), ("close_200_sma", "200-SMA")]:
+                    sma_val = techs.get(sma_key)
+                    if sma_val and isinstance(sma_val, (int, float)) and current_price > 0 and sma_val > 0:
+                        pct_diff = (current_price - sma_val) / sma_val * 100
+                        side = "above" if pct_diff > 0 else "below"
+                        sma_parts.append(f"vs {sma_label}: {pct_diff:+.1f}% ({side})")
+                if sma_parts:
+                    lines.append("Price " + " | ".join(sma_parts))
+
+                # ATR as % of price (volatility context)
+                if "atr" in techs and isinstance(techs["atr"], (int, float)) and current_price > 0:
+                    atr = techs["atr"]
+                    atr_pct = atr / current_price * 100
+                    vol_label = "high" if atr_pct > 5 else "low" if atr_pct < 1 else "moderate"
+                    lines.append(f"ATR: ${atr:.4f} ({atr_pct:.1f}% of price — {vol_label} volatility)")
+
+                if lines:
+                    sym_sections.append(f"### {sym} — Technical Summary\n" + "\n".join(lines))
         except Exception:
             pass
 
@@ -929,24 +1058,8 @@ def _prefetch_market_data(symbols: list[str], market: MarketDataService) -> str:
         except Exception:
             pass
 
-        # Price history (5d, 1h) — compact summary
-        try:
-            hist = market.get_price_history(sym, period="5d", interval="1h")
-            if hist and isinstance(hist, list) and len(hist) > 0:
-                # Show last 5 candles only
-                recent = hist[-5:]
-                lines = []
-                for candle in recent:
-                    dt = candle.get("datetime", candle.get("date", "?"))
-                    o, h, l, c = candle.get("open", "?"), candle.get("high", "?"), candle.get("low", "?"), candle.get("close", "?")
-                    v = candle.get("volume", "")
-                    line = f"{dt}: O={o} H={h} L={l} C={c}"
-                    if v:
-                        line += f" V={v}"
-                    lines.append(line)
-                sym_sections.append(f"### {sym} — Price History (5d, 1h, last 5 candles)\n" + "\n".join(lines))
-        except Exception:
-            pass
+        # (Price history is now included via multi-timeframe returns in Price & Trend above.
+        #  Agents can call get_price_history tool for raw OHLCV if they need deeper drill-down.)
 
         if sym_sections:
             sections.extend(sym_sections)
