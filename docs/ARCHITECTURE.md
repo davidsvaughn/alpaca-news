@@ -4,7 +4,7 @@
 > For implementation status and roadmap, see [ROADMAP.md](ROADMAP.md).
 > For design rationale and open questions, see [DECISIONS.md](DECISIONS.md).
 >
-> Last updated: 2026-02-13
+> Last updated: 2026-02-14
 
 ---
 
@@ -156,15 +156,24 @@ Key features:
   results using `ctx.usage`, so agents see budget after each tool call
 - **Dependencies:** `RunContext[ExplorerDeps]` carries `MarketDataService`,
   tool traces, and accumulated context into tool functions
+- **Reasoning control:** Per-provider model settings via `AgentSpec.model_settings`:
+  - OpenAI: `reasoning_effort` (low/medium/high), `reasoning_summary='detailed'`
+  - Gemini: `thinking_config` with `include_thoughts` and configurable thinking level
+  - Grok: No effort control (grok-4 always max reasoning); reasoning tokens tracked
+- **Reasoning token capture:** `usage.details` exposes provider-specific reasoning
+  token counts (`reasoning_tokens` for OpenAI/Grok, `thoughts_tokens` for Gemini).
+  `ThinkingPart` content from model responses stored as `thinking_summary` per round.
+- **Role-aware prompts:** Gemini (no function tools) gets synthesis-focused guidance;
+  agents with function tools get full tool documentation and cost awareness sections.
 
 #### Provider capabilities (verified)
 
-| Provider | Model prefix | Native search | x_search | Mix with function tools? |
-|----------|-------------|---------------|----------|-------------------------|
-| Grok (xAI) | `OpenAIResponsesModel` + xAI base_url | `WebSearchTool(search_context_size=None)` | Function tool wrapper (calls xAI Responses API) | Yes |
-| OpenAI | `openai-responses:` | `WebSearchTool()` | N/A | Yes |
-| Claude | `anthropic:` | `WebSearchTool()` | N/A | Yes |
-| Gemini | `google-gla:` | Google grounding (`WebSearchTool()`) | N/A | **No** — uses grounding only, no function tools |
+| Provider | Model prefix | Native search | x_search | Mix with function tools? | Reasoning control |
+|----------|-------------|---------------|----------|-------------------------|-------------------|
+| Grok (xAI) | `OpenAIResponsesModel` + xAI base_url | `WebSearchTool(search_context_size=None)` | Function tool wrapper (calls xAI Responses API) | Yes | grok-4 always max; no effort control |
+| OpenAI | `openai-responses:` | `WebSearchTool()` | N/A | Yes | `reasoning_effort` (low/medium/high) + `reasoning_summary` |
+| Claude | `anthropic:` | `WebSearchTool()` | N/A | Yes | `budget_tokens` for thinking |
+| Gemini | `google-gla:` | Google grounding (`WebSearchTool()`) | N/A | **No** — grounding only, no function tools (Live API required for multi-tool) | `thinking_level` (low/medium/high/dynamic) + `include_thoughts` |
 
 #### Context flow between agents
 
@@ -228,9 +237,13 @@ a prediction — partial data is always preserved.
 
 ### Agent prompt design
 
-Each agent gets a role-aware system prompt with: role description, prior findings,
-tool definitions, lessons from experience, budget, the news event, and task
-instructions. The final agent (only) has `output_type=TradingSignal`.
+Each agent gets a role-aware system prompt tailored to its capabilities:
+- **Agents with function tools** (Grok, OpenAI): Full tool documentation, cost awareness
+  section, investigation guidance (url_fetch, market data tools, etc.)
+- **Agents without function tools** (Gemini): Synthesis-focused guidance, told it does NOT
+  have market data tools or url_fetch — all data is in the prompt from prior agents
+- All agents: role description, prior findings, news event, task instructions
+- The final agent (only) has `output_type=TradingSignal`
 
 ---
 
@@ -350,7 +363,7 @@ order book) — they can't be reconstructed later.
 ### Key data stored
 
 - `data_modalities` index: `{modality: [trace_indices]}` for categorical sampling
-- `rounds`: per-agent findings, model, usage, elapsed time
+- `rounds`: per-agent findings, model, usage (incl. `reasoning_tokens` + `details`), elapsed time, `thinking_summary`
 - `tool_traces`: every tool call with `raw_tool_output` and `modality` tag
 - `price_context`: per-symbol quote data at trigger time
 - `prediction`: TradingSignal from final agent

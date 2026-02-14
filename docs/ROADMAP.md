@@ -4,7 +4,7 @@
 > For stable architecture reference, see [ARCHITECTURE.md](ARCHITECTURE.md).
 > For design rationale, see [DECISIONS.md](DECISIONS.md).
 >
-> Last updated: 2026-02-13
+> Last updated: 2026-02-14
 
 ---
 
@@ -31,6 +31,7 @@
 | **Graceful degradation** | DONE | Agent failures preserved as partial rounds; pipeline continues; snapshot always sealed |
 | **Pre-fetched market data** | DONE | Basic data fetched once for primary symbols; agents focus on investigation |
 | **Gemini web search** | DONE | Gemini uses Google grounding (WebSearchTool) instead of function tools |
+| **Reasoning control** | DONE | Per-provider reasoning effort + thinking summaries + reasoning token capture |
 | **yfinance data layer** | DONE | Free data: fundamentals, insider tx, price history, news, technicals |
 | **BM25 situation memory** | TODO | New — learned from TradingAgents |
 | **Schwab Tier 1 expansion** | DONE | Options IV, fundamentals, movers, market hours, enhanced context |
@@ -257,6 +258,36 @@ Real-time visibility into all in-flight operations with cost percolation.
 
 6. **DONE** — 10 unit tests (`tests/test_activity_tracker.py`):
    - Lifecycle, cost tracking, concurrent access safety
+
+## Phase B-3: Reasoning control & prompt refinement — DONE
+
+Reasoning effort control, thinking token capture, and Gemini prompt fix.
+
+1. **DONE** — Fix Gemini system prompt (`agent_pipeline.py`):
+   - Investigation instructions (url_fetch, market data tools, x_search cost) gated on `spec.function_tools`
+   - Gemini gets synthesis-focused guidance instead of tool-use instructions it can't follow
+   - Cost awareness section also gated (only shown to agents with function tools)
+
+2. **DONE** — Reasoning control via `model_settings` (`agent_pipeline.py`, `config.py`):
+   - `AgentSpec.model_settings` field carries provider-specific settings to `agent.run()`
+   - OpenAI: `reasoning_effort` (env `OPENAI_REASONING_EFFORT`, default `medium`) + `reasoning_summary='detailed'`
+   - Gemini: `thinking_config` with `include_thoughts` and configurable level (env `GEMINI_THINKING_LEVEL`, default `dynamic`)
+   - Grok: Skipped (grok-4 always max reasoning, no effort control)
+
+3. **DONE** — Reasoning token & thinking summary extraction (`agent_pipeline.py`):
+   - `reasoning_tokens` extracted from `usage.details` (OpenAI: `reasoning_tokens`, Gemini: `thoughts_tokens`)
+   - `ThinkingPart` content extracted from model response messages via `_extract_thinking_content()`
+   - Round records include `usage.reasoning_tokens`, `usage.details`, and `thinking_summary`
+   - Total pipeline usage accumulates reasoning tokens
+
+4. **DONE** — Improved builtin tool traces (`agent_pipeline.py`):
+   - `None` output → descriptive `"[server-side grounding — results not exposed by provider]"`
+   - Clarifying comments on cost (baked into provider's token cost)
+
+5. **DONE** — Snapshot detail UI (`snapshot_detail.html`):
+   - Summary table shows reasoning tokens inline with warning color
+   - Per-agent accordion badge shows reasoning token count
+   - Collapsible "Reasoning Summary" section when thinking content available
 
 ## Phase D-2: Offline loop — TODO
 

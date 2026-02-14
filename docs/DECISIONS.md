@@ -4,7 +4,7 @@
 > For stable architecture reference, see [ARCHITECTURE.md](ARCHITECTURE.md).
 > For implementation status, see [ROADMAP.md](ROADMAP.md).
 >
-> Last updated: 2026-02-13
+> Last updated: 2026-02-14
 
 ---
 
@@ -42,6 +42,12 @@
 | Activity tracking | In-memory ActivityTracker (not DB) | Dashboard needs sub-second reads; operations are transient; no value in persisting "currently running" state across restarts |
 | In-flight cost visibility | ActivityTracker accumulates per-activity cost, summed for dashboard | CostTracker is per-item ephemeral; daily cost only reflects sealed snapshots. ActivityTracker bridges the gap with real-time cost_usd per activity |
 | Activity panel refresh | HTMX polling every 10s + SSE-triggered immediate | 10s is responsive enough for activity changes; SSE events trigger immediate refresh on state transitions (backfill progress, snapshot sealed) |
+| Gemini system prompt | Synthesis-focused, no tool mentions | Gemini can't combine Google grounding + function tools (Live API only). Previous prompt mentioned ~14 tools Gemini couldn't call, confusing the model. Now gated on `spec.function_tools` |
+| Reasoning effort control | Per-provider `model_settings` on AgentSpec | PydanticAI has first-class support via `OpenAIResponsesModelSettings` and `GoogleModelSettings`. Settings passed at `agent.run()` time, not agent construction. Configurable via env vars (`OPENAI_REASONING_EFFORT`, `GEMINI_THINKING_LEVEL`) |
+| Grok reasoning | Skip effort control, capture tokens only | grok-4 always runs at max reasoning (no `reasoning_effort` param). Only grok-3-mini exposes `reasoning_content`. grok-4 encrypted reasoning only. Just track `reasoning_tokens` from usage details |
+| OpenAI reasoning summary | `detailed` (always on) | Returns `ThinkingPart` objects in model responses. Stored as `thinking_summary` per round for visibility into model reasoning. Minimal cost overhead |
+| Reasoning token tracking | Extract from `usage.details` per provider | OpenAI: `details['reasoning_tokens']`, Gemini: `details['thoughts_tokens']`. Heterogeneous key names unified with fallback logic. Displayed in snapshot detail UI |
+| Builtin tool trace output | Descriptive string when None | `BuiltinToolReturnPart.content` is often None for Gemini grounding (server-side, not exposed). `"[server-side grounding]"` is more informative than `"None"` in the UI |
 
 ---
 
