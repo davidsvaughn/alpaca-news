@@ -33,6 +33,7 @@ from trader.db.database import (
     get_snapshot,
     get_watch,
     get_watch_by_snapshot,
+    insert_watch,
     update_watch,
 )
 from trader.knowledge.store import KnowledgeStore
@@ -172,6 +173,7 @@ def create_app(
                 "active_page": "snapshots",
                 "s": _DictObj(snap),
                 "timeline": timeline,
+                "watch": _DictObj(watch) if watch else None,
             },
         )
 
@@ -563,6 +565,113 @@ def create_app(
             "follow_ups": follow_ups,
         }
         return blob
+
+    # ------------------------------------------------------------------
+    # Manual override: BUY / SELL
+    # ------------------------------------------------------------------
+
+    @app.post("/api/snapshots/{snapshot_id}/override", response_class=HTMLResponse)
+    async def api_snapshot_override(
+        request: Request,
+        snapshot_id: str,
+        direction: str = Form(...),
+    ):
+        """Create a watch from a manual BUY/SELL decision."""
+        if direction not in ("bullish", "bearish"):
+            return HTMLResponse(
+                '<div class="alert alert-danger">Invalid direction</div>', status_code=400,
+            )
+
+        # Check if a watch already exists
+        existing = get_watch_by_snapshot(db, snapshot_id)
+        if existing:
+            return HTMLResponse(
+                '<div class="alert alert-warning">A watch already exists for this snapshot</div>',
+            )
+
+        snap = get_snapshot(db, snapshot_id)
+        if snap is None:
+            return HTMLResponse(
+                '<div class="alert alert-danger">Snapshot not found</div>', status_code=404,
+            )
+
+        symbols = snap.get("trigger", {}).get("symbols", [])
+        primary_symbol = symbols[0] if symbols else None
+        if not primary_symbol:
+            return HTMLResponse(
+                '<div class="alert alert-danger">No symbol found in snapshot</div>',
+            )
+
+        # Fetch live price
+        entry_price: float | None = None
+        try:
+            from trader.market.data_service import MarketDataService
+            market = MarketDataService()
+            quote = market.get_quote(primary_symbol)
+            if quote:
+                for key in ("lastPrice", "last_price", "regularMarketPrice", "close"):
+                    val = quote.get(key)
+                    if val is not None:
+                        entry_price = float(val)
+                        break
+        except Exception:
+            pass
+
+        # Fallback: try snapshot's stored price_context
+        if entry_price is None:
+            pc = snap.get("price_context", {})
+            sym_data = pc.get(primary_symbol, {})
+            if isinstance(sym_data, dict):
+                for key in ("lastPrice", "last_price", "regularMarketPrice", "close"):
+                    val = sym_data.get(key)
+                    if val is not None:
+                        try:
+                            entry_price = float(val)
+                            break
+                        except (TypeError, ValueError):
+                            continue
+
+        if entry_price is None:
+            return HTMLResponse(
+                '<div class="alert alert-danger">Could not determine entry price for '
+                f'{primary_symbol}</div>',
+            )
+
+        # Create the watch
+        from trader.models.watch import WatchEntry
+        entry = WatchEntry(
+            snapshot_id=snapshot_id,
+            price=entry_price,
+            time=datetime.now(tz=timezone.utc).isoformat(),
+            confidence=1.0,  # manual override = full conviction
+            direction=direction,
+            horizon="1d",
+            thesis=f"Manual {direction} override by user",
+        )
+        wb = WatchBuilder(symbol=primary_symbol, entry=entry)
+        watch = wb.to_watch()
+        watch_path = Path(settings.data_dir) / "watches" / f"{watch.watch_id}.json"
+        watch.persist(watch_path)
+        insert_watch(db, watch=watch.to_dict())
+
+        bus.publish(PipelineEvent(
+            type="watch_created",
+            payload={
+                "watch_id": watch.watch_id,
+                "symbol": watch.symbol,
+                "direction": direction,
+                "confidence": 1.0,
+                "entry_price": entry_price,
+                "snapshot_id": snapshot_id,
+                "source": "manual",
+            },
+        ))
+
+        action = "BUY" if direction == "bullish" else "SELL"
+        return HTMLResponse(
+            f'<div class="alert alert-success">{action} watch created for '
+            f'{primary_symbol} @ ${entry_price:.2f}</div>',
+        )
 
     # ------------------------------------------------------------------
     # Follow-ups API

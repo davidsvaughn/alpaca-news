@@ -36,7 +36,7 @@
 <div class="card mb-4 border-primary">
   <div class="card-header bg-primary text-white d-flex align-items-center">
     <strong class="me-auto">Pipeline Execution Summary</strong>
-    <span class="badge bg-light text-dark">{{ s.created_at[:19] }}</span>
+    <span class="badge bg-light text-dark">{{ s.created_at | fmt_dt("long") }}</span>
   </div>
   <div class="card-body">
     {# Top row: headline + symbols + direction #}
@@ -114,6 +114,50 @@
 </div>
 
 {# ============================================================ #}
+{# MANUAL OVERRIDE / WATCH STATUS                                #}
+{# ============================================================ #}
+<div class="card mb-4 border-secondary">
+  <div class="card-header d-flex align-items-center">
+    <strong class="me-auto">Trade Action</strong>
+  </div>
+  <div class="card-body py-2">
+    {% if watch %}
+      <div class="d-flex align-items-center gap-2">
+        <span class="badge bg-{{ 'success' if watch.entry.direction == 'bullish' else 'danger' }} fs-6">
+          {{ '▲ BUY' if watch.entry.direction == 'bullish' else '▼ SELL' }}
+        </span>
+        <span class="badge bg-primary">{{ watch.symbol }}</span>
+        <span>@ ${{ "%.2f"|format(watch.entry.price) }}</span>
+        <span class="badge bg-{{ 'info' if watch.status == 'holding' else 'secondary' }}">{{ watch.status }}</span>
+        <a href="/watches" class="btn btn-sm btn-outline-secondary ms-auto">View Watch</a>
+      </div>
+    {% else %}
+      <div class="d-flex align-items-center gap-2" id="override-actions">
+        <span class="text-muted small me-2">Manual override:</span>
+        <form hx-post="/api/snapshots/{{ s.snapshot_id }}/override" hx-target="#override-result" hx-swap="innerHTML" class="d-inline">
+          <input type="hidden" name="direction" value="bullish">
+          <button type="submit" class="btn btn-success btn-sm" onclick="return confirm('Create a BUY watch for {{ s.trigger.symbols[0] if s.trigger.symbols else '?' }}?')">
+            ▲ BUY
+          </button>
+        </form>
+        <form hx-post="/api/snapshots/{{ s.snapshot_id }}/override" hx-target="#override-result" hx-swap="innerHTML" class="d-inline">
+          <input type="hidden" name="direction" value="bearish">
+          <button type="submit" class="btn btn-danger btn-sm" onclick="return confirm('Create a SELL watch for {{ s.trigger.symbols[0] if s.trigger.symbols else '?' }}?')">
+            ▼ SELL
+          </button>
+        </form>
+        {% if s.prediction and s.prediction.direction and s.prediction.direction != 'neutral' %}
+        <span class="text-muted small ms-2">
+          (pipeline says {{ s.prediction.direction }} @ {{ "%.0f"|format(s.prediction.confidence * 100) }}%)
+        </span>
+        {% endif %}
+      </div>
+      <div id="override-result" class="mt-2"></div>
+    {% endif %}
+  </div>
+</div>
+
+{# ============================================================ #}
 {# PIPELINE TIMELINE (nested decision tree)                      #}
 {# ============================================================ #}
 {% if timeline and timeline.nodes %}
@@ -151,8 +195,8 @@
           <dt class="col-sm-4">Type</dt>
           <dd class="col-sm-8">{{ s.trigger.type }}</dd>
           {% if s.trigger.alpaca_timestamp %}
-          <dt class="col-sm-4">Time</dt>
-          <dd class="col-sm-8">{{ s.trigger.alpaca_timestamp }}</dd>
+          <dt class="col-sm-4">Article Time</dt>
+          <dd class="col-sm-8">{{ s.trigger.alpaca_timestamp | fmt_dt("full") }}</dd>
           {% endif %}
           {% if s.trigger.source_file %}
           <dt class="col-sm-4">File</dt>

@@ -152,7 +152,7 @@ class TracingToolset(WrapperToolset):
             ctx.deps.tool_traces.append(trace)
 
         # Append budget summary so the agent sees its usage naturally
-        if isinstance(result, str) and (ctx.deps.request_limit > 0 or ctx.deps.tool_calls_limit > 0):
+        if isinstance(result, str) and ((ctx.deps.request_limit or 0) > 0 or (ctx.deps.tool_calls_limit or 0) > 0):
             budget = _budget_summary(ctx)
             if budget:
                 result = result + "\n\n" + budget
@@ -942,19 +942,21 @@ def _budget_summary(ctx: RunContext[ExplorerDeps]) -> str:
     Returns empty string if no limits are set.
     """
     deps = ctx.deps
-    if deps.request_limit <= 0 and deps.tool_calls_limit <= 0:
+    req_lim = deps.request_limit or 0
+    tc_lim = deps.tool_calls_limit or 0
+    if req_lim <= 0 and tc_lim <= 0:
         return ""
 
     usage = ctx.usage
     parts: list[str] = []
 
     # Request count
-    if deps.request_limit > 0:
-        parts.append(f"{usage.requests or 0}/{deps.request_limit} requests")
+    if req_lim > 0:
+        parts.append(f"{usage.requests or 0}/{req_lim} requests")
 
     # Tool calls count
-    if deps.tool_calls_limit > 0:
-        parts.append(f"{usage.tool_calls or 0}/{deps.tool_calls_limit} tool calls")
+    if tc_lim > 0:
+        parts.append(f"{usage.tool_calls or 0}/{tc_lim} tool calls")
 
     # Expensive tool counts (from traces — ctx.usage doesn't break down by tool)
     expensive: dict[str, int] = {}

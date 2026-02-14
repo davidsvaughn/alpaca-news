@@ -338,13 +338,21 @@ def process_news_file(
 
         pipeline_result = None
         try:
-            pipeline_result = asyncio.run(run_pipeline(
-                news=news,
-                symbols=symbols,
-                market=market,
-                config=pipeline_config,
-                x_stream_service=xstream,
-            ))
+            # Use explicit loop management to avoid "Event loop is closed"
+            # when called repeatedly from the same thread (backfill, worker).
+            # asyncio.run() closes its loop, leaving stale refs for httpx/PydanticAI.
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            try:
+                pipeline_result = loop.run_until_complete(run_pipeline(
+                    news=news,
+                    symbols=symbols,
+                    market=market,
+                    config=pipeline_config,
+                    x_stream_service=xstream,
+                ))
+            finally:
+                loop.close()
         except Exception as e:
             # Pipeline crashed entirely — save what we have
             bus.publish(PipelineEvent(

@@ -97,6 +97,7 @@
     watch_retrospective_checkin: 'secondary',
     triage_decision: 'info',
     exploration_complete: 'success',
+    exploration_error: 'danger',
     news_received: 'secondary',
     watching: 'secondary',
     monitoring_started: 'secondary',
@@ -162,6 +163,9 @@
         return symBadges(p.symbols) + snapLink(p.snapshot_id) + ' \u2192 ' + (p.direction || '?')
           + ' (conf ' + ((p.confidence||0)*100).toFixed(0) + '%, '
           + (p.agents||0) + ' agents, ' + (p.tool_calls||0) + ' tools)';
+      case 'exploration_error':
+        return symBadges(p.symbols) + ' <span class="text-danger fw-bold">PIPELINE CRASHED</span> '
+          + '<span class="feed-dim">' + (p.error || '').slice(0, 120) + '</span>';
       case 'watching':
         return '<span class="feed-dim">Watching ' + (p.dir || '') + '</span>';
       case 'monitoring_started':
@@ -222,11 +226,22 @@
     }
   }
 
+  function fmtTime(dt) {
+    // "4:32 PM" for today, "Feb 13 4:32 PM" for older
+    var now = new Date();
+    var isToday = dt.getFullYear() === now.getFullYear()
+      && dt.getMonth() === now.getMonth() && dt.getDate() === now.getDate();
+    if (isToday) return dt.toLocaleTimeString([], {hour: 'numeric', minute: '2-digit'});
+    var months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+    return months[dt.getMonth()] + ' ' + dt.getDate() + ' '
+      + dt.toLocaleTimeString([], {hour: 'numeric', minute: '2-digit'});
+  }
+
   var xPostCounter = 0;
 
   function addEvent(type, payload, timestamp) {
     var color = EVENT_COLORS[type] || 'secondary';
-    var time = timestamp || new Date().toLocaleTimeString();
+    var time = timestamp || fmtTime(new Date());
     var row = document.createElement('div');
     row.className = 'mb-1';
 
@@ -277,7 +292,7 @@
     .then(function(events) {
       // events are newest-first; reverse so prepend builds correct order
       events.reverse().forEach(function(ev) {
-        var ts = ev.ts ? new Date(ev.ts + 'Z').toLocaleTimeString() : '?';
+        var ts = ev.ts ? fmtTime(new Date(ev.ts + 'Z')) : '?';
         addEvent(ev.type, ev.payload, ts);
       });
     })
