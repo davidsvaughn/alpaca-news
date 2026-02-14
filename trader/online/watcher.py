@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import threading
 import time
 from datetime import datetime, timezone
 from typing import Any
@@ -31,6 +32,19 @@ from trader.online.explorer_agent import (
 )
 
 DEBUG = os.getenv("DEBUG", "false").lower() in ("true", "1")
+
+_thread_local = threading.local()
+
+
+def _get_or_create_loop() -> asyncio.AbstractEventLoop:
+    """Return a per-thread event loop, creating one if needed."""
+    loop: asyncio.AbstractEventLoop | None = getattr(_thread_local, "loop", None)
+    if loop is None or loop.is_closed():
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        _thread_local.loop = loop
+    return loop
+
 
 # ---------------------------------------------------------------------------
 # Check-in schedule: (max_minutes, interval_minutes, depth)
@@ -264,7 +278,9 @@ class WatchMonitor:
         symbol = watch_dict["symbol"]
         wid = watch_dict["watch_id"]
 
-        decision = asyncio.run(self._run_agent(watch_dict, depth, minutes_held))
+        decision = _get_or_create_loop().run_until_complete(
+            self._run_agent(watch_dict, depth, minutes_held)
+        )
 
         # Hard override: force_exit must always exit, even if agent says hold
         if depth == "force_exit" and decision.action != "exit":

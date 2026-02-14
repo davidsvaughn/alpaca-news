@@ -340,6 +340,91 @@ class YFinanceClient:
             return result
 
     # ------------------------------------------------------------------
+    # Financial statements
+    # ------------------------------------------------------------------
+
+    def get_financial_statements(
+        self,
+        symbol: str,
+        statement: str = "income",
+        freq: str = "quarterly",
+        periods: int = 4,
+    ) -> dict[str, Any]:
+        """Get key line items from a financial statement.
+
+        Args:
+            symbol: Ticker symbol.
+            statement: 'income', 'balance_sheet', or 'cash_flow'.
+            freq: 'quarterly' or 'yearly'.
+            periods: Number of most recent periods to return.
+
+        Returns a dict with per-period key metrics.
+        """
+        import pandas as pd
+        import yfinance as yf
+
+        symbol = symbol.upper()
+        method_map = {
+            "income": "get_income_stmt",
+            "balance_sheet": "get_balance_sheet",
+            "cash_flow": "get_cash_flow",
+        }
+        method_name = method_map.get(statement)
+        if not method_name:
+            return {
+                "symbol": symbol,
+                "error": f"Unknown statement: {statement}. Use: income, balance_sheet, cash_flow",
+                "fetched_at": _now_iso(),
+            }
+
+        try:
+            ticker = yf.Ticker(symbol)
+            df = getattr(ticker, method_name)(freq=freq)
+
+            if df is None or df.empty:
+                return {
+                    "symbol": symbol,
+                    "statement": statement,
+                    "error": "No data available",
+                    "fetched_at": _now_iso(),
+                }
+
+            fields = _STMT_FIELDS.get(statement, [])
+            result_periods: list[dict[str, Any]] = []
+
+            for col in df.columns[:periods]:
+                period_data: dict[str, Any] = {
+                    "date": str(col.date()) if hasattr(col, "date") else str(col),
+                }
+                for display_name, possible_keys in fields:
+                    for key in possible_keys:
+                        if key in df.index:
+                            val = df.at[key, col]
+                            if pd.notna(val):
+                                period_data[display_name] = round(float(val), 2)
+                                break
+
+                result_periods.append(period_data)
+
+            return {
+                "symbol": symbol,
+                "statement": statement,
+                "frequency": freq,
+                "periods": result_periods,
+                "fetched_at": _now_iso(),
+            }
+
+        except Exception as e:
+            if DEBUG:
+                raise
+            return {
+                "symbol": symbol,
+                "statement": statement,
+                "error": str(e),
+                "fetched_at": _now_iso(),
+            }
+
+    # ------------------------------------------------------------------
     # Company news
     # ------------------------------------------------------------------
 
@@ -383,6 +468,41 @@ class YFinanceClient:
                 raise
             result["error"] = str(e)
             return result
+
+
+# ---------------------------------------------------------------------------
+# Financial statement key fields
+# ---------------------------------------------------------------------------
+
+# (display_name, [possible_yfinance_field_names]) — first match wins
+_STMT_FIELDS: dict[str, list[tuple[str, list[str]]]] = {
+    "income": [
+        ("total_revenue", ["TotalRevenue"]),
+        ("cost_of_revenue", ["CostOfRevenue"]),
+        ("gross_profit", ["GrossProfit"]),
+        ("operating_income", ["OperatingIncome", "EBIT"]),
+        ("ebitda", ["EBITDA", "NormalizedEBITDA"]),
+        ("net_income", ["NetIncome", "NetIncomeFromContinuingOperationNetMinorityInterest"]),
+        ("diluted_eps", ["DilutedEPS"]),
+    ],
+    "balance_sheet": [
+        ("total_assets", ["TotalAssets"]),
+        ("current_assets", ["CurrentAssets"]),
+        ("cash_and_equivalents", ["CashCashEquivalentsAndShortTermInvestments", "CashAndCashEquivalents"]),
+        ("total_liabilities", ["TotalLiabilitiesNetMinorityInterest", "TotalLiabilities"]),
+        ("current_liabilities", ["CurrentLiabilities"]),
+        ("total_debt", ["TotalDebt"]),
+        ("stockholders_equity", ["StockholdersEquity", "TotalEquityGrossMinorityInterest"]),
+        ("working_capital", ["WorkingCapital"]),
+    ],
+    "cash_flow": [
+        ("operating_cash_flow", ["OperatingCashFlow"]),
+        ("capital_expenditure", ["CapitalExpenditure"]),
+        ("free_cash_flow", ["FreeCashFlow"]),
+        ("stock_buybacks", ["RepurchaseOfCapitalStock"]),
+        ("dividends_paid", ["CashDividendsPaid", "CommonStockDividendPaid"]),
+    ],
+}
 
 
 # ---------------------------------------------------------------------------

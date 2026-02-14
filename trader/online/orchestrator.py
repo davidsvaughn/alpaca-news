@@ -21,6 +21,7 @@ import asyncio
 import json
 import os
 import queue
+import threading
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -51,6 +52,22 @@ from trader.online.event_bus import EventBus, PipelineEvent
 from trader.online.x_stream_service import QualityVerdict, XStreamService, build_rules_for_symbols
 
 DEBUG = os.getenv("DEBUG", "false").lower() in ("true", "1")
+
+# Thread-local storage for persistent event loops.
+# httpx/PydanticAI cache loop references internally; closing the loop between
+# calls leaves stale refs that cause "RuntimeError: Event loop is closed".
+_thread_local = threading.local()
+
+
+def _get_or_create_loop() -> asyncio.AbstractEventLoop:
+    """Return a per-thread event loop, creating one if needed."""
+    loop: asyncio.AbstractEventLoop | None = getattr(_thread_local, "loop", None)
+    if loop is None or loop.is_closed():
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        _thread_local.loop = loop
+    return loop
+
 
 # Max age (minutes) for news to be considered "fresh" enough for X stream burst.
 # Older news should rely on x_search (historical) rather than live streaming.
@@ -338,21 +355,14 @@ def process_news_file(
 
         pipeline_result = None
         try:
-            # Use explicit loop management to avoid "Event loop is closed"
-            # when called repeatedly from the same thread (backfill, worker).
-            # asyncio.run() closes its loop, leaving stale refs for httpx/PydanticAI.
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            try:
-                pipeline_result = loop.run_until_complete(run_pipeline(
-                    news=news,
-                    symbols=symbols,
-                    market=market,
-                    config=pipeline_config,
-                    x_stream_service=xstream,
-                ))
-            finally:
-                loop.close()
+            loop = _get_or_create_loop()
+            pipeline_result = loop.run_until_complete(run_pipeline(
+                news=news,
+                symbols=symbols,
+                market=market,
+                config=pipeline_config,
+                x_stream_service=xstream,
+            ))
         except Exception as e:
             # Pipeline crashed entirely — save what we have
             bus.publish(PipelineEvent(

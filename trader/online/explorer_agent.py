@@ -90,6 +90,7 @@ TOOL_MODALITY: dict[str, str] = {
     "check_market_context": "macro",
     "check_options_activity": "market_data",
     "get_fundamentals": "fundamentals",
+    "get_financial_statements": "fundamentals",
     "get_movers": "market_data",
     "get_technical_indicators": "market_data",
     "check_insider_activity": "fundamentals",
@@ -334,6 +335,31 @@ def check_volume_regime(ctx: RunContext[ExplorerDeps], symbol: str) -> str:
     return json.dumps(result, default=str)
 
 
+@market_toolset.tool
+def get_financial_statements(
+    ctx: RunContext[ExplorerDeps],
+    symbol: str,
+    statement: str = "income",
+    freq: str = "quarterly",
+) -> str:
+    """Get financial statement data for deep fundamental analysis.
+    Returns key line items for the last 4 periods. Free (yfinance).
+    Use this to go beyond summary ratios (P/E, EPS) and examine trends:
+    - income: Revenue, gross/operating/net profit, EBITDA, EPS
+    - balance_sheet: Assets, liabilities, equity, cash, debt, working capital
+    - cash_flow: Operating cash flow, capex, free cash flow, buybacks, dividends
+
+    Args:
+        symbol: Stock ticker (e.g. 'AAPL')
+        statement: 'income', 'balance_sheet', or 'cash_flow'
+        freq: 'quarterly' or 'yearly'
+    """
+    result = ctx.deps.market.get_financial_statements(
+        symbol, statement=statement, freq=freq,
+    )
+    return json.dumps(result, default=str)
+
+
 # ---------------------------------------------------------------------------
 # Research tools — web/social/evidence
 # ---------------------------------------------------------------------------
@@ -477,8 +503,9 @@ EXPLORER_SYSTEM_PROMPT = """You are a financial research analyst investigating a
 
 ## Your tools
 You have access to:
-- **Market data** (free): real-time quotes, fundamentals, insider activity,
-  technicals, options, price history, volume analysis
+- **Market data** (free): real-time quotes, fundamentals, financial statements
+  (income, balance sheet, cash flow), insider activity, technicals, options,
+  price history, volume analysis
 - **Web search** (native, iterative): search the web for related information,
   verify claims, find additional context
 - **X/Twitter search** (x_search): check social media sentiment and chatter
@@ -502,6 +529,7 @@ Think step by step. A good investigation typically includes:
 - Check X/Twitter for trader sentiment and chatter
 - Look at volume (are people actually trading on this?)
 - Check fundamentals (is this stock expensive/cheap? what's the context?)
+- Check financial statements if deeper analysis is needed (revenue trends, debt levels, cash flow health)
 - Check insider activity (are insiders buying or selling?)
 - Look at options activity (what's the options market pricing in?)
 - Check technical indicators (is the stock overbought/oversold?)

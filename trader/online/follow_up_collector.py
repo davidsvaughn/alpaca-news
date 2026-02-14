@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import threading
 import time
 from datetime import datetime, timezone
 from typing import Any
@@ -36,6 +37,18 @@ from trader.models.follow_up import (
 from trader.online.event_bus import EventBus, PipelineEvent
 
 DEBUG = os.getenv("DEBUG", "false").lower() in ("true", "1")
+
+_thread_local = threading.local()
+
+
+def _get_or_create_loop() -> asyncio.AbstractEventLoop:
+    """Return a per-thread event loop, creating one if needed."""
+    loop: asyncio.AbstractEventLoop | None = getattr(_thread_local, "loop", None)
+    if loop is None or loop.is_closed():
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        _thread_local.loop = loop
+    return loop
 
 
 # ---------------------------------------------------------------------------
@@ -305,7 +318,7 @@ class FollowUpCollector:
                     "actionable queries."
                 ),
             )
-            result = asyncio.run(planner.run(prompt))
+            result = _get_or_create_loop().run_until_complete(planner.run(prompt))
             return result.output
         except Exception as e:
             if DEBUG:

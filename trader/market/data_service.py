@@ -162,6 +162,20 @@ class MarketDataService:
     # yfinance-only tools
     # ------------------------------------------------------------------
 
+    def get_financial_statements(
+        self,
+        symbol: str,
+        statement: str = "income",
+        freq: str = "quarterly",
+        periods: int = 4,
+    ) -> dict[str, Any]:
+        """Get financial statement data (yfinance only — free)."""
+        result = self._yfinance.get_financial_statements(
+            symbol, statement=statement, freq=freq, periods=periods,
+        )
+        result["source"] = "yfinance"
+        return result
+
     def check_insider_activity(self, symbol: str) -> dict[str, Any]:
         """Insider transactions (yfinance only — free, high-signal)."""
         result = self._yfinance.check_insider_activity(symbol)
