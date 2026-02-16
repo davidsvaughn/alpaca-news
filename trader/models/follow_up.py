@@ -82,9 +82,9 @@ class FollowUp:
         return json.dumps(self.to_dict(), ensure_ascii=False, indent=indent)
 
     def persist(self, path: str | Path) -> None:
-        path = Path(path)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(self.to_json(indent=2) + "\n", encoding="utf-8")
+        from trader.models import atomic_write_text
+
+        atomic_write_text(Path(path), self.to_json(indent=2) + "\n")
 
 
 class FollowUpBuilder:

@@ -10,6 +10,7 @@ Run:
 
 from __future__ import annotations
 
+import atexit
 import threading
 from pathlib import Path
 
@@ -47,6 +48,25 @@ def main() -> None:
 
     xstream: XStreamService | None = None
     if settings.x_stream_enabled and settings.x_stream_mode != "off":
+        # Purge any stale X stream rules left by previous crashes
+        try:
+            from trader.xapi.client import XApiClient
+            from trader.xapi.rules import delete_all_rules, get_rules
+
+            _xc = XApiClient()
+            _existing = get_rules(client=_xc)
+            _rule_data = _existing.get("data") or []
+            if _rule_data:
+                _tags = [r.get("tag", r.get("id", "?")) for r in _rule_data]
+                delete_all_rules(client=_xc)
+                print(f"X stream startup: purged {len(_rule_data)} stale rule(s): {_tags}")
+                bus.publish(PipelineEvent(
+                    type="x_rules_purged",
+                    payload={"count": len(_rule_data), "tags": _tags, "reason": "startup_cleanup"},
+                ))
+        except Exception as e:
+            print(f"X stream startup: rule purge failed (non-fatal): {e}")
+
         # Conservative guardrails by default
         xstream = XStreamService(
             bus=bus,
@@ -118,6 +138,17 @@ def main() -> None:
             print(f"Backfill complete: {ok}/{total} succeeded.")
 
         threading.Thread(target=_backfill, daemon=True).start()
+
+    # Graceful shutdown: clean up X stream rules on exit
+    if xstream is not None:
+        def _shutdown_xstream():
+            try:
+                xstream.stop()
+                print("X stream shutdown: cleanup complete.")
+            except Exception as e:
+                print(f"X stream shutdown: cleanup failed: {e}")
+
+        atexit.register(_shutdown_xstream)
 
     app = create_app(settings=settings, bus=bus, db=db, knowledge=knowledge, tracker=tracker)
     uvicorn.run(app, host="127.0.0.1", port=8000, log_level="info")

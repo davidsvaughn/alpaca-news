@@ -362,6 +362,26 @@ class XStreamService:
         self._stop_evt.set()
         self._burst_stop_evt.set()
 
+        # Give the burst thread a chance to run its finally block (rule cleanup)
+        if self._current_burst_thread and self._current_burst_thread.is_alive():
+            self._current_burst_thread.join(timeout=5.0)
+
+        # Safety net: purge any rules that survived the burst cleanup
+        try:
+            from trader.xapi.rules import delete_all_rules, get_rules
+
+            existing = get_rules(client=self.client)
+            rule_data = existing.get("data") or []
+            if rule_data:
+                tags = [r.get("tag", r.get("id", "?")) for r in rule_data]
+                delete_all_rules(client=self.client)
+                self.bus.publish(PipelineEvent(
+                    type="x_rules_purged",
+                    payload={"count": len(rule_data), "tags": tags, "reason": "shutdown_cleanup"},
+                ))
+        except Exception:
+            pass  # Best-effort; startup purge will catch anything we miss
+
 
 def build_rules_for_symbols(
     *,

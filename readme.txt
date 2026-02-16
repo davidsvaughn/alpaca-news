@@ -4,6 +4,9 @@ python alpaca/news_websocket.py
 # Kill existing
 pkill -f "trader.main"
 
+# launch
+uv run python -m trader.main
+
 # Relaunch
 BACKFILL_ON_START=false nohup uv run python -m trader.main > /tmp/alpaca-dashboard.log 2>&1 &
 

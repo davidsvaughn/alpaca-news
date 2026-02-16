@@ -507,12 +507,12 @@ def process_news_file(
     # --- Seal snapshot ---
     snapshot = builder.seal()
 
-    # Persist to JSON file
+    # Persist to DB first (SQLite rollback on crash = no orphaned files)
+    insert_snapshot(db, snapshot=snapshot.to_dict())
+
+    # Then persist to JSON file (atomic write; DB is source of truth)
     out_path = _snapshot_path(settings, snapshot.snapshot_id)
     snapshot.persist(out_path)
-
-    # Persist to DB (idempotent)
-    insert_snapshot(db, snapshot=snapshot.to_dict())
 
     bus.publish(
         PipelineEvent(type="snapshot_sealed", payload={
@@ -553,8 +553,8 @@ def process_news_file(
                     )
                     watch = wb.to_watch()
                     watch_path = Path(settings.data_dir) / "watches" / f"{watch.watch_id}.json"
-                    watch.persist(watch_path)
                     insert_watch(db, watch=watch.to_dict())
+                    watch.persist(watch_path)
                     bus.publish(PipelineEvent(
                         type="watch_created",
                         payload={
