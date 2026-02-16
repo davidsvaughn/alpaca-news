@@ -1,0 +1,22 @@
+{
+  "watch_id": "watch_bba04a5527fb",
+  "symbol": "CRM",
+  "status": "holding",
+  "entry": {
+    "snapshot_id": "d5bd4084-d2e4-545c-9cbf-f3adc2770db2",
+    "price": 189.8,
+    "time": "2026-02-16T18:15:10.073310+00:00",
+    "confidence": 1.0,
+    "direction": "bullish",
+    "horizon": "1d",
+    "thesis": "Manual bullish override by user"
+  },
+  "exit": null,
+  "monitoring_snapshot_ids": [],
+  "retrospective_snapshot_ids": [],
+  "created_at": "2026-02-16T18:15:10.073350+00:00",
+  "last_checkin_at": null,
+  "lifecycle_sealed_at": null,
+  "checkin_history": [],
+  "retrospective_data": null
+}

@@ -541,7 +541,7 @@ def _fake_settings():
         watch_monitoring_budget = 0.50
         watch_max_hold_minutes = 240
         watch_max_retro_minutes = 60
-        watch_checkin_model = "gemini-3-flash"
+        watch_checkin_model = "gemini-3-flash-preview"
         follow_up_enabled = False
         debug = False
     return S()
