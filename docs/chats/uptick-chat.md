@@ -204,3 +204,113 @@ Per bar:
 * rolling z-scores of delta/imbalance
 
 If you paste one example streamer message (even a single JSON update), I can point to the exact field names to use for `lastPrice` and `totalVolume` and whether you’ll need symbol-specific parsing.
+
+---
+
+Q:
+
+Can you derive any insights about stock prices from uptick/downtick volume?
+
+---
+
+A:
+
+Yes — up-tick / down-tick volume can provide useful short-term information about stock price direction, but it’s more about probability and pressure than prediction.
+Here’s how to think about it:
+:small_blue_diamond: What Up-Tick / Down-Tick Volume Actually Measures
+
+Up-tick volume = shares traded at a price higher than the previous trade
+Down-tick volume = shares traded at a price lower than the previous trade
+The difference is often called Net Tick Volume or Delta
+This reflects aggressive buying vs aggressive selling.
+:small_blue_diamond: What You Can Infer
+:one: Intraday Directional Pressure
+If:
+
+Up-tick volume >> Down-tick volume
+→ Buyers are lifting offers (aggressive buying)
+If:
+
+Down-tick volume >> Up-tick volume
+→ Sellers are hitting bids (aggressive selling)
+That tells you:
+
+Who is in control right now
+This is most useful:
+
+On short time frames (minutes to hours)
+For high-liquidity NYSE/NASDAQ stocks
+:two: Hidden Accumulation or Distribution
+Example:
+
+Stock price flat
+But consistent positive net up-tick volume
+That suggests:
+
+Large buyers absorbing supply (accumulation)
+Opposite:
+
+Flat price + persistent down-tick dominance
+Possible distribution before breakdown
+:three: Divergences
+If price:
+
+Makes new highs
+But net up-tick volume is weakening
+That can signal:
+
+Momentum exhaustion
+If price:
+
+Makes new lows
+But selling pressure is decreasing
+Could signal:
+
+Seller exhaustion / bounce setup
+:small_blue_diamond: What It CANNOT Tell You
+:x: Long-term direction
+:x: Fair value
+:x: Earnings outlook
+:x: Institutional positioning beyond short term
+:x: Exact price targets
+It’s a flow indicator, not a valuation tool.
+:small_blue_diamond: When It’s Most Powerful
+Up/down tick data works best when combined with:
+
+Volume spikes
+VWAP positioning
+Order book depth
+Relative volume
+Market-wide tick ($TICK index on NYSE)
+:small_blue_diamond: Important Context (Today’s Market Structure)
+You previously asked about computer-generated trading volume.
+Because:
+
+60–75%+ of volume is algorithmic (higher on NASDAQ)
+Tick data now often reflects:
+
+High-frequency liquidity provision
+Short-term arbitrage
+VWAP execution programs
+So it’s:
+
+More useful for intraday traders
+Less useful for investors
+:small_blue_diamond: Simple Practical Rule
+For intraday trading:
+If:
+Net Up-Tick Volume > 60% of total volume
+AND price above VWAP
+→ Short-term bullish bias
+If:
+Net Down-Tick Volume > 60%
+AND price below VWAP
+→ Short-term bearish bias
+:small_blue_diamond: Bottom Line
+Yes — you can derive:
+
+Short-term momentum
+Aggression imbalance
+Potential reversals (via divergence)
+Hidden accumulation/distribution
+But you cannot reliably predict long-term price direction from it alone.
