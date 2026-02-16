@@ -88,6 +88,37 @@ def _news_is_fresh(trigger: "Trigger", max_age_minutes: int = _X_STREAM_MAX_NEWS
         return False
 
 
+# Cache: {date_str: is_trading_day}
+_trading_day_cache: dict[str, bool] = {}
+
+
+def _is_market_open() -> bool:
+    """Check if US equity market is in regular hours (handles holidays via Schwab)."""
+    from zoneinfo import ZoneInfo
+
+    now_et = datetime.now(tz=ZoneInfo("America/New_York"))
+    today_str = now_et.strftime("%Y-%m-%d")
+
+    # Is today a trading day? (cached per day, Schwab → weekday fallback)
+    if today_str not in _trading_day_cache:
+        try:
+            from trader.market.schwab_client import SchwabMarketClient
+
+            client = SchwabMarketClient()
+            hours = client.get_market_hours("equity")
+            _trading_day_cache[today_str] = bool(hours.get("is_open"))
+        except Exception:
+            # Schwab unavailable → fall back to weekday check (misses holidays)
+            _trading_day_cache[today_str] = now_et.weekday() < 5
+
+    if not _trading_day_cache[today_str]:
+        return False
+
+    # Regular hours: 9:30 AM – 4:00 PM ET
+    t = now_et.hour * 60 + now_et.minute
+    return 570 <= t < 960  # 9*60+30=570, 16*60=960
+
+
 def _make_quality_callback(
     *,
     headline: str,
@@ -293,6 +324,7 @@ def process_news_file(
             and triage.confidence >= settings.x_min_triage_confidence_for_burst
             and symbols
             and _news_is_fresh(trigger)
+            and (not settings.x_stream_market_hours_only or _is_market_open())
         ):
             try:
                 rules = build_rules_for_symbols(symbols=symbols)

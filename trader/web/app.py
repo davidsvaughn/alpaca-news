@@ -816,6 +816,7 @@ def _settings_groups(s: Settings) -> list[tuple[str, list[tuple[str, Any]]]]:
             "X Stream",
             [
                 "x_stream_enabled", "x_stream_mode",
+                "x_stream_market_hours_only",
                 "x_max_posts_per_day", "x_max_bursts_per_day",
                 "x_burst_ttl_minutes", "x_usage_poll_interval_s",
                 "x_min_triage_confidence_for_burst",
