@@ -76,3 +76,15 @@ Consumer Key Secret: BpfiTewvlllrRUkOOX6VsxwK51zXjSNTPP86vn31lAQqe7jtwK
 
 Access Token: 118192929-wIYrqyVHijTFWTrKmJDTQ6PnypF6QE4ICaBK8NrY
 Access Token Secret: Mre4oFDwA6bIVM74RzogJGpTdvs3Y91M4CcZFYWX3rM5E
+
+
+-----------------
+Grok
+https://console.x.ai/team/f21957a0-6031-4cdb-9d81-f4a4cb416058/usage
+
+X
+https://console.x.com/accounts/2020768736576253952/usage
+
+Gemini
+https://console.cloud.google.com/billing/01CED9-5E8FC2-E10728/payment?project=opportune-geode-473113-s9
+

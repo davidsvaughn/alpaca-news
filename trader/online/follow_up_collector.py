@@ -399,7 +399,7 @@ def _run_web_search(query: str) -> dict[str, Any]:
             },
             json={
                 "model": os.getenv("XSEARCH_MODEL", "grok-4-1-fast-reasoning"),
-                "tools": [{"type": "web_search_preview"}],
+                "tools": [{"type": "web_search"}],
                 "input": [{"role": "user", "content": query}],
             },
             timeout=60.0,

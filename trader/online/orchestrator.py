@@ -53,6 +53,34 @@ from trader.online.x_stream_service import QualityVerdict, XStreamService, build
 
 DEBUG = os.getenv("DEBUG", "false").lower() in ("true", "1")
 
+
+def _describe_api_error(e: Exception) -> str:
+    """Extract provider, status, and actionable info from API errors."""
+    try:
+        from openai import APIStatusError
+
+        if isinstance(e, APIStatusError):
+            url = str(getattr(e, "response", None) and e.response.url or "")
+            status = getattr(e, "status_code", "?")
+            if "x.ai" in url:
+                provider = "xAI/Grok"
+            elif "openai.com" in url:
+                provider = "OpenAI"
+            else:
+                provider = f"OpenAI-compatible ({url})"
+            hint = ""
+            if status == 429:
+                hint = " → Check credits/spending limit on provider dashboard"
+            return f"[{provider}] HTTP {status}{hint}: {e}"
+    except ImportError:
+        pass
+
+    error_str = str(e).lower()
+    if "google" in error_str or "gemini" in error_str:
+        return f"[Gemini/Google] {e}"
+
+    return str(e)
+
 # Thread-local storage for persistent event loops.
 # httpx/PydanticAI cache loop references internally; closing the loop between
 # calls leaves stale refs that cause "RuntimeError: Event loop is closed".
@@ -711,7 +739,7 @@ def _worker_loop(
         except Exception as e:
             if DEBUG:
                 raise
-            print(f"ERROR processing {path}: {e}")
+            print(f"ERROR processing {path}: {_describe_api_error(e)}")
         finally:
             work_queue.task_done()
 

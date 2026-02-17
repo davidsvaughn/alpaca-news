@@ -43,6 +43,10 @@ GROK_PRICING: dict[str, dict[str, float]] = {
     "grok-4-fast-reasoning": {"input": 0.20, "output": 0.50},
     "grok-4-fast-non-reasoning": {"input": 0.20, "output": 0.50},
     "grok-code-fast-1": {"input": 0.20, "output": 1.50},
+    # Tool invocation fees ($5/1k = $0.005 each).  Actual cost per call is
+    # higher because each invocation also runs a Grok inference with its own
+    # token costs.  Observed average total: ~$0.018/call (fee + tokens).
+    # The per-call token cost is tracked separately in TracingToolset.
     "web_search": {"per_call": 0.005},
     "x_search": {"per_call": 0.005},
 }

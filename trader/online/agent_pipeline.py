@@ -138,6 +138,7 @@ class AgentSpec:
     function_tools: bool = True     # False = skip TracingToolset (e.g. Gemini with grounding)
     excluded_tools: frozenset[str] = frozenset()  # tool names to exclude from this agent
     web_search_limit: int = 0       # 0 = unlimited; >0 = prompt-enforced cap
+    x_search_limit: int = 0         # 0 = unlimited; >0 = hard-enforced cap per agent
     model_settings: dict[str, Any] | None = None  # provider-specific settings (reasoning effort, etc.)
 
 
@@ -261,6 +262,13 @@ def build_default_pipeline() -> PipelineConfig:
             if "gpt-5-mini" in model_str:
                 a.web_search_limit = ws_limit
 
+    # Apply x_search_limit to agents that have x_search (not excluded)
+    xs_limit = settings.max_x_searches_per_item
+    if xs_limit > 0:
+        for a in agents:
+            if "x_search" not in a.excluded_tools:
+                a.x_search_limit = xs_limit
+
     # Apply reasoning / thinking settings per provider
     for a in agents:
         if a.name == "openai":
@@ -377,6 +385,15 @@ def _build_system_prompt(
             f"You have a STRICT budget of **{spec.web_search_limit} web searches**.",
             "Plan your searches carefully. Each search should have a clear purpose.",
             "Do NOT repeat searches that prior agents already performed.",
+        ])
+
+    # x_search budget (hard-enforced in tool)
+    if spec.x_search_limit > 0 and "x_search" not in spec.excluded_tools:
+        parts.extend([
+            "",
+            f"## X/Twitter search budget",
+            f"You have a STRICT budget of **{spec.x_search_limit} x_search calls**.",
+            "Each call is expensive (~$0.02). Make each query count.",
         ])
 
     if spec.function_tools:
@@ -586,6 +603,7 @@ async def run_pipeline(
                 tool_calls_limit=config.tool_calls_limit,
                 request_limit=config.request_limit,
                 web_search_limit=spec.web_search_limit,
+                x_search_limit=spec.x_search_limit,
             )
 
             # Build agent with appropriate output type
@@ -659,6 +677,7 @@ async def run_pipeline(
                 # Graceful degradation: capture partial work and continue
                 elapsed = round(time.time() - start_time, 1)
                 all_tool_traces.extend(deps.tool_traces)
+                error_msg = str(e)
                 round_record = {
                     "agent": spec.name,
                     "model": model_name,
@@ -670,11 +689,13 @@ async def run_pipeline(
                     "usage": {},
                     "cost_usd": 0.0,
                     "elapsed_s": elapsed,
-                    "error": {"type": type(e).__name__, "message": str(e)},
+                    "error": {"type": type(e).__name__, "message": error_msg},
                 }
                 all_rounds.append(round_record)
-                if DEBUG:
-                    print(f"[Pipeline]   → FAILED: {e}")
+                print(
+                    f"[Pipeline] Agent {spec.name} ({model_name}) FAILED "
+                    f"after {elapsed}s: {type(e).__name__}: {error_msg}"
+                )
                 continue  # try next agent
 
             elapsed = round(time.time() - start_time, 1)

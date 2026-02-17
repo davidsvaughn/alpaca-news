@@ -77,6 +77,7 @@ class ExplorerDeps:
     tool_calls_limit: int = 0
     request_limit: int = 0
     web_search_limit: int = 0          # 0 = unlimited; >0 = prompt-enforced cap
+    x_search_limit: int = 0            # 0 = unlimited; >0 = hard-enforced cap
 
 
 # ---------------------------------------------------------------------------
@@ -108,6 +109,37 @@ TOOL_MODALITY: dict[str, str] = {
 # Tool tracing — intercepts every tool call for ToolTrace recording
 # ---------------------------------------------------------------------------
 
+# x_search and web_search (function tools) make separate API calls to xAI.
+# The cost includes a per-call invocation fee PLUS token costs for the inner
+# Grok inference.  We extract usage from the result to compute the true cost.
+_XAI_PER_CALL_FEE = 0.005  # USD per x_search or web_search invocation
+_XAI_INPUT_RATE = 0.20     # USD per 1M input tokens (grok-4-1-fast-reasoning)
+_XAI_OUTPUT_RATE = 0.50    # USD per 1M output tokens
+
+
+def _estimate_tool_call_cost(tool_name: str, result: Any, error: str | None) -> float:
+    """Estimate cost of a tool call, including inner API token costs.
+
+    For x_search (and future web_search function tools), the result JSON
+    contains a ``usage`` dict with ``input_tokens`` and ``output_tokens``
+    from the inner xAI API call.  We add those to the per-call fee.
+    """
+    if tool_name != "x_search" or error is not None or result is None:
+        return 0.0
+
+    cost = _XAI_PER_CALL_FEE
+    try:
+        parsed = json.loads(result) if isinstance(result, str) else result
+        usage = parsed.get("usage") if isinstance(parsed, dict) else None
+        if usage:
+            inp = usage.get("input_tokens", 0) or 0
+            out = usage.get("output_tokens", 0) or 0
+            cost += inp * _XAI_INPUT_RATE / 1_000_000
+            cost += out * _XAI_OUTPUT_RATE / 1_000_000
+    except (json.JSONDecodeError, TypeError, AttributeError):
+        pass
+    return round(cost, 6)
+
 
 class TracingToolset(WrapperToolset):
     """Wraps a toolset to record every tool call as a ToolTrace dict."""
@@ -133,6 +165,8 @@ class TracingToolset(WrapperToolset):
             hop = ctx.deps.hop_index
             ctx.deps.hop_index += 1
 
+            cost_usd = _estimate_tool_call_cost(name, result, error)
+
             trace: dict[str, Any] = {
                 "trace_id": f"trace_{hop}",
                 "hop_index": hop,
@@ -146,7 +180,7 @@ class TracingToolset(WrapperToolset):
                     "start_time": datetime.fromtimestamp(start, tz=timezone.utc).isoformat(),
                     "end_time": datetime.fromtimestamp(end, tz=timezone.utc).isoformat(),
                     "duration_s": round(end - start, 3),
-                    "cost_usd": 0.0,  # financial data tools are free
+                    "cost_usd": cost_usd,
                 },
                 "raw_tool_output": _safe_serialize(result) if error is None else None,
                 "error": error,
@@ -516,6 +550,16 @@ def x_search(ctx: RunContext[ExplorerDeps], query: str) -> str:
     Args:
         query: Search query (e.g. '$NVDA earnings sentiment', 'NVIDIA supply shortage')
     """
+    # Enforce x_search limit
+    limit = ctx.deps.x_search_limit
+    if limit > 0:
+        prior = sum(
+            1 for t in ctx.deps.tool_traces
+            if isinstance(t.get("action"), dict) and t["action"].get("tool") == "x_search"
+        )
+        if prior >= limit:
+            return json.dumps({"error": f"x_search limit reached ({limit}). Use other tools instead."})
+
     api_key = ctx.deps.xai_api_key or os.getenv("XAI_API_KEY")
     if not api_key:
         return json.dumps({"error": "XAI_API_KEY not configured — x_search unavailable"})
@@ -1289,7 +1333,10 @@ def _budget_summary(ctx: RunContext[ExplorerDeps]) -> str:
     elif ws_count > 0:
         parts.append(f"web_search: {ws_count} used")
     xs_count = expensive.get("x_search", 0)
-    if xs_count > 0:
+    xs_limit = deps.x_search_limit
+    if xs_limit > 0:
+        parts.append(f"x_search: {xs_count}/{xs_limit}")
+    elif xs_count > 0:
         parts.append(f"x_search: {xs_count} used")
 
     return f"[Budget: {' | '.join(parts)}]"
