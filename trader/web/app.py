@@ -834,6 +834,16 @@ def _settings_groups(s: Settings) -> list[tuple[str, list[tuple[str, Any]]]]:
                 "watch_max_retro_minutes", "watch_checkin_model",
             ],
         ),
+        (
+            "Pipeline",
+            [
+                "pipeline_request_limit", "pipeline_tool_calls_limit",
+                "pipeline_max_cost_usd", "pipeline_agent_timeout_s",
+                "max_parallel_explores",
+                "openai_web_search_limit",
+                "openai_reasoning_effort", "gemini_thinking_level",
+            ],
+        ),
         ("Reflection", ["reflection_model"]),
     ]
     result: list[tuple[str, list[tuple[str, Any]]]] = []

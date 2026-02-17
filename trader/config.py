@@ -107,6 +107,7 @@ class Settings:
     x_stream_quality_check_after: int
     x_stream_quality_check_model: str
     x_stream_quality_max_retries: int
+    x_stream_market_hours_only: bool
 
     # Evidence acquisition (optional)
     evidence_acquire_enabled: bool
@@ -138,8 +139,12 @@ class Settings:
     # Cost-based budget: skip remaining intermediate agents when cumulative
     # pipeline cost exceeds this threshold (USD). Final agent always runs.
     pipeline_max_cost_usd: float
+    # Per-agent timeout (seconds). 0 = no timeout.
+    pipeline_agent_timeout_s: float
     # OpenAI (gpt-5-mini) web_search cap (0 = unlimited). Prompt-enforced.
     openai_web_search_limit: int
+    # Max concurrent exploration workers. 1 = sequential (no parallelism).
+    max_parallel_explores: int
 
     # Reasoning / thinking controls
     openai_reasoning_effort: str   # 'low', 'medium', 'high'
@@ -249,7 +254,9 @@ def load_settings(*, dotenv_path: str | None = None, override: bool = False) -> 
     pipeline_request_limit = _env_int("PIPELINE_REQUEST_LIMIT", 15)
     pipeline_tool_calls_limit = _env_int("PIPELINE_TOOL_CALLS_LIMIT", 25)
     pipeline_max_cost_usd = _env_float("PIPELINE_MAX_COST_USD", 0.50)
+    pipeline_agent_timeout_s = _env_float("PIPELINE_AGENT_TIMEOUT_S", 60.0)
     openai_web_search_limit = _env_int("OPENAI_WEB_SEARCH_LIMIT", 10)
+    max_parallel_explores = _env_int("MAX_PARALLEL_EXPLORES", 1)
 
     # Reasoning / thinking controls
     openai_reasoning_effort = _env_str("OPENAI_REASONING_EFFORT", "medium") or "medium"
@@ -296,6 +303,7 @@ def load_settings(*, dotenv_path: str | None = None, override: bool = False) -> 
         x_stream_quality_check_after=x_stream_quality_check_after,
         x_stream_quality_check_model=x_stream_quality_check_model,
         x_stream_quality_max_retries=x_stream_quality_max_retries,
+        x_stream_market_hours_only=x_stream_market_hours_only,
 
         evidence_acquire_enabled=evidence_acquire_enabled,
         evidence_max_docs_per_item=evidence_max_docs_per_item,
@@ -321,7 +329,9 @@ def load_settings(*, dotenv_path: str | None = None, override: bool = False) -> 
         pipeline_request_limit=pipeline_request_limit,
         pipeline_tool_calls_limit=pipeline_tool_calls_limit,
         pipeline_max_cost_usd=pipeline_max_cost_usd,
+        pipeline_agent_timeout_s=pipeline_agent_timeout_s,
         openai_web_search_limit=openai_web_search_limit,
+        max_parallel_explores=max_parallel_explores,
 
         openai_reasoning_effort=openai_reasoning_effort,
         gemini_thinking_level=gemini_thinking_level,

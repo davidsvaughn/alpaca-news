@@ -16,6 +16,7 @@ partial traces are preserved and the pipeline continues to the next agent.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import time
@@ -153,6 +154,8 @@ class PipelineConfig:
     # Cost-based budget: skip remaining intermediate agents when cumulative
     # pipeline cost exceeds this threshold. Final agent always runs.
     max_cost_usd: float = 0.50
+    # Per-agent timeout in seconds. 0 = no timeout.
+    agent_timeout_s: float = 60.0
 
 
 # ---------------------------------------------------------------------------
@@ -281,6 +284,7 @@ def build_default_pipeline() -> PipelineConfig:
         request_limit=settings.pipeline_request_limit,
         tool_calls_limit=settings.pipeline_tool_calls_limit,
         max_cost_usd=settings.pipeline_max_cost_usd,
+        agent_timeout_s=settings.pipeline_agent_timeout_s,
     )
 
 
@@ -641,13 +645,17 @@ async def run_pipeline(
                 model_name = spec.model.model_name
 
             try:
-                result = await agent.run(
+                _coro = agent.run(
                     user_message,
                     deps=deps,
                     usage_limits=usage_limits,
                     model_settings=spec.model_settings,
                 )
-            except (UsageLimitExceeded, AgentRunError) as e:
+                if config.agent_timeout_s > 0:
+                    result = await asyncio.wait_for(_coro, timeout=config.agent_timeout_s)
+                else:
+                    result = await _coro
+            except (UsageLimitExceeded, AgentRunError, TimeoutError) as e:
                 # Graceful degradation: capture partial work and continue
                 elapsed = round(time.time() - start_time, 1)
                 all_tool_traces.extend(deps.tool_traces)

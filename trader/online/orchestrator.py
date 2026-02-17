@@ -725,7 +725,7 @@ def run_watch_loop(
     xstream: XStreamService | None = None,
     tracker: "ActivityTracker | None" = None,
 ) -> None:
-    """Start watchdog observer + worker thread, block forever."""
+    """Start watchdog observer + worker threads, block forever."""
     import threading
 
     watch_dir = Path(settings.alpaca_output_dir)
@@ -733,21 +733,26 @@ def run_watch_loop(
 
     work_q: queue.Queue[Path] = queue.Queue()
 
-    # Worker thread processes items from the queue
-    worker = threading.Thread(
-        target=_worker_loop,
-        kwargs={
-            "work_queue": work_q,
-            "settings": settings,
-            "db": db,
-            "knowledge": knowledge,
-            "bus": bus,
-            "xstream": xstream,
-            "tracker": tracker,
-        },
-        daemon=True,
-    )
-    worker.start()
+    # Worker threads process items from the queue
+    num_workers = max(1, settings.max_parallel_explores)
+    for i in range(num_workers):
+        worker = threading.Thread(
+            target=_worker_loop,
+            kwargs={
+                "work_queue": work_q,
+                "settings": settings,
+                "db": db,
+                "knowledge": knowledge,
+                "bus": bus,
+                "xstream": xstream,
+                "tracker": tracker,
+            },
+            name=f"explorer-{i}",
+            daemon=True,
+        )
+        worker.start()
+    if num_workers > 1:
+        print(f"Started {num_workers} parallel explorer threads")
 
     handler = _NewsHandler(work_queue=work_q)
     observer = Observer()

@@ -10,10 +10,14 @@ Phase 1:
 from __future__ import annotations
 
 import json
+import threading
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+
+# Protects read-modify-write operations on knowledge JSON files.
+_file_lock = threading.Lock()
 
 
 def _utc_now_iso() -> str:
@@ -73,31 +77,33 @@ class KnowledgeStore:
     ) -> None:
         """Append an item to a list field in a knowledge JSON file (dedup by equality)."""
         self.ensure_defaults()
-        path = self.knowledge_dir / filename
-        data = _read_json(path)
-        lst = data.get(key, [])
-        if item not in lst:
-            lst.append(item)
-            data[key] = lst
-            data["last_updated"] = _utc_now_iso()
-            _write_json(path, data)
+        with _file_lock:
+            path = self.knowledge_dir / filename
+            data = _read_json(path)
+            lst = data.get(key, [])
+            if item not in lst:
+                lst.append(item)
+                data[key] = lst
+                data["last_updated"] = _utc_now_iso()
+                _write_json(path, data)
 
     def append_skip_keywords(self, keywords: list[str]) -> None:
         if not keywords:
             return
-        data = self.load_skip_patterns()
-        existing = set(str(x).lower() for x in data.get("headline_keywords", []))
-        added = 0
-        for kw in keywords:
-            k = kw.strip()
-            if not k:
-                continue
-            if k.lower() in existing:
-                continue
-            data.setdefault("headline_keywords", []).append(k)
-            existing.add(k.lower())
-            added += 1
-        if added:
-            data["auto_learned"] = int(data.get("auto_learned", 0)) + added
-            data["last_updated"] = _utc_now_iso()
-            _write_json(self.knowledge_dir / "skip_patterns.json", data)
+        with _file_lock:
+            data = self.load_skip_patterns()
+            existing = set(str(x).lower() for x in data.get("headline_keywords", []))
+            added = 0
+            for kw in keywords:
+                k = kw.strip()
+                if not k:
+                    continue
+                if k.lower() in existing:
+                    continue
+                data.setdefault("headline_keywords", []).append(k)
+                existing.add(k.lower())
+                added += 1
+            if added:
+                data["auto_learned"] = int(data.get("auto_learned", 0)) + added
+                data["last_updated"] = _utc_now_iso()
+                _write_json(self.knowledge_dir / "skip_patterns.json", data)
