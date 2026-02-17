@@ -1190,6 +1190,27 @@ def _prefetch_market_data(symbols: list[str], market: MarketDataService) -> str:
         except Exception:
             pass
 
+        # Volume delta (uptick/downtick pressure from 1-min bars)
+        try:
+            vdelta = market.compute_volume_delta(sym)
+            if vdelta and not vdelta.get("error"):
+                net = vdelta["net_delta"]
+                imb = vdelta["imbalance"]
+                direction = vdelta["direction"]
+                uptick_pct = vdelta["uptick_volume"] / max(vdelta["uptick_volume"] + vdelta["downtick_volume"], 1) * 100
+                # Format net delta with K/M suffix
+                abs_net = abs(net)
+                if abs_net >= 1_000_000:
+                    net_str = f"{net/1e6:+.1f}M"
+                elif abs_net >= 1_000:
+                    net_str = f"{net/1e3:+.0f}K"
+                else:
+                    net_str = f"{net:+,}"
+                line = f"Net delta: {net_str} shares ({direction}) | Imbalance: {imb:+.2f} (uptick {uptick_pct:.0f}% / downtick {100-uptick_pct:.0f}%)"
+                sym_sections.append(f"### {sym} — Volume Delta\n{line}")
+        except Exception:
+            pass
+
         # Price spike
         try:
             spike = market.check_price_spike(sym)

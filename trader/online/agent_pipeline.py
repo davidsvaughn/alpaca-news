@@ -156,7 +156,7 @@ class PipelineConfig:
     # pipeline cost exceeds this threshold. Final agent always runs.
     max_cost_usd: float = 0.50
     # Per-agent timeout in seconds. 0 = no timeout.
-    agent_timeout_s: float = 60.0
+    agent_timeout_s: float = 120.0
 
 
 # ---------------------------------------------------------------------------
@@ -686,7 +686,7 @@ async def run_pipeline(
                     "user_message": user_message,
                     "findings": f"[INCOMPLETE: {type(e).__name__}: {e}]",
                     "tool_traces": deps.tool_traces,
-                    "usage": {},
+                    "usage": {"tool_calls": len(deps.tool_traces)},
                     "cost_usd": 0.0,
                     "elapsed_s": elapsed,
                     "error": {"type": type(e).__name__, "message": error_msg},
@@ -706,7 +706,7 @@ async def run_pipeline(
             total_usage["output_tokens"] += usage.output_tokens or 0
             total_usage["total_tokens"] += usage.total_tokens or 0
             total_usage["requests"] += usage.requests or 0
-            total_usage["tool_calls"] += usage.tool_calls or 0
+            total_usage["tool_calls"] += len(deps.tool_traces)
             total_usage["reasoning_tokens"] += (
                 usage.details.get("reasoning_tokens", 0)
                 or usage.details.get("thoughts_tokens", 0)
@@ -751,7 +751,7 @@ async def run_pipeline(
                     "output_tokens": usage.output_tokens,
                     "total_tokens": usage.total_tokens,
                     "requests": usage.requests,
-                    "tool_calls": usage.tool_calls,
+                    "tool_calls": len(deps.tool_traces),
                     "reasoning_tokens": reasoning_tokens,
                     "details": dict(usage.details),
                 },

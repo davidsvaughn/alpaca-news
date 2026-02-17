@@ -254,7 +254,7 @@ def load_settings(*, dotenv_path: str | None = None, override: bool = False) -> 
     pipeline_request_limit = _env_int("PIPELINE_REQUEST_LIMIT", 15)
     pipeline_tool_calls_limit = _env_int("PIPELINE_TOOL_CALLS_LIMIT", 25)
     pipeline_max_cost_usd = _env_float("PIPELINE_MAX_COST_USD", 0.50)
-    pipeline_agent_timeout_s = _env_float("PIPELINE_AGENT_TIMEOUT_S", 60.0)
+    pipeline_agent_timeout_s = _env_float("PIPELINE_AGENT_TIMEOUT_S", 120.0)
     openai_web_search_limit = _env_int("OPENAI_WEB_SEARCH_LIMIT", 10)
     max_parallel_explores = _env_int("MAX_PARALLEL_EXPLORES", 1)
 
