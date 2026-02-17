@@ -88,3 +88,5 @@ https://console.x.com/accounts/2020768736576253952/usage
 Gemini
 https://console.cloud.google.com/billing/01CED9-5E8FC2-E10728/payment?project=opportune-geode-473113-s9
 
+OpenAI
+https://platform.openai.com/settings/organization/usage

@@ -1,6 +1,6 @@
 # Uptick/Downtick Volume: Primer & Experimental Findings
 
-*Last updated: 2026-02-16*
+*Last updated: 2026-02-17*
 
 ## What Is Uptick/Downtick Volume?
 
@@ -45,19 +45,23 @@ True uptick/downtick volume requires **every trade print** — each individual e
 |--------|-------------------|:-:|------|----------|
 | **yfinance** | 1-min OHLCV bars | No | Free | 7 days |
 | **Schwab REST** | 1-min OHLCV bars | No | Free (API key) | ~30 days |
-| **Schwab Streaming** | Per-trade prints (`TIMESALE_EQUITY`) | Yes, live only | Free (API key) | None (real-time) |
+| **Schwab Streaming** | `LEVELONE_EQUITIES` (conflated, ~1/sec) | Approximate, live only | Free (API key) | None (real-time) |
 | **Finnhub `/stock/tick`** | Per-trade prints (price, vol, ms timestamp) | Yes, historical | Premium ($50+/mo) | Years |
-| **yfinance WebSocket** | Price + last_size updates | Approximate, live only | Free | None (real-time) |
+| **yfinance WebSocket** | Price + day_volume updates (~1/sec) | Approximate, live only | Free | None (real-time) |
 
-**Bottom line:** We can't get historical tick data for free. We can approximate from 1-minute OHLCV bars (available from both yfinance and Schwab), or capture real-time tick data via streaming during market hours.
+Note: Schwab's `TIMESALE_EQUITY` service (true per-trade prints) exists in the Schwab API but is **not supported** in the schwabdev Python library. The `LEVELONE_EQUITIES` service provides conflated updates with `last_price` and `total_volume` at ~1-second intervals.
+
+**Bottom line:** We can't get historical tick data for free. We can approximate from 1-minute OHLCV bars (yfinance or Schwab REST), or use real-time streaming (yfinance WebSocket or Schwab LEVELONE_EQUITIES) for ~1-second granularity during market hours.
 
 ---
 
-## Approximation Methods Tested
+## Part 1: Historical Approximation from 1-Minute Bars
+
+### Methods Tested
 
 We implemented five methods that estimate uptick/downtick volume from 1-minute OHLCV bars. All five conserve total volume (uptick + downtick = bar volume).
 
-### Method 1: Close Position Formula
+#### Method 1: Close Position Formula
 
 The most commonly cited approach online. Estimates buying/selling pressure based on where the close falls within the bar's high-low range.
 
@@ -70,7 +74,7 @@ If close equals the high, all volume is classified as buying. If close equals th
 
 **Weakness:** Only considers intra-bar position, ignores bar-to-bar context entirely.
 
-### Method 2: Body Delta
+#### Method 2: Body Delta
 
 Uses the open-to-close range relative to the high-low range.
 
@@ -82,7 +86,7 @@ Positive delta = net buying, negative = net selling. The magnitude depends on th
 
 **Weakness:** Wide-wick bars with small bodies produce near-zero delta regardless of actual pressure.
 
-### Method 3: Inter-bar Tick Rule
+#### Method 3: Inter-bar Tick Rule
 
 The classic tick test applied at the bar level. Assigns the entire bar's volume as uptick or downtick based on whether this bar's close is above or below the previous bar's close.
 
@@ -94,7 +98,7 @@ if close == prev_close → use last known direction
 
 **Strength:** Captures the actual price trajectory bar-to-bar. Not fooled by intra-bar noise.
 
-### Method 4: Intra-bar Direction
+#### Method 4: Intra-bar Direction
 
 Assigns entire bar volume based on bar color (close vs open).
 
@@ -106,26 +110,22 @@ if close == open (doji)     → split 50/50
 
 **Weakness:** A green bar in a downtrend still counts as uptick. No context from surrounding bars.
 
-### Method 5: Hybrid
+#### Method 5: Hybrid
 
 Combines Close Position Formula with inter-bar direction weighting. Starts with the Close Position split, then adjusts ±20% based on whether the bar closed higher or lower than the previous bar.
 
 **Weakness:** Added complexity doesn't consistently improve results.
 
----
+### Results
 
-## Experimental Results
+**Setup:** yfinance 1-minute OHLCV bars, `period="5d"`, tested 2026-02-16 (data covers Feb 9–13, 2026).
 
-### Setup
+**Metrics:**
+- **Correlation with price:** Pearson correlation between cumulative delta and close price over the full period. Higher = method tracks price movement better.
+- **Direction correct:** Does the sign of net delta match the sign of the price change?
+- **Volume conservation:** Uptick + downtick should equal total volume (all methods achieved 1.0000).
 
-- **Data source:** yfinance 1-minute OHLCV bars, `period="5d"`
-- **Test date:** 2026-02-16 (data covers Feb 9–13, 2026)
-- **Metrics:**
-  - **Correlation with price:** Pearson correlation between cumulative delta and close price over the full period. Higher = method tracks price movement better.
-  - **Direction correct:** Does the sign of net delta match the sign of the price change?
-  - **Volume conservation:** Uptick + downtick should equal total volume (all methods achieved 1.0000).
-
-### SPY (S&P 500 ETF) — 1,950 bars, -1.04%
+#### SPY (S&P 500 ETF) — 1,950 bars, -1.04%
 
 | Method | Corr w/ Price | Direction |
 |--------|:---:|:---:|
@@ -137,7 +137,7 @@ Combines Close Position Formula with inter-bar direction weighting. Starts with 
 
 Close position got the overall direction wrong on SPY despite a clear -1.04% decline.
 
-### AAPL — 1,950 bars, -7.55%
+#### AAPL — 1,950 bars, -7.55%
 
 | Method | Corr w/ Price | Direction |
 |--------|:---:|:---:|
@@ -149,7 +149,7 @@ Close position got the overall direction wrong on SPY despite a clear -1.04% dec
 
 Strong directional move. All methods agreed. Correlations clustered tightly around 0.81.
 
-### NVDA — 1,950 bars, -1.45%
+#### NVDA — 1,950 bars, -1.45%
 
 | Method | Corr w/ Price | Direction |
 |--------|:---:|:---:|
@@ -161,7 +161,7 @@ Strong directional move. All methods agreed. Correlations clustered tightly arou
 
 All methods agreed on direction. Close position performed best here, but the margin was modest.
 
-### TSLA — 1,950 bars, +1.82%
+#### TSLA — 1,950 bars, +1.82%
 
 | Method | Corr w/ Price | Direction |
 |--------|:---:|:---:|
@@ -173,7 +173,7 @@ All methods agreed on direction. Close position performed best here, but the mar
 
 **Critical test case.** Only `interbar_tick` correctly identified the bullish direction on this volatile stock with a small positive move. All four other methods got the direction wrong.
 
-### AMZN — 1,950 bars, -3.47%
+#### AMZN — 1,950 bars, -3.47%
 
 | Method | Corr w/ Price | Direction |
 |--------|:---:|:---:|
@@ -185,7 +185,7 @@ All methods agreed on direction. Close position performed best here, but the mar
 
 Clean trending move. All methods agreed. High correlations across the board.
 
-### Summary Table
+#### Summary Table
 
 | Method | SPY | AAPL | NVDA | TSLA | AMZN | Direction Errors |
 |--------|:---:|:---:|:---:|:---:|:---:|:---:|
@@ -195,32 +195,118 @@ Clean trending move. All methods agreed. High correlations across the board.
 | intrabar_direction | **0.976** | 0.812 | 0.804 | 0.352 | 0.930 | 1/5 |
 | close_position | 0.782 | **0.818** | **0.854** | 0.407 | 0.951 | 2/5 |
 
+### Historical Approximation Conclusions
+
+1. **Inter-bar Tick Rule is the most robust.** Only method with 0/5 direction errors. The sole correct method on TSLA (volatile stock, small move). It doesn't always have the highest correlation, but it never fails catastrophically.
+
+2. **Close Position Formula is overrated.** Most commonly recommended online, but had the most direction errors (2/5) and lowest correlation on SPY. Works on clean trending stocks but fails when intra-bar noise is high relative to the actual move.
+
+3. **Volatility is the differentiator.** On trending stocks (AAPL -7.55%, AMZN -3.47%), all methods perform similarly. Differences emerge on volatile stocks with small moves (TSLA +1.82%, SPY -1.04%).
+
+4. **Divergence detection works.** Tested on SPY: found 6% bearish divergences (price up, delta down) and 17% bullish divergences (price down, delta up) in 15-bar rolling windows. Volume imbalance at price extremes was directionally correct (positive delta near day highs, negative near day lows).
+
 ---
 
-## Conclusions
+## Part 2: Real-Time Streaming (Live Market Test)
 
-### 1. Inter-bar Tick Rule Is the Most Robust
+### Setup
 
-`interbar_tick` was the **only method that never got the direction wrong** across all five tickers. It was the sole correct method on TSLA, the hardest test case (volatile stock, small move). While it doesn't always have the highest correlation, it never fails catastrophically.
+Tested during market hours on 2026-02-17. Two concurrent streams captured simultaneously:
 
-### 2. Close Position Formula Is Overrated
+| Stream Source | Update Rate | Timestamp Precision | Auth Required |
+|--------------|:-----------:|:-------------------:|:---:|
+| **yfinance WebSocket** | ~60/min per symbol | Seconds | No |
+| **Schwab LEVELONE_EQUITIES** | ~58/min per symbol | Milliseconds | API key |
 
-Despite being the most commonly recommended method online, `close_position` had the **most direction errors** (2/5) and the lowest correlation on SPY. It works well on clean trending stocks (NVDA, AMZN) but fails when intra-bar noise is high relative to the actual move.
+Both use the same **delta-volume tick rule** algorithm:
+1. Track `prev_price` and `prev_day_volume` per symbol
+2. On each update: `dv = day_volume - prev_day_volume` (volume since last update)
+3. If `price > prev_price` → uptick_vol += dv
+4. If `price < prev_price` → downtick_vol += dv
+5. If `price == prev_price` → use last known direction
 
-### 3. Volatility Is the Differentiator
+### Schwab Streaming Notes
 
-On trending stocks with low relative volatility (AAPL -7.55%, AMZN -3.47%), all methods performed similarly. The differences emerge on **volatile stocks with small moves** (TSLA +1.82%, SPY -1.04%), where intra-bar methods get confused by wide ranges that don't reflect the actual directional flow.
+Schwab's `LEVELONE_EQUITIES` uses **conflated delivery** — only changed fields are sent. Key fields:
+- Field 3: `last_price`
+- Field 8: `total_volume` (cumulative session volume)
+- Field 9: `last_size` (not used — `total_volume` deltas are more reliable)
 
-### 4. The Approximation Is Useful But Imperfect
+Messages arrive as JSON strings (not pre-parsed dicts) and require `json.loads()`. Since only changed fields are sent, the handler must merge partial updates into a running state per symbol before feeding the accumulator.
 
-Even the best method (interbar_tick) had correlations ranging from 0.63 to 0.98. The approximation works well enough to detect:
-- **Divergences** between price and volume pressure (tested: 6% bearish, 17% bullish divergence windows on SPY)
-- **Directional bias** over multi-bar windows
-- **Volume imbalance at extremes** (positive delta near day highs, negative near day lows)
+The schwabdev Python library does **not** support `TIMESALE_EQUITY` (true per-trade prints). Only `LEVELONE_EQUITIES` is available, which delivers conflated updates at ~1-second intervals.
 
-It should not be used as a standalone signal — combine with VWAP, relative volume, and price structure.
+### Results: 120-Second Window (SPY, AAPL, NVDA)
 
-### 5. Recommended Method: `interbar_tick`
+```
+Symbol   Source                  Uptick Vol   Downtick Vol   Net Delta   Imbalance
+─────────────────────────────────────────────────────────────────────────────────
+SPY      yfinance WebSocket         158,991        112,328     +46,663     +0.172
+SPY      Schwab LEVELONE            132,522        129,585      +2,937     +0.011
+SPY      1-min bars (full day)   31,641,523     29,462,404  +2,179,119     +0.036
+         Direction:               ALL AGREE → BULL
+
+AAPL     yfinance WebSocket          51,092        109,666     -58,574     -0.364
+AAPL     Schwab LEVELONE             46,686        110,200     -63,514     -0.405
+AAPL     1-min bars (full day)   16,419,162     10,171,288  +6,247,874     +0.235
+         Direction:               DISAGREE (streams=BEAR, bars=BULL)
+
+NVDA     yfinance WebSocket         245,528        300,248     -54,720     -0.100
+NVDA     Schwab LEVELONE            298,773        222,078     +76,695     +0.147
+NVDA     1-min bars (full day)   51,830,407     76,124,277 -24,293,870     -0.190
+         Direction:               DISAGREE (yf=BEAR, schwab=BULL, bars=BEAR)
+```
+
+### Stream Tick Log (SPY, Schwab LEVELONE_EQUITIES)
+
+```
+Time              Price        DayVol         dV    Dir
+19:52:44.903     683.59    60,994,502      1,230     UP
+19:52:45.948     683.62    60,997,769      3,267     UP
+19:52:46.993     683.68    61,000,516      2,747     UP
+19:52:48.039     683.66    61,003,634      3,118   DOWN
+19:52:49.082     683.64    61,005,516      1,882   DOWN
+19:52:50.127     683.64    61,009,449      3,933      =
+19:52:51.172     683.62    61,010,795      1,346   DOWN
+  ...
+19:54:40.986     683.99    61,248,518      2,089     UP
+19:54:42.031     683.94    61,249,853      1,335   DOWN
+19:54:43.075     683.85    61,255,379      5,526   DOWN
+```
+
+### Stream Quality Comparison
+
+| Metric | yfinance WebSocket | Schwab LEVELONE_EQUITIES |
+|--------|:---:|:---:|
+| Updates/2min (SPY) | 125 | 115 |
+| Mean interval | 0.98s | 1.05s |
+| **Interval consistency** | **Poor** (-3s to +4s) | **Excellent** (1.0–1.3s) |
+| Timestamp precision | Seconds | Milliseconds |
+| Out-of-order updates | Yes (negative intervals seen) | Never observed |
+| Auth required | No | API key |
+| Cost | Free | Free |
+
+### Streaming Conclusions
+
+1. **Both streams work** for real-time uptick/downtick volume via the delta-volume approach. The `TickAccumulator` class handles both data sources identically.
+
+2. **Schwab has superior data quality.** Update intervals are highly consistent (1.0–1.3s standard deviation). yfinance timestamps are second-granularity with occasional out-of-order delivery (negative intervals), likely due to Yahoo's CDN-based distribution.
+
+3. **Streams capture local direction, not full-day direction.** A 2-minute window can show BEAR while the full day is BULL (AAPL: local pullback during a +3.5% day). This is expected and useful — it shows *current* pressure, not historical.
+
+4. **yfinance and Schwab can disagree on short windows.** NVDA showed opposite directions between the two streams over the same 2-minute window. This happens because each data source reports a slightly different "last price" at each update, leading to different tick classifications. Over longer windows, they should converge.
+
+5. **Neither stream is true tick data.** Both conflate multiple trades into ~1-second updates. All volume between updates is assigned to the direction of the final price change, which can misclassify volume when the price oscillated within that second. This is an inherent limitation of conflated feeds.
+
+---
+
+## Overall Conclusions
+
+### Recommended Approaches
+
+**For historical analysis** (e.g., scanning for divergences in recent days):
+
+Use `interbar_tick` on 1-minute OHLCV bars from yfinance (free, 7-day lookback) or Schwab REST (~30-day lookback).
 
 ```python
 def interbar_tick_rule(df):
@@ -232,14 +318,24 @@ def interbar_tick_rule(df):
     return uptick_vol, downtick_vol
 ```
 
----
+**For real-time monitoring** (e.g., current pressure during a position):
 
-## Next Steps
+Use the `TickAccumulator` with either yfinance WebSocket (free, no API key) or Schwab LEVELONE_EQUITIES (better data quality, needs API key). Feed it `(price, day_volume)` updates and read `imbalance` / `net_delta` at any time.
 
-- **Real-time streaming test** (during market hours): Capture actual per-trade prints via Schwab `TIMESALE_EQUITY` or yfinance WebSocket and compare against the 1-minute bar approximation
-- **Finnhub premium evaluation:** If true historical tick data is worth $50/mo, it would provide ground truth to calibrate the approximation methods
-- **Integration:** Add the `interbar_tick` method to the market data service as a derived signal for the agent pipeline
+### What It Can't Do
+
+- **Not a standalone signal.** Combine with VWAP, relative volume, and price structure.
+- **Not suitable for backtesting** without historical tick data (Finnhub premium or similar).
+- **Not accurate at session boundaries.** Volume resets and auction prints introduce noise at open/close.
+- **Conflated feeds lose information.** Multiple trades at different prices within a 1-second window get assigned to one direction.
+
+### Possible Next Steps
+
+- **Finnhub premium evaluation:** $50/mo gets true historical tick data — ground truth to calibrate approximation methods
+- **Integration:** Add `interbar_tick` to the market data service as a derived signal for the agent pipeline
+- **Streaming accumulator in production:** Run `TickAccumulator` on the existing Schwab stream to provide real-time volume delta alongside other market context
 
 ## Test Code
 
-All methods and tests are implemented in [`tests/test_uptick_volume.py`](../tests/test_uptick_volume.py).
+- Historical approximation methods: [`tests/test_uptick_volume.py`](../tests/test_uptick_volume.py)
+- Real-time streaming test: [`tests/test_uptick_realtime.py`](../tests/test_uptick_realtime.py)
