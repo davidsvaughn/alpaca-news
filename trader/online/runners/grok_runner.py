@@ -143,26 +143,16 @@ async def run_grok(
         for item in resp.output:
             item_type = getattr(item, "type", None)
 
-            if item_type == "web_search_call":
+            if item_type in ("web_search_call", "x_search_call"):
+                tool_name = "web_search" if item_type == "web_search_call" else "x_search"
+                # Query is nested: item.action.query (ActionSearch type)
+                query = ""
+                action = getattr(item, "action", None)
+                if action and getattr(action, "type", None) == "search":
+                    query = getattr(action, "query", "") or ""
                 trace = build_trace_dict(
-                    tool_name="web_search",
-                    args={"query": getattr(item, "query", "") if hasattr(item, "query") else ""},
-                    result=None,
-                    error=None,
-                    start=time.time(),
-                    end=time.time(),
-                    hop_index=hop_index,
-                    cost_usd=_XAI_PER_CALL_FEE,
-                    builtin=True,
-                )
-                tool_traces.append(trace)
-                hop_index += 1
-                total_usage["tool_calls"] += 1
-
-            elif item_type == "x_search_call":
-                trace = build_trace_dict(
-                    tool_name="x_search",
-                    args={"query": getattr(item, "query", "") if hasattr(item, "query") else ""},
+                    tool_name=tool_name,
+                    args={"query": query},
                     result=None,
                     error=None,
                     start=time.time(),

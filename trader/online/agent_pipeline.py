@@ -125,7 +125,7 @@ def build_default_pipeline() -> PipelineConfig:
             excluded_tools=frozenset({"x_search", "x_stream_cache"}),
         ))
 
-    # Agent 3: Gemini (Google Search grounding + ALL function tools)
+    # Agent 3: Gemini (Google Search grounding only — synthesis agent)
     google_key = os.getenv("GOOGLE_API_KEY")
     if google_key:
         gemini_model = os.getenv("SYNTHESIS_MODEL", "gemini-3-flash-preview")
@@ -133,6 +133,7 @@ def build_default_pipeline() -> PipelineConfig:
             name="gemini",
             model=gemini_model,
             runner="gemini",
+            function_tools=False,
             role_description=(
                 "You are the FINAL analyst. All prior agents' evidence — market "
                 "data, web research, X/Twitter sentiment, and full tool results "
@@ -220,8 +221,7 @@ def _build_system_prompt(
         "## Your tools",
     ]
 
-    # All native runners get function tools
-    has_tools = spec.runner != "pydanticai" or spec.function_tools
+    has_tools = spec.function_tools
 
     if has_tools:
         parts.extend([
@@ -658,16 +658,21 @@ async def run_pipeline(
             cumulative_cost += agent_cost
 
             # Build round record
-            findings = ""
-            if spec.is_final and isinstance(agent_result.output, TradingSignal):
+            if isinstance(agent_result.output, TradingSignal):
                 signal = agent_result.output
                 findings = (
                     f"Direction: {signal.direction}, "
                     f"Confidence: {signal.confidence}, "
                     f"Catalyst: {signal.key_catalyst}"
                 )
-            elif not spec.is_final:
+            else:
                 findings = str(agent_result.output) if agent_result.output else ""
+
+            # Always capture raw output text for diagnostics
+            raw_output = str(agent_result.output) if agent_result.output else ""
+            signal_dict = None
+            if isinstance(agent_result.output, TradingSignal):
+                signal_dict = agent_result.output.model_dump()
 
             round_record = {
                 "agent": spec.name,
@@ -676,6 +681,8 @@ async def run_pipeline(
                 "system_prompt": system_prompt,
                 "user_message": user_message,
                 "findings": findings,
+                "raw_output": raw_output,
+                "signal": signal_dict,
                 "tool_traces": agent_result.tool_traces,
                 "usage": agent_result.usage,
                 "cost_usd": agent_cost,

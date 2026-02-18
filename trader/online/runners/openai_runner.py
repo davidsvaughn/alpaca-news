@@ -144,9 +144,14 @@ async def run_openai(
         nonlocal hop_index
         for item in resp.output:
             if getattr(item, "type", None) == "web_search_call":
+                # Query is nested: item.action.query (ActionSearch type)
+                query = ""
+                action = getattr(item, "action", None)
+                if action and getattr(action, "type", None) == "search":
+                    query = getattr(action, "query", "") or ""
                 trace = build_trace_dict(
                     tool_name="web_search",
-                    args={"query": getattr(item, "query", "") if hasattr(item, "query") else ""},
+                    args={"query": query},
                     result=None,  # Server-side — results embedded in text
                     error=None,
                     start=time.time(),
