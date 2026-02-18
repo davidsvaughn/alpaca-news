@@ -100,8 +100,8 @@ async def run_openai(
     tool_traces: list[dict[str, Any]] = []
     hop_index = 0
 
-    # Build initial input
-    input_messages: list[dict[str, Any]] = [
+    # Build conversation (accumulated across turns)
+    conversation: list[Any] = [
         {"role": "system", "content": system_prompt},
         {"role": "user", "content": user_message},
     ]
@@ -116,9 +116,8 @@ async def run_openai(
     # First request
     response = client.responses.create(
         model=model,
-        input=input_messages,
+        input=conversation,
         tools=tools,
-        store=False,
         **kwargs,
     )
 
@@ -217,13 +216,14 @@ async def run_openai(
         if DEBUG:
             print(f"  [OpenAI] Turn {turn}: executed {len(function_calls)} tool calls")
 
-        # Send tool results back
+        # Build full conversation for next turn
+        conversation.extend(response.output)
+        conversation.extend(tool_results)
+
         response = client.responses.create(
             model=model,
-            input=tool_results,
-            previous_response_id=response.id,
+            input=conversation,
             tools=tools,
-            store=False,
             **kwargs,
         )
         _accumulate_usage(response)

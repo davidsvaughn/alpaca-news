@@ -109,16 +109,15 @@ async def run_grok(
     tool_traces: list[dict[str, Any]] = []
     hop_index = 0
 
-    input_messages: list[dict[str, Any]] = [
+    conversation: list[Any] = [
         {"role": "system", "content": system_prompt},
         {"role": "user", "content": user_message},
     ]
 
     response = client.responses.create(
         model=model,
-        input=input_messages,
+        input=conversation,
         tools=tools,
-        store=False,
     )
 
     total_usage = {
@@ -234,12 +233,15 @@ async def run_grok(
         if DEBUG:
             print(f"  [Grok] Turn {turn}: executed {len(function_calls)} function calls")
 
+        # Build full conversation for next turn (no previous_response_id —
+        # xAI doesn't support response storage)
+        conversation.extend(response.output)
+        conversation.extend(tool_results)
+
         response = client.responses.create(
             model=model,
-            input=tool_results,
-            previous_response_id=response.id,
+            input=conversation,
             tools=tools,
-            store=False,
         )
         _accumulate_usage(response)
         _extract_builtin_traces(response)

@@ -311,11 +311,11 @@ x_search overhead from inner API calls, poor cost visibility.
 3. **DONE** — Grok runner (`trader/online/runners/grok_runner.py`):
    - `openai` SDK pointed at `https://api.x.ai/v1/`
    - Server-side `x_search` + `web_search` (no inner API calls — major latency win)
-   - Tool-calling loop with `previous_response_id` chaining
+   - Tool-calling loop with full conversation accumulation
    - Extracts reasoning summaries from `reasoning` output items
 
 4. **DONE** — OpenAI runner (`trader/online/runners/openai_runner.py`):
-   - `openai` SDK Responses API with `previous_response_id`
+   - `openai` SDK Responses API with full conversation accumulation
    - Server-side `web_search` + all 16 function tools
    - Supports `reasoning_effort` and `reasoning_summary` kwargs
    - Extracts web_search traces from response metadata

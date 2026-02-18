@@ -1,15 +1,16 @@
-"""Per-provider integration tests for the multi-agent pipeline.
+"""Per-provider integration tests for the native SDK runners.
 
-These tests make REAL API calls. They verify that each provider:
-1. Can construct a PydanticAI Agent
-2. WebSearchTool works alongside function tools
-3. The agent can call function tools and produce output
-4. TracingToolset captures all tool calls
+These tests make REAL API calls. They verify that each native runner:
+1. Can call the provider's API
+2. Server-side search tools work (web_search, x_search)
+3. Function tools execute and return results
+4. Tool traces are captured correctly
+5. Usage stats are populated
 
 Run with: python -m pytest tests/test_agent_providers.py -v -s
 Or selectively: python -m pytest tests/test_agent_providers.py -k grok -v -s
 
-Each test uses a simple prompt and limits to keep costs low.
+Each test uses a simple prompt and tight max_turns to keep costs low.
 """
 
 from __future__ import annotations
@@ -24,16 +25,8 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from pydantic_ai import Agent, UsageLimits, WebSearchTool
-from pydantic_ai.models.openai import OpenAIResponsesModel
-from pydantic_ai.providers.openai import OpenAIProvider
-
-from trader.online.explorer_agent import (
-    ExplorerDeps,
-    TradingSignal,
-    TracingToolset,
-    market_toolset,
-)
+from trader.online.agent_common import AgentRunResult, TradingSignal
+from trader.online.explorer_agent import ExplorerDeps, TracingToolset, market_toolset
 
 
 # ---------------------------------------------------------------------------
@@ -56,6 +49,9 @@ def mock_market():
     market.get_current_technicals.return_value = {"rsi": 55.0, "macd": "bullish"}
     market.check_price_spike.return_value = {"spike": False}
     market.check_volume_regime.return_value = {"abnormal": False}
+    market.get_financial_statements.return_value = {"statements": []}
+    market.get_finnhub_news.return_value = {"articles": []}
+    market.get_analyst_ratings.return_value = {"ratings": []}
     return market
 
 
@@ -69,7 +65,12 @@ def deps(mock_market):
     )
 
 
-NEWS_PROMPT = (
+SYSTEM_PROMPT = (
+    "You are a financial analyst. Investigate briefly using the tools available, "
+    "then produce a short 2-3 sentence assessment."
+)
+
+USER_MESSAGE = (
     "## The news event\n"
     "**Headline:** NVDA reports record earnings\n"
     "**Summary:** Revenue up 200%\n"
@@ -77,187 +78,136 @@ NEWS_PROMPT = (
     "Investigate briefly. Use 2-3 tools max, then produce your assessment."
 )
 
-# Tight limits to keep costs low (safety nets only — no token limits)
-TEST_LIMITS = UsageLimits(request_limit=5, tool_calls_limit=8)
-
 
 # ---------------------------------------------------------------------------
-# Grok (xAI) — WebSearchTool + function tools
+# Grok (xAI) — native SDK: server-side web_search + x_search + function tools
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.skipif(not os.getenv("XAI_API_KEY"), reason="XAI_API_KEY not set")
 @pytest.mark.asyncio
-async def test_grok_with_websearch_and_tools(deps):
-    """Grok via OpenAIResponsesModel: WebSearchTool + function tools."""
-    provider = OpenAIProvider(
-        api_key=os.environ["XAI_API_KEY"],
-        base_url="https://api.x.ai/v1/",
-    )
-    model = OpenAIResponsesModel(
-        os.getenv("XSEARCH_MODEL", "grok-4-1-fast-reasoning"),
-        provider=provider,
-    )
+async def test_grok_with_websearch_and_tools(mock_market):
+    """Grok native runner: server-side web_search + x_search + function tools."""
+    from trader.online.runners.grok_runner import run_grok
 
-    tracing = TracingToolset(market_toolset)
-    agent = Agent(
-        model,
-        deps_type=ExplorerDeps,
-        output_type=TradingSignal,
-        system_prompt="You are a financial analyst. Investigate briefly, use a few tools, then produce a trading signal.",
-        builtin_tools=[WebSearchTool(search_context_size=None)],
-        toolsets=[tracing],
+    result = await run_grok(
+        system_prompt=SYSTEM_PROMPT,
+        user_message=USER_MESSAGE,
+        model=os.getenv("XSEARCH_MODEL", "grok-4-1-fast-reasoning"),
+        market=mock_market,
+        max_turns=5,
+        is_final=False,
     )
 
-    result = await agent.run(NEWS_PROMPT, deps=deps, usage_limits=TEST_LIMITS)
+    assert isinstance(result, AgentRunResult)
+    assert isinstance(result.output, str)
+    assert len(result.output) > 0
 
-    # Verify structured output
-    signal = result.output
-    assert isinstance(signal, TradingSignal)
-    assert signal.direction in ("bullish", "bearish", "neutral")
-    assert 0.0 <= signal.confidence <= 1.0
-    print(f"\n[Grok] Signal: {signal.direction} @ {signal.confidence}")
-    print(f"[Grok] Catalyst: {signal.key_catalyst}")
-
-    # Verify tool traces were captured
-    traces = deps.tool_traces
-    assert len(traces) > 0, "No tool traces captured"
-    tool_names = [t["action"]["tool"] for t in traces]
+    tool_names = [t["action"]["tool"] for t in result.tool_traces]
+    print(f"\n[Grok] Output: {result.output[:200]}")
     print(f"[Grok] Tools called: {tool_names}")
+    print(f"[Grok] Usage: {result.usage}")
 
-    # Verify usage
-    usage = result.usage()
-    print(f"[Grok] Usage: {usage.requests} requests, {usage.total_tokens} tokens")
-    assert usage.requests > 0
-    assert usage.total_tokens > 0
-
-
-# ---------------------------------------------------------------------------
-# Grok — x_search function tool
-# ---------------------------------------------------------------------------
+    assert result.usage["requests"] > 0
+    assert result.usage["total_tokens"] > 0
 
 
 @pytest.mark.skipif(not os.getenv("XAI_API_KEY"), reason="XAI_API_KEY not set")
 @pytest.mark.asyncio
-async def test_grok_x_search_function_tool(deps):
-    """Verify x_search function tool works (calls xAI Responses API)."""
-    provider = OpenAIProvider(
-        api_key=os.environ["XAI_API_KEY"],
-        base_url="https://api.x.ai/v1/",
-    )
-    model = OpenAIResponsesModel(
-        os.getenv("XSEARCH_MODEL", "grok-4-1-fast-reasoning"),
-        provider=provider,
-    )
+async def test_grok_x_search_server_side(mock_market):
+    """Verify Grok's server-side x_search works (no inner API call)."""
+    from trader.online.runners.grok_runner import run_grok
 
-    tracing = TracingToolset(market_toolset)
-    agent = Agent(
-        model,
-        deps_type=ExplorerDeps,
-        output_type=str,
+    result = await run_grok(
         system_prompt=(
-            "You are a financial analyst. Check X/Twitter sentiment about NVDA "
-            "using the x_search tool, then check the current price. "
-            "Summarize what you find in 2-3 sentences."
+            "You are a financial analyst. Search X/Twitter for sentiment about NVDA "
+            "using x_search, then summarize what you find."
         ),
-        toolsets=[tracing],
+        user_message="Check X/Twitter sentiment for NVDA.",
+        model=os.getenv("XSEARCH_MODEL", "grok-4-1-fast-reasoning"),
+        market=mock_market,
+        max_turns=5,
+        is_final=False,
     )
 
-    result = await agent.run(
-        "Check X/Twitter sentiment and price for NVDA.",
-        deps=deps,
-        usage_limits=TEST_LIMITS,
-    )
-
-    tool_names = [t["action"]["tool"] for t in deps.tool_traces]
+    tool_names = [t["action"]["tool"] for t in result.tool_traces]
     print(f"\n[Grok x_search] Tools called: {tool_names}")
     print(f"[Grok x_search] Output: {result.output[:200]}")
 
-    # x_search should have been called
+    # Server-side x_search should have been called
     assert "x_search" in tool_names, f"x_search not called. Tools: {tool_names}"
 
-    # Check the x_search trace has actual results (not an error)
-    x_traces = [t for t in deps.tool_traces if t["action"]["tool"] == "x_search"]
+    # Traces should be marked as builtin (server-side)
+    x_traces = [t for t in result.tool_traces if t["action"]["tool"] == "x_search"]
     for t in x_traces:
-        raw = t["raw_tool_output"]
-        assert raw is not None
-        assert "error" not in raw or raw.get("error") is None, f"x_search error: {raw}"
-        print(f"[Grok x_search] Citations: {raw.get('citations', [])[:3]}")
+        assert t["builtin"] is True, "x_search trace should be marked builtin (server-side)"
 
 
 # ---------------------------------------------------------------------------
-# OpenAI — WebSearchTool + function tools
+# OpenAI — native SDK: server-side web_search + function tools
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.skipif(not os.getenv("OPENAI_API_KEY"), reason="OPENAI_API_KEY not set")
 @pytest.mark.asyncio
-async def test_openai_with_websearch_and_tools(deps):
-    """OpenAI Responses API: WebSearchTool + function tools."""
-    model_name = os.getenv("RESEARCH_MODEL", "gpt-5-mini")
+async def test_openai_with_websearch_and_tools(mock_market):
+    """OpenAI native runner: Responses API with server-side web_search."""
+    from trader.online.runners.openai_runner import run_openai
 
-    tracing = TracingToolset(market_toolset)
-    agent = Agent(
-        f"openai-responses:{model_name}",
-        deps_type=ExplorerDeps,
-        output_type=TradingSignal,
-        system_prompt="You are a financial analyst. Investigate briefly, use a few tools, then produce a trading signal.",
-        builtin_tools=[WebSearchTool()],
-        toolsets=[tracing],
+    result = await run_openai(
+        system_prompt=SYSTEM_PROMPT,
+        user_message=USER_MESSAGE,
+        model=os.getenv("RESEARCH_MODEL", "gpt-5-mini"),
+        market=mock_market,
+        max_turns=5,
+        reasoning_effort="low",
+        is_final=False,
     )
 
-    result = await agent.run(NEWS_PROMPT, deps=deps, usage_limits=TEST_LIMITS)
+    assert isinstance(result, AgentRunResult)
+    assert isinstance(result.output, str)
+    assert len(result.output) > 0
 
-    signal = result.output
-    assert isinstance(signal, TradingSignal)
-    assert signal.direction in ("bullish", "bearish", "neutral")
-    print(f"\n[OpenAI] Signal: {signal.direction} @ {signal.confidence}")
-    print(f"[OpenAI] Catalyst: {signal.key_catalyst}")
-
-    traces = deps.tool_traces
-    tool_names = [t["action"]["tool"] for t in traces]
+    tool_names = [t["action"]["tool"] for t in result.tool_traces]
+    print(f"\n[OpenAI] Output: {result.output[:200]}")
     print(f"[OpenAI] Tools called: {tool_names}")
+    print(f"[OpenAI] Usage: {result.usage}")
 
-    usage = result.usage()
-    print(f"[OpenAI] Usage: {usage.requests} requests, {usage.total_tokens} tokens")
-    assert usage.requests > 0
+    assert result.usage["requests"] > 0
+    assert result.usage["total_tokens"] > 0
 
 
 # ---------------------------------------------------------------------------
-# Gemini (Google) — function tools only (no WebSearchTool)
+# Gemini — native SDK: Google Search grounding + function tools
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.skipif(not os.getenv("GOOGLE_API_KEY"), reason="GOOGLE_API_KEY not set")
 @pytest.mark.asyncio
-async def test_gemini_with_function_tools(deps):
-    """Gemini: function tools only (cannot mix with Google grounding)."""
-    model_name = os.getenv("SYNTHESIS_MODEL", "gemini-3-flash-preview")
+async def test_gemini_with_function_tools(mock_market):
+    """Gemini native runner: Google Search grounding + all function tools."""
+    from trader.online.runners.gemini_runner import run_gemini
 
-    tracing = TracingToolset(market_toolset)
-    agent = Agent(
-        f"google-gla:{model_name}",
-        deps_type=ExplorerDeps,
-        output_type=TradingSignal,
-        system_prompt="You are a financial analyst. Investigate briefly, use a few tools, then produce a trading signal.",
-        toolsets=[tracing],
+    result = await run_gemini(
+        system_prompt=SYSTEM_PROMPT,
+        user_message=USER_MESSAGE,
+        model=os.getenv("SENTIMENT_MODEL", "gemini-3-flash-preview"),
+        market=mock_market,
+        max_turns=5,
+        is_final=False,
     )
 
-    result = await agent.run(NEWS_PROMPT, deps=deps, usage_limits=TEST_LIMITS)
+    assert isinstance(result, AgentRunResult)
+    assert isinstance(result.output, str)
+    assert len(result.output) > 0
 
-    signal = result.output
-    assert isinstance(signal, TradingSignal)
-    assert signal.direction in ("bullish", "bearish", "neutral")
-    print(f"\n[Gemini] Signal: {signal.direction} @ {signal.confidence}")
-    print(f"[Gemini] Catalyst: {signal.key_catalyst}")
-
-    traces = deps.tool_traces
-    tool_names = [t["action"]["tool"] for t in traces]
+    tool_names = [t["action"]["tool"] for t in result.tool_traces]
+    print(f"\n[Gemini] Output: {result.output[:200]}")
     print(f"[Gemini] Tools called: {tool_names}")
+    print(f"[Gemini] Usage: {result.usage}")
 
-    usage = result.usage()
-    print(f"[Gemini] Usage: {usage.requests} requests, {usage.total_tokens} tokens")
-    assert usage.requests > 0
+    assert result.usage["requests"] > 0
+    assert result.usage["total_tokens"] > 0
 
 
 # ---------------------------------------------------------------------------
