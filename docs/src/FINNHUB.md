@@ -94,6 +94,63 @@ Fetches monthly analyst consensus data.
 
 **Usage**: Available as agent tool. Tool computes `total_analysts` and limits to 6 most recent months.
 
+### 5. Stock Metrics (`/stock/metric`)
+
+**Our function**: `get_stock_metrics(symbol)`
+**Formatter**: `format_metrics_for_prompt(metrics)`
+
+Fetches 132 financial metrics; we cherry-pick 14 growth, valuation, and quality indicators.
+
+**Fields extracted (Tier 1 — Growth & Relative Strength)**:
+| API Key | Label | Description |
+|---------|-------|-------------|
+| `epsGrowthTTMYoy` | EPS Growth (TTM YoY) | Trailing twelve months EPS growth rate |
+| `revenueGrowthTTMYoy` | Revenue Growth (TTM YoY) | TTM revenue growth rate |
+| `revenueGrowthQuarterlyYoy` | Revenue Growth (Q YoY) | Quarterly revenue acceleration |
+| `pegTTM` | PEG Ratio | Price/Earnings-to-Growth — single best value-for-growth metric |
+| `psTTM` | Price/Sales | Price-to-Sales — essential for pre-profit names |
+| `evEbitdaTTM` | EV/EBITDA | Enterprise Value / EBITDA — institutional standard valuation |
+| `priceRelativeToS&P50013Week` | vs S&P 500 (13W) | 13-week relative performance vs market |
+| `priceRelativeToS&P50026Week` | vs S&P 500 (26W) | 26-week relative performance vs market |
+| `priceRelativeToS&P50052Week` | vs S&P 500 (52W) | 52-week relative performance vs market |
+
+**Fields extracted (Tier 2 — Profitability & Quality)**:
+| API Key | Label | Description |
+|---------|-------|-------------|
+| `grossMarginTTM` | Gross Margin | TTM gross margin — pricing power indicator |
+| `operatingMarginTTM` | Operating Margin | TTM operating margin — core efficiency |
+| `roaTTM` | ROA | Return on Assets — less leverage-distorted than ROE |
+| `epsGrowthQuarterlyYoy` | EPS Growth (Q YoY) | Quarterly EPS acceleration |
+| `cashFlowPerShareTTM` | CF/Share | Operating cash flow per share |
+
+**Usage**: Pre-fetched for every agent prompt (`prefetch_market_data()` → "Growth & Valuation" section). Not available as an on-demand agent tool.
+
+### 6. Insider Transactions (`/stock/insider-transactions`)
+
+**Our function**: `get_insider_transactions(symbol)`
+**Tool**: `check_insider_activity` (modality: `fundamentals`) — via `data_service.py`
+
+Fetches individual SEC Form 4 insider trades. Replaces yfinance as primary source (richer structure, standardized SEC codes, more recent data). Enriched with job titles from yfinance. Falls back to yfinance-only if Finnhub unavailable.
+
+**Fields extracted**:
+| Field | Type | Description |
+|-------|------|-------------|
+| `name` | str | Insider's name |
+| `change` | int | Shares bought (+) or sold (-) |
+| `share` | int | Total shares held after transaction |
+| `transactionDate` | str | Date of transaction |
+| `transactionCode` | str | SEC Form 4 code (see below) |
+| `transactionPrice` | float | Average price per share |
+| `filingDate` | str | SEC filing date |
+| `isDerivative` | bool | Whether the transaction is a derivative |
+| `id` | str | SEC filing ID |
+
+**Transaction codes**: `P`=purchase, `S`=sale, `A`=award/grant, `M`=option exercise, `F`=tax withholding, `G`=gift, `X`=option exercise, `C`=conversion, `D`=disposition.
+
+**Why Finnhub over yfinance**: More records (117 vs 75 for AAPL), more recent data (1-2 days fresher), standardized SEC transaction codes (vs often-empty free text), filing-level detail (filing ID, derivative flag, post-transaction holdings).
+
+**Usage**: Primary source for `check_insider_activity` tool. Pre-fetched for agent prompts and available as on-demand tool.
+
 ---
 
 ## How It's Wrapped
@@ -122,9 +179,10 @@ Two tools exposed in `TOOL_REGISTRY`:
 
 ### Prompt Builder (`prompt_builder.py`)
 
-Two auto-fetch functions inject Finnhub data into every agent message:
+Three auto-fetch functions inject Finnhub data into every agent message:
 - `_fetch_finnhub_context(symbols)` — recent news (max 3 symbols, 10 articles each)
 - `_fetch_earnings_context(symbols)` — surprises + calendar (max 3 symbols)
+- `prefetch_market_data()` → injects "Growth & Valuation" section from `get_stock_metrics()`
 
 ### Prefetch Optimization
 
@@ -150,6 +208,8 @@ Source: [finnhub.io/pricing](https://finnhub.io/pricing)
 - Earnings surprises (`/stock/earnings`) — works
 - Earnings calendar (`/calendar/earnings`) — works
 - Analyst recommendations (`/stock/recommendation`) — works
+- Stock metrics (`/stock/metric`) — works (132 metrics, we use 14)
+- Insider transactions (`/stock/insider-transactions`) — works
 - 60 requests per minute shared across all calls
 
 ### What's Blocked on Free Tier (returns 403)
@@ -183,22 +243,18 @@ This is the most impactful single upgrade for our pipeline, since analyst upgrad
 | `/stock/upgrade-downgrade` | Recent analyst rating changes | Paid |
 | `/stock/social-sentiment` | Reddit + Twitter sentiment scores | Paid |
 | `/stock/filings` | SEC filings feed | Paid |
-| `/stock/metric` | Key financial metrics (75+ fields) | Free |
 | `/stock/profile2` | Company profile (sector, industry, etc.) | Free |
 | `/stock/peers` | Similar companies list | Free |
 | `/forex/rates` | Real-time FX rates | Free |
 | `/crypto/candle` | Crypto OHLCV data | Free |
 | `/news` | General market news (not company-specific) | Free |
-| `/stock/insider-transactions` | Individual insider trades (we use yfinance for this) | Free |
 | `/calendar/ipo` | IPO calendar | Free |
 | `/stock/revenue-breakdown` | Revenue by segment/geography | Paid |
 
 ### Free Endpoints We Could Add
 
-- `/stock/metric` — 75+ financial metrics could supplement our fundamentals tool
 - `/stock/profile2` — company profile (sector, industry, market cap, IPO date)
 - `/stock/peers` — similar companies for sector context
-- `/stock/insider-transactions` — we currently use yfinance for this; Finnhub's version may be more structured
 
 ---
 
@@ -217,7 +273,7 @@ No other configuration needed. Rate limits enforced server-side (429 responses).
 
 | File | Purpose |
 |------|---------|
-| [`trader/market/finnhub_client.py`](trader/market/finnhub_client.py) | 4 API wrapper functions + 2 formatters |
+| [`trader/market/finnhub_client.py`](trader/market/finnhub_client.py) | 6 API wrapper functions + 3 formatters |
 | [`trader/online/tool_core.py`](trader/online/tool_core.py) | `get_finnhub_news`, `get_analyst_ratings` tools |
 | [`trader/online/prompt_builder.py`](trader/online/prompt_builder.py) | Auto-fetch + format for agent prompts |
 | [`trader/online/explorer_agent.py`](trader/online/explorer_agent.py) | PydanticAI tool wrappers (for watcher) |

@@ -496,6 +496,17 @@ def prefetch_market_data(symbols: list[str], market: MarketDataService) -> str:
         except Exception:
             pass
 
+        # Growth & Valuation metrics (FinnHub)
+        try:
+            from trader.market.finnhub_client import get_stock_metrics, format_metrics_for_prompt
+            metrics = get_stock_metrics(sym)
+            if metrics:
+                formatted = format_metrics_for_prompt(metrics)
+                if formatted:
+                    sym_sections.append(f"### {sym} — Growth & Valuation\n{formatted}")
+        except Exception:
+            pass
+
         if sym_sections:
             sections.extend(sym_sections)
 

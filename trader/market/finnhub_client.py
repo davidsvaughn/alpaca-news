@@ -5,6 +5,8 @@ Free endpoints used (60 req/min rate limit):
 - /stock/earnings — historical earnings surprises
 - /calendar/earnings — upcoming/recent earnings dates
 - /stock/recommendation — analyst recommendation trends
+- /stock/metric — key financial metrics (growth, valuation, margins)
+- /stock/insider-transactions — SEC Form 4 insider trades
 """
 
 from __future__ import annotations
@@ -141,6 +143,126 @@ def get_recommendation_trends(
     except Exception:
         return []
 
+
+# ---- /stock/metric — growth, valuation, relative performance ----
+
+# (api_key, human_label) pairs for cherry-picked metrics
+_STOCK_METRIC_KEYS: list[tuple[str, str]] = [
+    # Tier 1 — Growth & Relative Strength
+    ("epsGrowthTTMYoy", "EPS Growth (TTM YoY)"),
+    ("revenueGrowthTTMYoy", "Revenue Growth (TTM YoY)"),
+    ("revenueGrowthQuarterlyYoy", "Revenue Growth (Q YoY)"),
+    ("pegTTM", "PEG Ratio"),
+    ("psTTM", "Price/Sales"),
+    ("evEbitdaTTM", "EV/EBITDA"),
+    ("priceRelativeToS&P50013Week", "vs S&P 500 (13W)"),
+    ("priceRelativeToS&P50026Week", "vs S&P 500 (26W)"),
+    ("priceRelativeToS&P50052Week", "vs S&P 500 (52W)"),
+    # Tier 2 — Profitability & Quality
+    ("grossMarginTTM", "Gross Margin"),
+    ("operatingMarginTTM", "Operating Margin"),
+    ("roaTTM", "ROA"),
+    ("epsGrowthQuarterlyYoy", "EPS Growth (Q YoY)"),
+    ("cashFlowPerShareTTM", "CF/Share"),
+]
+
+
+def get_stock_metrics(
+    symbol: str,
+    *,
+    api_key: str | None = None,
+) -> dict[str, Any]:
+    """Fetch key financial metrics from FinnHub (growth, valuation, margins).
+
+    Returns a flat dict of cherry-picked metrics from /stock/metric?metric=all.
+    Empty dict on failure or missing API key.
+    """
+    key = api_key or os.getenv("FINNHUB_API_KEY")
+    if not key:
+        return {}
+    try:
+        resp = httpx.get(
+            f"{_BASE_URL}/stock/metric",
+            params={"symbol": symbol.upper(), "metric": "all", "token": key},
+            timeout=10,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        metrics = data.get("metric", {})
+        if not isinstance(metrics, dict):
+            return {}
+        picked: dict[str, Any] = {}
+        for metric_key, _label in _STOCK_METRIC_KEYS:
+            val = metrics.get(metric_key)
+            if val is not None:
+                picked[metric_key] = val
+        return picked
+    except Exception:
+        return {}
+
+
+def format_metrics_for_prompt(metrics: dict[str, Any]) -> str:
+    """Format cherry-picked stock metrics into a concise text block for an LLM prompt."""
+    if not metrics:
+        return ""
+    lines: list[str] = []
+    for metric_key, label in _STOCK_METRIC_KEYS:
+        val = metrics.get(metric_key)
+        if val is None:
+            continue
+        if isinstance(val, float):
+            if any(kw in label for kw in ("Growth", "Margin", "ROA", "vs S&P")):
+                lines.append(f"{label}: {val:+.1f}%")
+            else:
+                lines.append(f"{label}: {val:.2f}")
+        else:
+            lines.append(f"{label}: {val}")
+    return " | ".join(lines)
+
+
+# ---- /stock/insider-transactions — SEC Form 4 filings ----
+
+_TX_CODE_MAP: dict[str, str] = {
+    "P": "Purchase",
+    "S": "Sale",
+    "A": "Award/Grant",
+    "M": "Option Exercise",
+    "F": "Tax Withholding",
+    "G": "Gift",
+    "X": "Option Exercise",
+    "C": "Conversion",
+    "D": "Disposition",
+}
+
+
+def get_insider_transactions(
+    symbol: str,
+    *,
+    api_key: str | None = None,
+) -> list[dict[str, Any]]:
+    """Fetch insider transactions from FinnHub (SEC Form 4 filings).
+
+    Returns list of raw transaction dicts from /stock/insider-transactions.
+    Empty list on failure or missing API key.
+    """
+    key = api_key or os.getenv("FINNHUB_API_KEY")
+    if not key:
+        return []
+    try:
+        resp = httpx.get(
+            f"{_BASE_URL}/stock/insider-transactions",
+            params={"symbol": symbol.upper(), "token": key},
+            timeout=10,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        records = data.get("data", [])
+        return records if isinstance(records, list) else []
+    except Exception:
+        return []
+
+
+# ---- Prompt formatters ----
 
 def format_earnings_for_prompt(
     surprises: list[dict[str, Any]],

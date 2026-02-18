@@ -6,7 +6,8 @@ Tries Schwab first (real-time, richer data) and falls back to yfinance
 
 For tools that only one vendor provides, delegates directly:
 - Schwab-only: options activity, movers, market hours, streaming, real-time quotes
-- yfinance-only: insider activity, company news, technical indicators
+- yfinance-only: company news, technical indicators
+- Finnhub primary (yfinance fallback): insider activity
 
 For overlapping tools (fundamentals, price history), tries Schwab → yfinance.
 """
@@ -236,7 +237,81 @@ class MarketDataService:
         return result
 
     def check_insider_activity(self, symbol: str) -> dict[str, Any]:
-        """Insider transactions (yfinance only — free, high-signal)."""
+        """Insider transactions (Finnhub primary, yfinance title enrichment + fallback)."""
+        from datetime import datetime, timezone
+
+        try:
+            from trader.market.finnhub_client import get_insider_transactions, _TX_CODE_MAP
+
+            raw = get_insider_transactions(symbol)
+            if raw:
+                # Best-effort title enrichment from yfinance
+                title_map: dict[str, str] = {}
+                try:
+                    import yfinance as yf
+                    yf_txns = yf.Ticker(symbol.upper()).insider_transactions
+                    if yf_txns is not None and not yf_txns.empty:
+                        for _, row in yf_txns.iterrows():
+                            name = str(row.get("Insider", "")).strip()
+                            pos = str(row.get("Position", "")).strip()
+                            if name and pos:
+                                title_map[name.upper()] = pos
+                except Exception:
+                    pass
+
+                transactions: list[dict[str, Any]] = []
+                buy_count = 0
+                sell_count = 0
+                buy_value = 0.0
+                sell_value = 0.0
+
+                for rec in raw:
+                    code = rec.get("transactionCode", "")
+                    action = _TX_CODE_MAP.get(code, code)
+                    change = rec.get("change", 0) or 0
+                    price = rec.get("transactionPrice", 0) or 0
+                    shares = abs(change)
+                    value = round(shares * price, 2) if price else 0.0
+                    name = rec.get("name", "Unknown")
+
+                    transactions.append({
+                        "insider_name": name,
+                        "title": title_map.get(name.upper(), ""),
+                        "action": action,
+                        "shares": shares,
+                        "value": value,
+                        "date": rec.get("transactionDate", ""),
+                        "ownership_type": "",
+                    })
+
+                    if code == "P":
+                        buy_count += 1
+                        buy_value += value
+                    elif code == "S":
+                        sell_count += 1
+                        sell_value += value
+
+                return {
+                    "symbol": symbol.upper(),
+                    "transactions": transactions,
+                    "summary": {
+                        "total_transactions": len(transactions),
+                        "buy_count": buy_count,
+                        "sell_count": sell_count,
+                        "net_buy_value": round(buy_value - sell_value, 2),
+                        "signal": (
+                            "net_buying" if buy_value > sell_value
+                            else "net_selling" if sell_value > buy_value
+                            else "neutral"
+                        ),
+                    },
+                    "source": "finnhub",
+                    "fetched_at": datetime.now(tz=timezone.utc).isoformat(),
+                }
+        except Exception:
+            pass
+
+        # Fallback to yfinance
         result = self._yfinance.check_insider_activity(symbol)
         result["source"] = "yfinance"
         return result

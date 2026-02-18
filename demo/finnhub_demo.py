@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Finnhub API demo — shows all 4 free-tier endpoints we use.
+"""Finnhub API demo — shows all 6 free-tier endpoints we use.
 
 Usage:
     uv run python demo/finnhub_demo.py [SYMBOL]
@@ -25,11 +25,14 @@ load_dotenv()
 # ---------------------------------------------------------------------------
 from trader.market.finnhub_client import (
     format_earnings_for_prompt,
+    format_metrics_for_prompt,
     format_news_for_prompt,
     get_company_news,
     get_earnings_calendar,
     get_earnings_surprises,
+    get_insider_transactions,
     get_recommendation_trends,
+    get_stock_metrics,
 )
 
 SYMBOL = sys.argv[1] if len(sys.argv) > 1 else "NVDA"
@@ -68,6 +71,14 @@ def main():
     recs = get_recommendation_trends(SYMBOL)
     pp(f"Analyst Recommendations (last 6 months)", recs[:6])
 
+    # 5. Stock Metrics (growth, valuation, relative performance)
+    metrics = get_stock_metrics(SYMBOL)
+    pp(f"Stock Metrics (cherry-picked)", metrics)
+
+    # 6. Insider Transactions (SEC Form 4 filings)
+    insider_txns = get_insider_transactions(SYMBOL)
+    pp(f"Insider Transactions — {len(insider_txns)} records (first 5)", insider_txns[:5])
+
     # Show how the pipeline formats this for agent prompts
     print(f"\n{'='*60}")
     print(f"  Formatted for Agent Prompt")
@@ -81,6 +92,10 @@ def main():
         print("\n--- Earnings Context ---")
         print(format_earnings_for_prompt(surprises, calendar))
 
+    if metrics:
+        print("\n--- Growth & Valuation ---")
+        print(format_metrics_for_prompt(metrics))
+
     # Summary stats
     print(f"\n{'='*60}")
     print(f"  Summary")
@@ -89,6 +104,8 @@ def main():
     print(f"  Earnings records: {len(surprises)}")
     print(f"  Calendar entries: {len(calendar)}")
     print(f"  Recommendation periods: {len(recs)}")
+    print(f"  Metric fields:    {len(metrics)}")
+    print(f"  Insider txns:     {len(insider_txns)}")
 
 
 if __name__ == "__main__":
