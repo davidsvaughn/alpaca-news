@@ -408,6 +408,13 @@ def process_news_file(
                     raise
                 print(f"WARN: Market context capture failed: {e}")
 
+        # Wire Finnhub rate-limit callback to dashboard
+        if tracker is not None:
+            from trader.market.finnhub_client import set_rate_limit_callback
+            set_rate_limit_callback(
+                lambda msg: tracker.update(_act_id, progress=msg)
+            )
+
         # --- Run multi-agent pipeline ---
         pipeline_config: PipelineConfig | None = None
         if settings.mock_llm:
@@ -588,6 +595,8 @@ def process_news_file(
     # Activity complete — cost now in sealed snapshot
     if tracker is not None:
         tracker.finish(_act_id)
+        from trader.market.finnhub_client import set_rate_limit_callback
+        set_rate_limit_callback(None)
 
     # --- Stage 3: Watch creation (if high confidence) ---
     if (

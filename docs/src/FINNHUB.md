@@ -92,7 +92,7 @@ Fetches monthly analyst consensus data.
 | `period` | str | "YYYY-MM" format |
 | `symbol` | str | Ticker |
 
-**Usage**: Available as agent tool. Tool computes `total_analysts` and limits to 6 most recent months.
+**Usage**: Pre-fetched for every agent prompt (`prefetch_market_data()` → "Analyst Ratings" section) and also available as on-demand agent tool. Listed in `_PREFETCHED_TOOLS` to prevent redundant calls.
 
 ### 5. Stock Metrics (`/stock/metric`)
 
@@ -155,38 +155,32 @@ Fetches individual SEC Form 4 insider trades. Replaces yfinance as primary sourc
 
 ## How It's Wrapped
 
+### Two Delivery Mechanisms
+
+Finnhub data reaches agents through two distinct paths:
+
+1. **Prefetch (prompt injection)** — Data is fetched **once** when the first agent starts, formatted into text, and injected directly into the prompt. All downstream agents inherit this data via the "Prior agent findings" section. Prefetched data appears automatically — agents don't need to request it.
+
+2. **On-demand tool** — A function registered in `TOOL_REGISTRY` that agents can call explicitly during their investigation. Returns JSON.
+
+Some endpoints use **both**: the data is prefetched into the prompt, AND registered as a tool. When this happens, the tool name is added to `_PREFETCHED_TOOLS` (`agent_pipeline.py`), which tells the tool ledger to exclude it from the "available tools" list shown to downstream agents — preventing them from redundantly re-fetching data already in the prompt.
+
+### Summary Table
+
+| Endpoint | Prefetch? | Tool? | In `_PREFETCHED_TOOLS`? |
+|----------|-----------|-------|------------------------|
+| Company News | Yes (`_fetch_finnhub_context`) | Yes (`get_finnhub_news`) | Yes |
+| Earnings Surprises | Yes (`_fetch_earnings_context`) | No | — |
+| Earnings Calendar | Yes (`_fetch_earnings_context`) | No | — |
+| Recommendation Trends | Yes (`prefetch_market_data`) | Yes (`get_analyst_ratings`) | Yes |
+| Stock Metrics | Yes (`prefetch_market_data`) | No | — |
+| Insider Transactions | Yes (`prefetch_market_data`) | Yes (`check_insider_activity`) | Yes |
+
 ### Low-Level Client (`finnhub_client.py`)
 
-All API calls use plain `httpx.get()`:
+All API calls use `_get()` — a wrapper around `httpx.get()` with automatic 429 rate-limit retry (waits `Retry-After` seconds, up to 2 retries). An optional `set_rate_limit_callback()` hook lets the dashboard show when a wait is happening.
 
-```python
-# Base URL
-_BASE_URL = "https://finnhub.io/api/v1"
-
-# Every request follows this pattern:
-resp = httpx.get(f"{_BASE_URL}/{endpoint}", params={...,"token": api_key}, timeout=10)
-resp.raise_for_status()
-return resp.json()
-```
-
-**Error handling**: Silent — all exceptions caught, returns empty list `[]`. This enables graceful degradation when the API key is missing or rate limited.
-
-### Tool Layer (`tool_core.py`)
-
-Two tools exposed in `TOOL_REGISTRY`:
-- `get_finnhub_news(market, symbol, days_back=3)` → JSON string
-- `get_analyst_ratings(market, symbol)` → JSON string
-
-### Prompt Builder (`prompt_builder.py`)
-
-Three auto-fetch functions inject Finnhub data into every agent message:
-- `_fetch_finnhub_context(symbols)` — recent news (max 3 symbols, 10 articles each)
-- `_fetch_earnings_context(symbols)` — surprises + calendar (max 3 symbols)
-- `prefetch_market_data()` → injects "Growth & Valuation" section from `get_stock_metrics()`
-
-### Prefetch Optimization
-
-Both Finnhub tools are listed in `_PREFETCHED_TOOLS` (`agent_pipeline.py`), which prevents agents from redundantly calling tools for data already injected into prompts.
+**Error handling**: Silent — all exceptions caught, returns empty list/dict. Graceful degradation when API key is missing or Finnhub is down.
 
 ---
 

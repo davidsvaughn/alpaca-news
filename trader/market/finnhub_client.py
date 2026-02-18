@@ -11,13 +11,51 @@ Free endpoints used (60 req/min rate limit):
 
 from __future__ import annotations
 
+import logging
 import os
+import time
+from collections.abc import Callable
 from datetime import datetime, timedelta
 from typing import Any
 
 import httpx
 
+logger = logging.getLogger(__name__)
+
 _BASE_URL = "https://finnhub.io/api/v1"
+
+# Optional callback for rate-limit notifications (e.g. dashboard status).
+# Signature: callback(message: str) -> None
+_rate_limit_callback: Callable[[str], None] | None = None
+
+
+def set_rate_limit_callback(callback: Callable[[str], None] | None) -> None:
+    """Set an optional callback invoked when a Finnhub rate limit is hit."""
+    global _rate_limit_callback
+    _rate_limit_callback = callback
+
+
+def _get(url: str, params: dict[str, Any], *, max_retries: int = 2) -> httpx.Response:
+    """HTTP GET with automatic retry on 429 rate-limit responses.
+
+    Waits up to 60s per retry.  Non-429 errors are raised immediately.
+    """
+    for attempt in range(1 + max_retries):
+        resp = httpx.get(url, params=params, timeout=10)
+        if resp.status_code != 429:
+            resp.raise_for_status()
+            return resp
+        # Rate limited — wait and retry
+        retry_after = int(resp.headers.get("Retry-After", "60"))
+        retry_after = min(retry_after, 60)
+        msg = f"Finnhub rate limit hit, waiting {retry_after}s (attempt {attempt + 1}/{1 + max_retries})"
+        logger.warning(msg)
+        if _rate_limit_callback:
+            _rate_limit_callback(msg)
+        time.sleep(retry_after)
+    # Final attempt also 429 — raise
+    resp.raise_for_status()
+    return resp  # unreachable, but keeps type checker happy
 
 
 def get_company_news(
@@ -45,7 +83,7 @@ def get_company_news(
     from_date = (datetime.now() - timedelta(days=days_back)).strftime("%Y-%m-%d")
 
     try:
-        resp = httpx.get(
+        resp = _get(
             f"{_BASE_URL}/company-news",
             params={
                 "symbol": symbol.upper(),
@@ -53,9 +91,7 @@ def get_company_news(
                 "to": to_date,
                 "token": key,
             },
-            timeout=10,
         )
-        resp.raise_for_status()
         data = resp.json()
         if isinstance(data, list):
             return data
@@ -79,12 +115,10 @@ def get_earnings_surprises(
     if not key:
         return []
     try:
-        resp = httpx.get(
+        resp = _get(
             f"{_BASE_URL}/stock/earnings",
             params={"symbol": symbol.upper(), "limit": limit, "token": key},
-            timeout=10,
         )
-        resp.raise_for_status()
         data = resp.json()
         return data if isinstance(data, list) else []
     except Exception:
@@ -105,12 +139,10 @@ def get_earnings_calendar(
     if not key:
         return []
     try:
-        resp = httpx.get(
+        resp = _get(
             f"{_BASE_URL}/calendar/earnings",
             params={"symbol": symbol.upper(), "token": key},
-            timeout=10,
         )
-        resp.raise_for_status()
         data = resp.json()
         calendar = data.get("earningsCalendar", [])
         return calendar if isinstance(calendar, list) else []
@@ -132,12 +164,10 @@ def get_recommendation_trends(
     if not key:
         return []
     try:
-        resp = httpx.get(
+        resp = _get(
             f"{_BASE_URL}/stock/recommendation",
             params={"symbol": symbol.upper(), "token": key},
-            timeout=10,
         )
-        resp.raise_for_status()
         data = resp.json()
         return data if isinstance(data, list) else []
     except Exception:
@@ -181,12 +211,10 @@ def get_stock_metrics(
     if not key:
         return {}
     try:
-        resp = httpx.get(
+        resp = _get(
             f"{_BASE_URL}/stock/metric",
             params={"symbol": symbol.upper(), "metric": "all", "token": key},
-            timeout=10,
         )
-        resp.raise_for_status()
         data = resp.json()
         metrics = data.get("metric", {})
         if not isinstance(metrics, dict):
@@ -249,12 +277,10 @@ def get_insider_transactions(
     if not key:
         return []
     try:
-        resp = httpx.get(
+        resp = _get(
             f"{_BASE_URL}/stock/insider-transactions",
             params={"symbol": symbol.upper(), "token": key},
-            timeout=10,
         )
-        resp.raise_for_status()
         data = resp.json()
         records = data.get("data", [])
         return records if isinstance(records, list) else []
