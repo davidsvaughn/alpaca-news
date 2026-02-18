@@ -4,6 +4,7 @@
 > **Package**: `schwabdev>=3.0.1` (wrapper around Charles Schwab Trader API)
 > **Client**: [`trader/market/schwab_client.py`](trader/market/schwab_client.py)
 > **Env vars**: `SCHWAB_APP_KEY`, `SCHWAB_APP_SECRET`, `SCHWAB_DISABLED` (optional)
+> **Demo**: [`demo/schwab_demo.py`](demo/schwab_demo.py) — `uv run python demo/schwab_demo.py [SYMBOL]`
 
 ---
 

@@ -4,6 +4,7 @@
 > **Package**: `openai` SDK (OpenAI-compatible endpoint)
 > **Runner**: [`trader/online/runners/grok_runner.py`](trader/online/runners/grok_runner.py)
 > **Env vars**: `XAI_API_KEY`, `XAI_BASE_URL`
+> **Demo**: [`demo/xai_demo.py`](demo/xai_demo.py) — `uv run python demo/xai_demo.py [QUERY]`
 
 ---
 

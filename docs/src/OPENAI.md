@@ -4,6 +4,7 @@
 > **Package**: `openai` SDK
 > **Runner**: [`trader/online/runners/openai_runner.py`](trader/online/runners/openai_runner.py)
 > **Env vars**: `OPENAI_API_KEY`
+> **Demo**: [`demo/openai_demo.py`](demo/openai_demo.py) — `uv run python demo/openai_demo.py [QUERY]`
 
 ---
 

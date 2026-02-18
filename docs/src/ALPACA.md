@@ -4,6 +4,7 @@
 > **Package**: `alpaca-py`
 > **Client**: [`alpaca/news_websocket.py`](alpaca/news_websocket.py)
 > **Env vars**: `ALPACA_API_KEY`, `ALPACA_SECRET_KEY`
+> **Demo**: [`demo/alpaca_demo.py`](demo/alpaca_demo.py) — `uv run python demo/alpaca_demo.py [SYMBOL]` or `--stream`
 
 ---
 

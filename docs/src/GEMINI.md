@@ -4,6 +4,7 @@
 > **Package**: `google-genai>=1.62.0`
 > **Runner**: [`trader/online/runners/gemini_runner.py`](trader/online/runners/gemini_runner.py)
 > **Env vars**: `GOOGLE_API_KEY`
+> **Demo**: [`demo/gemini_demo.py`](demo/gemini_demo.py) — `uv run python demo/gemini_demo.py [QUERY]`
 
 ---
 

@@ -5,6 +5,7 @@
 > **Client**: [`trader/xapi/`](trader/xapi/) (client, stream, rules, usage)
 > **Service**: [`trader/online/x_stream_service.py`](trader/online/x_stream_service.py)
 > **Env vars**: `X_BEARER_TOKEN`, `X_API_BASE_URL`
+> **Demo**: [`demo/x_api_demo.py`](demo/x_api_demo.py) — `uv run python demo/x_api_demo.py` or `--rules` / `--burst`
 
 ---
 

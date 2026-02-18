@@ -4,6 +4,7 @@
 > **Package**: None (raw HTTP via `httpx`)
 > **Client**: [`trader/market/finnhub_client.py`](trader/market/finnhub_client.py)
 > **Env var**: `FINNHUB_API_KEY` (optional — tools degrade gracefully without it)
+> **Demo**: [`demo/finnhub_demo.py`](demo/finnhub_demo.py) — `uv run python demo/finnhub_demo.py [SYMBOL]`
 
 ---
 

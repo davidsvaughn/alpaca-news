@@ -4,6 +4,7 @@
 > **Package**: `yfinance>=0.2.0` + `stockstats>=0.6.0`
 > **Client**: [`trader/market/yfinance_client.py`](trader/market/yfinance_client.py)
 > **Env vars**: None (completely free, no authentication)
+> **Demo**: [`demo/yfinance_demo.py`](demo/yfinance_demo.py) — `uv run python demo/yfinance_demo.py [SYMBOL]`
 
 ---
 
