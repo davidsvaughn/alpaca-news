@@ -4,7 +4,7 @@
 > For stable architecture reference, see [ARCHITECTURE.md](ARCHITECTURE.md).
 > For implementation status, see [ROADMAP.md](ROADMAP.md).
 >
-> Last updated: 2026-02-14
+> Last updated: 2026-02-17
 
 ---
 
@@ -12,8 +12,8 @@
 
 | Decision | Choice | Rationale |
 |----------|--------|-----------|
-| Agent framework | PydanticAI + custom orchestrator | PydanticAI handles per-agent loop; custom orchestrator sequences agents and passes context |
-| Explorer architecture | Multi-agent sequential pipeline | Different LLMs compound evidence; Grok (search+X), OpenAI (reasoning+search), Claude (synthesis+search) |
+| Agent framework | Native SDKs + custom orchestrator (was PydanticAI) | Switched from PydanticAI to native SDKs (`openai`, `google-genai`) for pipeline runners. PydanticAI added overhead without value — native SDKs give: server-side x_search (no inner API calls), Gemini function tools + Google Search simultaneously, direct usage/cost metadata, simpler tool-calling loops. PydanticAI kept for watcher check-ins and TestModel testing |
+| Explorer architecture | Multi-agent sequential pipeline | Different LLMs compound evidence; Grok (search+X), OpenAI (reasoning+search), Gemini (grounding+tools+synthesis) |
 | Database | SQLite (v1), Postgres later | Speed of development; upgrade when concurrency demands it |
 | Explorer approach | Free-form tool use | LLM intelligence improves faster than bandit learning on limited data |
 | Knowledge model | Flat insights + BM25 memory | Avoids premature categorization; contextual + general knowledge |
@@ -33,7 +33,7 @@
 | Pre-fetch vs tool pattern | Basic data pre-fetched; investigative tools remain | Eliminates redundant tool calls (observed 3x check_price, 4x get_finnhub_news per pipeline). Agents focus on web_search, x_search, url_fetch |
 | Budget metric | Output tokens (not total) | Output tokens cost 3-4x more than input; penalizing input discourages richer context. `PIPELINE_OUTPUT_TOKENS_LIMIT=50000` |
 | Tool call ledger | Full results for investigative tools | Downstream agents see complete web_search/x_search/url_fetch results. url_fetch capped at 3000 chars. Pre-fetched data tools omitted (already in prompt) |
-| Gemini tool mode | Google grounding only (no function tools) | With pre-fetched market data + tool ledger, Gemini doesn't need function tools. Google grounding gives independent web search capability |
+| Gemini tool mode | Google Search grounding + all function tools | Was grounding-only under PydanticAI (couldn't mix). Native `google-genai` SDK enables both simultaneously. Gemini now has full tool access like other agents, plus independent Google Search grounding |
 | Follow-up vs Watch | Separate data model | Watch = active position management (agent reasoning, hold/exit decisions). FollowUp = passive data collection (mechanical, no decisions). Different enough to warrant separate models, but share scheduling infrastructure pattern |
 | Follow-up: no-buy vs post-exit | Same FollowUp structure, `reason` field distinguishes | Same collection process, same scheduling. Only difference is trigger context (no watch vs sealed watch). Avoids unnecessary type splitting |
 | Follow-up query planning | LLM planner (gemini-3-flash) before mechanical collection | Template queries too generic. LLM planner proposes context-aware queries informed by headline, prediction, prior collection results. ~$0.001 per call |
@@ -48,14 +48,19 @@
 | OpenAI reasoning summary | `detailed` (always on) | Returns `ThinkingPart` objects in model responses. Stored as `thinking_summary` per round for visibility into model reasoning. Minimal cost overhead |
 | Reasoning token tracking | Extract from `usage.details` per provider | OpenAI: `details['reasoning_tokens']`, Gemini: `details['thoughts_tokens']`. Heterogeneous key names unified with fallback logic. Displayed in snapshot detail UI |
 | Builtin tool trace output | Descriptive string when None | `BuiltinToolReturnPart.content` is often None for Gemini grounding (server-side, not exposed). `"[server-side grounding]"` is more informative than `"None"` in the UI |
+| Server-side x_search | Grok runner uses `{"type": "x_search"}` (native) | Previously x_search was a PydanticAI function tool making inner httpx POST to xAI — ~12s each. Server-side x_search eliminates the inner API call overhead entirely. Only Grok supports x_search |
+| Pure tool functions | `tool_core.py` with `TOOL_REGISTRY` | All 16 market data tools extracted as plain functions (no RunContext). Single source of truth — each runner wraps into its SDK's format. `explorer_agent.py` @tool decorators delegate to tool_core |
+| TradingSignal extraction | JSON-in-prompt for native runners | PydanticAI enforced schema via `output_type`. Native runners instruct model to output JSON in ```json blocks. Extracted via regex + `model_validate_json()`. Three fallback strategies: code block → raw JSON → regex. Fallback to `signal=None` |
+| Runner dispatch pattern | `AgentSpec.runner` field | Simple string dispatch: `"grok"` → `run_grok()`, `"openai"` → `run_openai()`, `"gemini"` → `run_gemini()`, `"pydanticai"` → `_run_pydanticai_agent()`. No runner class hierarchy — just async functions |
+| Gemini system prompt | Now includes full tool instructions | Was synthesis-only (Gemini had no tools). With native SDK giving Gemini all function tools, system prompt now includes tool docs and investigation guidance like other agents |
 
 ---
 
 ## Open Questions
 
-1. ~~**Tool-use API mechanics:**~~ **RESOLVED** — PydanticAI handles the tool-call
-   loop, message threading, and tool dispatch. Native support for Anthropic,
-   OpenAI, and Google providers without any compatibility shims.
+1. ~~**Tool-use API mechanics:**~~ **RESOLVED** — Each provider's native SDK handles
+   the tool-call loop directly. OpenAI/Grok: `responses.create()` + `previous_response_id`
+   chaining. Gemini: `generate_content()` with manual function calling. No framework needed.
 
 2. **X stream in explorer:** X stream is inherently async (runs N minutes). Should
    the LLM start a stream and continue investigating (parallel), or does it block?
@@ -66,10 +71,10 @@
 3. **Triage + explorer boundary:** Does triage stay as a separate Stage 1 (cheap
    filter before expensive exploration), or merge into the free-form loop?
 
-4. ~~**Multi-provider tool routing:**~~ **RESOLVED** — Each agent uses its own
-   provider's native `WebSearchTool`. No routing needed — all three providers
-   (Grok, OpenAI, Claude) get native iterative web search. `x_search` is a
-   function tool that calls Grok under the hood, available to all agents.
+4. ~~**Multi-provider tool routing:**~~ **RESOLVED** — Each provider's native SDK
+   handles search differently: Grok gets server-side `web_search` + `x_search`,
+   OpenAI gets server-side `web_search`, Gemini gets Google Search grounding.
+   All three get the same 16 function tools via `TOOL_REGISTRY`.
 
 5. **Pipeline composition:** Should the agent sequence be configurable (e.g.
    run only 2 agents instead of 3)? Or always run the full pipeline?
@@ -142,6 +147,7 @@ From `docs/refs/LLMFactor.pdf` — ideas worth revisiting once we have operation
 | Streamlit offline workbench | Original design | FastAPI dashboard is primary |
 | ~~Contextual bandits~~ | Original design | **PLANNED (Phase D+)** — see above |
 | LangGraph workflow orchestration | TradingAgents | Custom sequential orchestrator is simpler |
+| PydanticAI for pipeline | Phase B-4 migration | Replaced with native SDKs. PydanticAI added overhead without enabling server-side tools or Gemini multi-tool. Kept for watcher (simpler single-agent use case) and TestModel |
 
 ---
 

@@ -25,8 +25,6 @@ from pydantic import BaseModel, Field
 from pydantic_ai import Agent, FunctionToolset, RunContext, UsageLimits, WrapperToolset
 from pydantic_ai.toolsets import ToolsetTool
 
-from trader.evidence.extract import extract_article
-from trader.evidence.fetch import fetch_url
 from trader.market.data_service import MarketDataService
 
 DEBUG = os.getenv("DEBUG", "false").lower() in ("true", "1")
@@ -209,67 +207,32 @@ def check_price(ctx: RunContext[ExplorerDeps], symbol: str) -> str:
     """Get real-time quote with trend context: current price, volume, net change,
     period returns (1W/1M/3M/6M/1Y), and 52-week range position.
     Free (Schwab + yfinance). Use this to check current price action and trend."""
-    market = ctx.deps.market
-    result = market.get_quote(symbol)
-    if not result or result.get("error"):
-        return json.dumps(result, default=str)
-
-    last = result.get("last_price") or result.get("lastPrice") or result.get("regularMarketPrice")
-    current_price = float(last) if last else 0.0
-
-    # Add period returns from 1Y daily history
-    if current_price > 0:
-        try:
-            hist = market.get_price_history(symbol, period="1y", interval="1d")
-            bars = hist.get("bars", []) if isinstance(hist, dict) else []
-            if bars:
-                returns_str = _period_returns(bars, current_price)
-                if returns_str:
-                    result["period_returns"] = returns_str
-        except Exception:
-            pass
-
-        # Add 52-week range context
-        try:
-            fund = market.get_fundamentals(symbol)
-            if fund and not fund.get("error"):
-                w52_high = fund.get("week_52_high") or fund.get("52WeekHigh")
-                w52_low = fund.get("week_52_low") or fund.get("52WeekLow")
-                if (w52_high and w52_low
-                        and isinstance(w52_high, (int, float))
-                        and isinstance(w52_low, (int, float))
-                        and w52_high > w52_low):
-                    pct = (current_price - w52_low) / (w52_high - w52_low) * 100
-                    result["52_week_range"] = f"${w52_low:.2f}–${w52_high:.2f}"
-                    result["52_week_position_pct"] = round(pct, 1)
-        except Exception:
-            pass
-
-    return json.dumps(result, default=str)
+    from trader.online.tool_core import check_price as _impl
+    return _impl(ctx.deps.market, symbol)
 
 
 @market_toolset.tool
 def check_market_context(ctx: RunContext[ExplorerDeps]) -> str:
     """Get broad market context: SPY price/change, VIX level, market session (open/premarket/afterhours).
     Free (Schwab). Use this to understand the overall market environment."""
-    result = ctx.deps.market.build_market_context()
-    return json.dumps(result, default=str)
+    from trader.online.tool_core import check_market_context as _impl
+    return _impl(ctx.deps.market)
 
 
 @market_toolset.tool
 def check_options_activity(ctx: RunContext[ExplorerDeps], symbol: str) -> str:
     """Get options market activity: ATM implied volatility, put/call volume ratio, put/call OI ratio.
     Free (Schwab). The options market often signals moves before the stock price reacts."""
-    result = ctx.deps.market.check_options_activity(symbol)
-    return json.dumps(result, default=str)
+    from trader.online.tool_core import check_options_activity as _impl
+    return _impl(ctx.deps.market, symbol)
 
 
 @market_toolset.tool
 def get_fundamentals(ctx: RunContext[ExplorerDeps], symbol: str) -> str:
     """Get company fundamentals: P/E, EPS, market cap, beta, 52-week range, dividend yield.
     Free (Schwab primary, yfinance fallback). Use for valuation context."""
-    result = ctx.deps.market.get_fundamentals(symbol)
-    return json.dumps(result, default=str)
+    from trader.online.tool_core import get_fundamentals as _impl
+    return _impl(ctx.deps.market, symbol)
 
 
 @market_toolset.tool
@@ -281,24 +244,24 @@ def get_movers(ctx: RunContext[ExplorerDeps], index: str = "$SPX", direction: st
         index: '$SPX', '$DJI', '$COMPX', 'NYSE', or 'NASDAQ'
         direction: 'up' for gainers, 'down' for losers
     """
-    result = ctx.deps.market.get_movers(index, direction=direction)
-    return json.dumps(result, default=str)
+    from trader.online.tool_core import get_movers as _impl
+    return _impl(ctx.deps.market, index, direction)
 
 
 @market_toolset.tool
 def check_insider_activity(ctx: RunContext[ExplorerDeps], symbol: str) -> str:
     """Get recent insider transactions: buys, sells, grants. High-signal confirmation tool.
     Free (yfinance). Insider buying is one of the strongest bullish signals."""
-    result = ctx.deps.market.check_insider_activity(symbol)
-    return json.dumps(result, default=str)
+    from trader.online.tool_core import check_insider_activity as _impl
+    return _impl(ctx.deps.market, symbol)
 
 
 @market_toolset.tool
 def get_company_news(ctx: RunContext[ExplorerDeps], symbol: str) -> str:
     """Get recent news articles for a company. Free (yfinance).
     Use to check if this news is already widely reported or if it's truly breaking."""
-    result = ctx.deps.market.get_company_news(symbol, max_articles=5)
-    return json.dumps(result, default=str)
+    from trader.online.tool_core import get_company_news as _impl
+    return _impl(ctx.deps.market, symbol)
 
 
 @market_toolset.tool
@@ -311,24 +274,8 @@ def get_finnhub_news(ctx: RunContext[ExplorerDeps], symbol: str, days_back: int 
         symbol: Stock ticker (e.g. 'AAPL', 'NVDA')
         days_back: How many days of history (default 3, max 7)
     """
-    from trader.market.finnhub_client import get_company_news as _fh_news
-
-    days_back = min(days_back, 7)
-    articles = _fh_news(symbol, days_back=days_back)
-    if not articles:
-        return json.dumps({"symbol": symbol, "articles": [], "note": "No articles found or FINNHUB_API_KEY not set"})
-    # Return top 15 articles with key fields only
-    trimmed = []
-    for a in articles[:15]:
-        trimmed.append({
-            "headline": a.get("headline", ""),
-            "summary": (a.get("summary") or "")[:300],
-            "source": a.get("source", ""),
-            "datetime": a.get("datetime", 0),
-            "url": a.get("url", ""),
-            "related": a.get("related", ""),
-        })
-    return json.dumps({"symbol": symbol, "count": len(articles), "articles": trimmed}, default=str)
+    from trader.online.tool_core import get_finnhub_news as _impl
+    return _impl(ctx.deps.market, symbol, days_back)
 
 
 @market_toolset.tool
@@ -340,25 +287,8 @@ def get_analyst_ratings(ctx: RunContext[ExplorerDeps], symbol: str) -> str:
     Args:
         symbol: Stock ticker (e.g. 'AAPL', 'NVDA')
     """
-    from trader.market.finnhub_client import get_recommendation_trends
-
-    trends = get_recommendation_trends(symbol)
-    if not trends:
-        return json.dumps({"symbol": symbol, "trends": [], "note": "No data or FINNHUB_API_KEY not set"})
-    # Return last 6 months for trend visibility
-    trimmed = []
-    for t in trends[:6]:
-        total = t.get("buy", 0) + t.get("hold", 0) + t.get("sell", 0) + t.get("strongBuy", 0) + t.get("strongSell", 0)
-        trimmed.append({
-            "period": t.get("period", ""),
-            "strongBuy": t.get("strongBuy", 0),
-            "buy": t.get("buy", 0),
-            "hold": t.get("hold", 0),
-            "sell": t.get("sell", 0),
-            "strongSell": t.get("strongSell", 0),
-            "total_analysts": total,
-        })
-    return json.dumps({"symbol": symbol, "trends": trimmed}, default=str)
+    from trader.online.tool_core import get_analyst_ratings as _impl
+    return _impl(ctx.deps.market, symbol)
 
 
 @market_toolset.tool
@@ -370,8 +300,8 @@ def get_price_history(ctx: RunContext[ExplorerDeps], symbol: str, period: str = 
         period: '1d', '5d', '1mo', '3mo', '6mo', '1y'
         interval: '1m', '5m', '15m', '1h', '1d'
     """
-    result = ctx.deps.market.get_price_history(symbol, period=period, interval=interval)
-    return json.dumps(result, default=str)
+    from trader.online.tool_core import get_price_history as _impl
+    return _impl(ctx.deps.market, symbol, period, interval)
 
 
 @market_toolset.tool
@@ -385,94 +315,24 @@ def get_technical_indicators(ctx: RunContext[ExplorerDeps], symbol: str, indicat
         symbol: Stock ticker
         indicators: Comma-separated list of indicator names
     """
-    indicator_list = [i.strip() for i in indicators.split(",")]
-    result = ctx.deps.market.get_current_technicals(symbol, indicator_list)
-    if not result or result.get("error"):
-        return json.dumps(result, default=str)
-
-    # Add interpretive labels
-    interp: dict[str, str] = {}
-    if "rsi" in result and isinstance(result["rsi"], (int, float)):
-        rsi = result["rsi"]
-        if rsi > 70:
-            interp["rsi"] = "overbought"
-        elif rsi > 60:
-            interp["rsi"] = "elevated"
-        elif rsi < 30:
-            interp["rsi"] = "oversold"
-        elif rsi < 40:
-            interp["rsi"] = "depressed"
-        else:
-            interp["rsi"] = "neutral"
-
-    if "macd" in result and "macds" in result:
-        macd_val = result["macd"]
-        sig_val = result["macds"]
-        if isinstance(macd_val, (int, float)) and isinstance(sig_val, (int, float)):
-            interp["macd"] = "bullish" if macd_val > sig_val else "bearish"
-            if macd_val > 0 and sig_val > 0:
-                interp["macd"] += " (above zero)"
-            elif macd_val < 0 and sig_val < 0:
-                interp["macd"] += " (below zero)"
-
-    # Get current price once for Bollinger + SMA interpretation
-    current_price: float = 0.0
-    needs_price = (
-        ("boll_ub" in result and "boll_lb" in result)
-        or any(result.get(k) for k in ("close_50_sma", "close_200_sma"))
-    )
-    if needs_price:
-        try:
-            quote = ctx.deps.market.get_quote(symbol)
-            current_price = float(quote.get("last_price") or quote.get("lastPrice") or 0)
-        except (TypeError, ValueError):
-            pass
-
-    # Bollinger band position
-    if "boll_ub" in result and "boll_lb" in result and current_price > 0:
-        try:
-            ub = float(result["boll_ub"])
-            lb = float(result["boll_lb"])
-            boll_range = ub - lb
-            if boll_range > 0:
-                pct = (current_price - lb) / boll_range * 100
-                if pct > 80:
-                    interp["bollinger"] = f"near upper band ({pct:.0f}%)"
-                elif pct < 20:
-                    interp["bollinger"] = f"near lower band ({pct:.0f}%)"
-                else:
-                    interp["bollinger"] = f"mid-band ({pct:.0f}%)"
-        except (TypeError, ValueError):
-            pass
-
-    # Price vs SMAs
-    if current_price > 0:
-        for sma_key, label in [("close_50_sma", "vs_50sma"), ("close_200_sma", "vs_200sma")]:
-            sma_val = result.get(sma_key)
-            if sma_val and isinstance(sma_val, (int, float)) and sma_val > 0:
-                pct_diff = (current_price - sma_val) / sma_val * 100
-                interp[label] = f"{pct_diff:+.1f}% ({'above' if pct_diff > 0 else 'below'})"
-
-    if interp:
-        result["interpretation"] = interp
-
-    return json.dumps(result, default=str)
+    from trader.online.tool_core import get_technical_indicators as _impl
+    return _impl(ctx.deps.market, symbol, indicators)
 
 
 @market_toolset.tool
 def check_price_spike(ctx: RunContext[ExplorerDeps], symbol: str) -> str:
     """Check if there's been a significant recent price move (>0.5% in last 5 min).
     Free (Schwab intraday candles). Use to detect if the market has already reacted."""
-    result = ctx.deps.market.check_price_spike(symbol)
-    return json.dumps(result, default=str)
+    from trader.online.tool_core import check_price_spike as _impl
+    return _impl(ctx.deps.market, symbol)
 
 
 @market_toolset.tool
 def check_volume_regime(ctx: RunContext[ExplorerDeps], symbol: str) -> str:
     """Check if recent trading volume is abnormally high compared to session average.
     Free (Schwab intraday candles). Volume spikes often confirm real price moves."""
-    result = ctx.deps.market.check_volume_regime(symbol)
-    return json.dumps(result, default=str)
+    from trader.online.tool_core import check_volume_regime as _impl
+    return _impl(ctx.deps.market, symbol)
 
 
 @market_toolset.tool
@@ -494,10 +354,8 @@ def get_financial_statements(
         statement: 'income', 'balance_sheet', or 'cash_flow'
         freq: 'quarterly' or 'yearly'
     """
-    result = ctx.deps.market.get_financial_statements(
-        symbol, statement=statement, freq=freq,
-    )
-    return json.dumps(result, default=str)
+    from trader.online.tool_core import get_financial_statements as _impl
+    return _impl(ctx.deps.market, symbol, statement, freq)
 
 
 # ---------------------------------------------------------------------------
@@ -514,29 +372,8 @@ def url_fetch(ctx: RunContext[ExplorerDeps], url: str) -> str:
     Args:
         url: The full URL to fetch and extract text from.
     """
-    try:
-        fetch_result = fetch_url(url=url, user_agent="Mozilla/5.0 (compatible; alpaca-news/0.1)")
-        content_type = fetch_result.content_type or ""
-        if "html" not in content_type and "text" not in content_type:
-            return json.dumps({
-                "url": url,
-                "error": f"Non-text content type: {content_type}",
-                "status_code": fetch_result.status_code,
-            })
-        article = extract_article(html=fetch_result.content, url=url)
-        # Truncate to avoid blowing up context
-        text = article.text[:5000]
-        return json.dumps({
-            "url": url,
-            "final_url": fetch_result.final_url,
-            "text": text,
-            "title": article.metadata.get("title", ""),
-            "author": article.metadata.get("author", ""),
-            "date": article.metadata.get("date", ""),
-            "truncated": len(article.text) > 5000,
-        })
-    except Exception as e:
-        return json.dumps({"url": url, "error": str(e)})
+    from trader.online.tool_core import url_fetch as _impl
+    return _impl(url)
 
 
 @market_toolset.tool
@@ -621,27 +458,8 @@ def x_stream_cache(ctx: RunContext[ExplorerDeps], symbol: str, limit: int = 20) 
         symbol: Stock ticker to look up in the cache (e.g. 'NVDA')
         limit: Maximum number of posts to return (default 20)
     """
-    svc = ctx.deps.x_stream_service
-    if svc is None:
-        return json.dumps({
-            "symbol": symbol,
-            "posts": [],
-            "note": "X stream service not available",
-        })
-
-    try:
-        posts = svc.get_recent_posts(key=symbol.upper(), limit=limit)
-        # Also check the "_all" bucket
-        if not posts:
-            posts = svc.get_recent_posts(key="_all", limit=limit)
-        return json.dumps({
-            "symbol": symbol,
-            "posts": posts,
-            "count": len(posts),
-            "source": "x_stream_cache",
-        })
-    except Exception as e:
-        return json.dumps({"symbol": symbol, "error": str(e), "source": "x_stream_cache"})
+    from trader.online.tool_core import x_stream_cache as _impl
+    return _impl(ctx.deps.x_stream_service, symbol, limit)
 
 
 # ---------------------------------------------------------------------------

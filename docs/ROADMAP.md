@@ -4,7 +4,7 @@
 > For stable architecture reference, see [ARCHITECTURE.md](ARCHITECTURE.md).
 > For design rationale, see [DECISIONS.md](DECISIONS.md).
 >
-> Last updated: 2026-02-14
+> Last updated: 2026-02-17
 
 ---
 
@@ -24,20 +24,21 @@
 | **Dashboard (FastAPI + SSE + HTMX)** | DONE | Full monitoring + control UI (6 pages, charts, editor) |
 | **Schwab market data** | DONE | Quotes, candles, streaming, options, fundamentals, movers, market hours |
 | **Knowledge store** | PARTIAL | skip_patterns, reliable_sources, generic append_to_list; insights.json TODO |
-| **Explorer (multi-agent pipeline)** | DONE | Sequential Grok→OpenAI→Gemini; pre-fetched market data; tool call ledger; graceful degradation |
+| **Explorer (multi-agent pipeline)** | DONE | Sequential Grok→OpenAI→Gemini; native SDK runners; pre-fetched market data; tool call ledger; graceful degradation |
+| **Native SDK migration** | DONE | Replaced PydanticAI with native SDKs (openai, google-genai) for pipeline runners; server-side x_search; Gemini gets all function tools |
 | **FinnHub data integration** | DONE | Company news, earnings context (auto-fetch), analyst ratings (tool) |
 | **Budget awareness** | DONE | Output tokens as primary budget (PIPELINE_OUTPUT_TOKENS_LIMIT); real-time usage in tool results |
 | **Pipeline env var config** | DONE | PIPELINE_REQUEST_LIMIT, PIPELINE_TOOL_CALLS_LIMIT, PIPELINE_OUTPUT_TOKENS_LIMIT |
 | **Graceful degradation** | DONE | Agent failures preserved as partial rounds; pipeline continues; snapshot always sealed |
 | **Pre-fetched market data** | DONE | Basic data fetched once for primary symbols; agents focus on investigation |
-| **Gemini web search** | DONE | Gemini uses Google grounding (WebSearchTool) instead of function tools |
+| **Gemini web search + function tools** | DONE | Gemini uses Google Search grounding AND function tools simultaneously (enabled by native SDK) |
 | **Reasoning control** | DONE | Per-provider reasoning effort + thinking summaries + reasoning token capture |
 | **yfinance data layer** | DONE | Free data: fundamentals, insider tx, price history, news, technicals |
 | **BM25 situation memory** | TODO | New — learned from TradingAgents |
 | **Schwab Tier 1 expansion** | DONE | Options IV, fundamentals, movers, market hours, enhanced context |
 | **insights.json** | TODO | Flat scored insights for prompt injection |
 | **Watch lifecycle** | DONE | Full lifecycle: model, DB, creation, monitoring scheduler, retrospective, sealing |
-| **Signal extraction step** | DONE (by design) | Built into PydanticAI output_type=TradingSignal |
+| **Signal extraction step** | DONE | JSON-in-prompt for native runners; PydanticAI output_type for fallback |
 | **Reflection / Evaluation** | DONE | On-demand LLM evaluation, nested decision tree, Tier A/B insights |
 | **Follow-up data collection** | DONE | Scheduled post-event data collection (no-buy + post-exit), LLM query planner, query effectiveness tracking |
 | **Dashboard activity panel** | DONE | Real-time activity tracking (backfill, exploration, follow-ups), in-flight cost visibility, 10s HTMX refresh |
@@ -288,6 +289,52 @@ Reasoning effort control, thinking token capture, and Gemini prompt fix.
    - Summary table shows reasoning tokens inline with warning color
    - Per-agent accordion badge shows reasoning token count
    - Collapsible "Reasoning Summary" section when thinking content available
+
+## Phase B-4: Native SDK migration — DONE
+
+Replace PydanticAI agent framework with native SDKs for the exploration pipeline.
+Motivated by: excessive search calls, Gemini unable to use function tools,
+x_search overhead from inner API calls, poor cost visibility.
+
+1. **DONE** — Extract shared types (`trader/online/agent_common.py`):
+   - `AgentRunResult` dataclass (universal runner return type)
+   - `ToolDef` dataclass (name, func, description, JSON schema, modality)
+   - `build_trace_dict()` helper (common trace format for all runners)
+   - `TOOL_MODALITY` dict (maps tool names to data categories)
+
+2. **DONE** — Extract pure tool functions (`trader/online/tool_core.py`):
+   - 16 pure functions (no PydanticAI RunContext dependency)
+   - `TOOL_REGISTRY: list[ToolDef]` — single source of truth for tool definitions
+   - `TOOL_BY_NAME: dict[str, ToolDef]` — quick lookup
+   - `explorer_agent.py` @tool decorators now delegate to tool_core
+
+3. **DONE** — Grok runner (`trader/online/runners/grok_runner.py`):
+   - `openai` SDK pointed at `https://api.x.ai/v1/`
+   - Server-side `x_search` + `web_search` (no inner API calls — major latency win)
+   - Tool-calling loop with `previous_response_id` chaining
+   - Extracts reasoning summaries from `reasoning` output items
+
+4. **DONE** — OpenAI runner (`trader/online/runners/openai_runner.py`):
+   - `openai` SDK Responses API with `previous_response_id`
+   - Server-side `web_search` + all 16 function tools
+   - Supports `reasoning_effort` and `reasoning_summary` kwargs
+   - Extracts web_search traces from response metadata
+
+5. **DONE** — Gemini runner (`trader/online/runners/gemini_runner.py`):
+   - `google-genai` SDK with `client.models.generate_content()`
+   - Google Search grounding + all function tools simultaneously
+     (impossible with PydanticAI — this was the key unblocking win)
+   - Manual function calling control for full tracing
+   - Extracts thinking content and grounding metadata
+
+6. **DONE** — Pipeline dispatch (`trader/online/agent_pipeline.py`):
+   - `AgentSpec.runner` field: `"grok"`, `"openai"`, `"gemini"`, `"pydanticai"`
+   - `_dispatch_runner()` routes to appropriate native SDK runner
+   - PydanticAI fallback for TestModel testing
+   - System prompt enhanced: final agent gets JSON output format instructions
+   - Gemini now `function_tools=True` (was False)
+
+7. **DONE** — All tests pass (108/109, 1 pre-existing FinnHub 403)
 
 ## Phase D-2: Offline loop — TODO
 

@@ -4,7 +4,7 @@
 > For implementation status and roadmap, see [ROADMAP.md](ROADMAP.md).
 > For design rationale and open questions, see [DECISIONS.md](DECISIONS.md).
 >
-> Last updated: 2026-02-14
+> Last updated: 2026-02-17
 
 ---
 
@@ -105,16 +105,16 @@ If not pre-filtered, send to a fast/cheap LLM:
 
 ### Multi-agent sequential pipeline (DONE)
 
-A **multi-agent sequential pipeline** — multiple PydanticAI agents backed by
-different LLM providers, each equipped with all available tools, running
-sequentially so each builds on the previous agents' findings.
+A **multi-agent sequential pipeline** — multiple LLMs called via their native
+SDKs, each equipped with all available tools, running sequentially so each
+builds on the previous agents' findings.
 
 #### Why multi-agent?
 
 Different LLMs bring different strengths: Grok has native X/Twitter search,
-OpenAI has strong reasoning + web search, Claude excels at synthesis. Running
-them sequentially compounds evidence and perspectives — like analysts passing
-a research report around a trading desk.
+OpenAI has strong reasoning + web search, Gemini has Google Search grounding.
+Running them sequentially compounds evidence and perspectives — like analysts
+passing a research report around a trading desk.
 
 #### Architecture
 
@@ -124,12 +124,15 @@ a research report around a trading desk.
 │  Pre-fetch: basic market data for primary symbols (once)     │
 │                                                              │
 │  Round 1:                                                    │
-│    Agent 1 (Grok)   ──→ web_search + x_search + all tools   │
-│    Agent 2 (OpenAI) ──→ web_search + all tools               │
-│    Agent 3 (Gemini) ──→ Google grounding web search only     │
+│    Agent 1 (Grok)   ──→ server-side web_search + x_search   │
+│                         + all function tools (native SDK)    │
+│    Agent 2 (OpenAI) ──→ server-side web_search              │
+│                         + all function tools (native SDK)    │
+│    Agent 3 (Gemini) ──→ Google Search grounding             │
+│                         + all function tools (native SDK)    │
 │      each agent sees: pre-fetched data + prior findings      │
 │      + tool call ledger (full results from prior agents)     │
-│      Agent 3 produces TradingSignal (structured output)      │
+│      Agent 3 produces TradingSignal (JSON-in-prompt)         │
 │                                                              │
 │  If Agent 3 confidence < threshold → Round 2 (optional)      │
 │  If an agent fails → partial traces saved, pipeline continues│
@@ -138,42 +141,43 @@ a research report around a trading desk.
 ```
 
 Key features:
+- **Native SDK runners:** Each provider uses its own SDK directly — no agent
+  framework overhead. `openai` SDK for OpenAI and Grok (xAI mirrors OpenAI API),
+  `google-genai` SDK for Gemini. PydanticAI kept only for watcher check-ins and tests.
 - **Pre-fetched market data:** Basic data (price, fundamentals, technicals, options,
   volume, insider, news, price history) is fetched once and included in the prompt.
   Agents focus on investigative tools (web_search, x_search, url_fetch).
 - **Tool call ledger:** Each agent's investigative tool results (web_search, x_search,
   url_fetch) are passed downstream in full. Agents see what was already found.
-- **Graceful degradation:** If an agent fails (e.g. token limit exceeded), partial
+- **Graceful degradation:** If an agent fails (e.g. timeout, API error), partial
   tool traces are preserved and the pipeline continues to the next agent.
-- **Framework:** PydanticAI — handles per-agent tool loop, message threading,
-  structured output, budget enforcement
-- **Tool tracing:** `TracingToolset` (WrapperToolset subclass) intercepts every
-  function tool call, recording ToolTrace with `raw_tool_output`
-- **Budget:** `UsageLimits` per agent — primarily `output_tokens_limit` (configurable
-  via `PIPELINE_OUTPUT_TOKENS_LIMIT`, default 50k). Output tokens cost 3-4x more
-  than input and are the actual cost driver.
-- **Budget awareness:** `TracingToolset` appends real-time usage stats to tool
-  results using `ctx.usage`, so agents see budget after each tool call
-- **Dependencies:** `RunContext[ExplorerDeps]` carries `MarketDataService`,
-  tool traces, and accumulated context into tool functions
-- **Reasoning control:** Per-provider model settings via `AgentSpec.model_settings`:
+- **Pure tool functions:** All 16 market data tools are pure functions in `tool_core.py`.
+  Each runner wraps them into its SDK's function-calling format. Single source of truth.
+- **Server-side search:** Grok gets server-side `x_search` + `web_search` (no inner
+  API calls — massive latency improvement). OpenAI gets server-side `web_search`.
+  Gemini gets Google Search grounding + all function tools simultaneously.
+- **Tool tracing:** Each runner records tool call traces in the common `build_trace_dict()`
+  format. Server-side search traces extracted from response metadata.
+- **Budget:** Cost-based (`PIPELINE_MAX_COST_USD`, default $0.50). Per-agent limits:
+  `pipeline_request_limit` (15), `pipeline_tool_calls_limit` (25). After each agent,
+  cumulative cost checked; if over budget, skip remaining intermediates; final always runs.
+- **Reasoning control:** Per-provider via runner kwargs:
   - OpenAI: `reasoning_effort` (low/medium/high), `reasoning_summary='detailed'`
-  - Gemini: `thinking_config` with `include_thoughts` and configurable thinking level
+  - Gemini: `thinking_config` with configurable thinking level
   - Grok: No effort control (grok-4 always max reasoning); reasoning tokens tracked
-- **Reasoning token capture:** `usage.details` exposes provider-specific reasoning
-  token counts (`reasoning_tokens` for OpenAI/Grok, `thoughts_tokens` for Gemini).
-  `ThinkingPart` content from model responses stored as `thinking_summary` per round.
-- **Role-aware prompts:** Gemini (no function tools) gets synthesis-focused guidance;
-  agents with function tools get full tool documentation and cost awareness sections.
+- **Reasoning token capture:** Each runner extracts reasoning/thinking tokens from
+  provider-specific usage metadata and maps to a common `usage` dict.
+- **Runner dispatch:** `AgentSpec.runner` field (`"grok"`, `"openai"`, `"gemini"`,
+  `"pydanticai"`) determines which native SDK handles the agent. Pipeline loop calls
+  `_dispatch_runner()` for each spec.
 
-#### Provider capabilities (verified)
+#### Provider capabilities (native SDKs)
 
-| Provider | Model prefix | Native search | x_search | Mix with function tools? | Reasoning control |
-|----------|-------------|---------------|----------|-------------------------|-------------------|
-| Grok (xAI) | `OpenAIResponsesModel` + xAI base_url | `WebSearchTool(search_context_size=None)` | Function tool wrapper (calls xAI Responses API) | Yes | grok-4 always max; no effort control |
-| OpenAI | `openai-responses:` | `WebSearchTool()` | N/A | Yes | `reasoning_effort` (low/medium/high) + `reasoning_summary` |
-| Claude | `anthropic:` | `WebSearchTool()` | N/A | Yes | `budget_tokens` for thinking |
-| Gemini | `google-gla:` | Google grounding (`WebSearchTool()`) | N/A | **No** — grounding only, no function tools (Live API required for multi-tool) | `thinking_level` (low/medium/high/dynamic) + `include_thoughts` |
+| Provider | SDK | Server-side search | x_search | Function tools | Reasoning control |
+|----------|-----|-------------------|----------|----------------|-------------------|
+| Grok (xAI) | `openai` SDK → `https://api.x.ai/v1/` | `{"type": "web_search"}` | `{"type": "x_search"}` (server-side) | Yes — all 16 tools | grok-4 always max; no effort control |
+| OpenAI | `openai` SDK (Responses API) | `{"type": "web_search"}` | N/A | Yes — all 16 tools | `reasoning_effort` (low/medium/high) + `reasoning_summary` |
+| Gemini | `google-genai` SDK | `GoogleSearch()` grounding | N/A | Yes — all 16 tools (except x_search, x_stream_cache) | `thinking_config` (off/low/medium/high/dynamic) |
 
 #### Context flow between agents
 
@@ -188,7 +192,7 @@ Each agent receives a prompt containing:
 Each agent's output (str findings + tool results) becomes part of the next agent's input.
 No separate "blackboard" needed — the accumulated context IS the shared state.
 
-#### Signal extraction — built into final agent's output_type
+#### Signal extraction — JSON-in-prompt for native runners
 
 ```python
 class TradingSignal(BaseModel):
@@ -202,9 +206,10 @@ class TradingSignal(BaseModel):
     risk_factors: list[str]
 ```
 
-The final agent must produce a valid `TradingSignal`. If it fails (e.g. token
-limit), the pipeline returns `signal=None` and the snapshot is sealed without
-a prediction — partial data is always preserved.
+The final agent's system prompt includes the TradingSignal JSON schema and
+instructions to output it in a ```json block. The runner extracts and validates
+via `TradingSignal.model_validate_json()` with fallback regex parsing.
+If extraction fails, `signal=None` — partial data is always preserved.
 
 ### Tools available to all agents
 
@@ -212,9 +217,9 @@ a prediction — partial data is always preserved.
 
 | Tool | Type | Provider support | Cost |
 |------|------|-----------------|------|
-| `web_search` | PydanticAI `WebSearchTool` (native, iterative) | Grok, OpenAI, Claude | Per-call LLM + tool fee |
-| `x_search(query)` | Function tool (wraps xAI Responses API) | All agents can call it; Grok executes | Per-call Grok + tool fee |
-| `x_stream_cache(symbol)` | Function tool (reads XStreamService cache) | All | Free (cached) |
+| `web_search` | Server-side (native per provider) | Grok (xAI), OpenAI, Gemini (Google grounding) | Per-call tool fee |
+| `x_search` | Server-side on Grok; N/A on others | Grok only (server-side via xAI API) | $0.005/call + token cost |
+| `x_stream_cache(symbol)` | Function tool (reads XStreamService cache) | Grok, OpenAI only | Free (cached) |
 | `url_fetch(url)` | Function tool (httpx + trafilatura) | All | Free (local) |
 
 #### Financial data tools — via MarketDataService (Schwab → yfinance fallback)
@@ -234,16 +239,17 @@ a prediction — partial data is always preserved.
 | `check_volume_regime(symbol)` | DONE | Abnormal volume detection |
 | `get_finnhub_news(symbol)` | DONE | FinnHub company news (free tier, 60 req/min) |
 | `get_analyst_ratings(symbol)` | DONE | Analyst recommendation trends — buy/hold/sell distribution (FinnHub free tier) |
+| `get_financial_statements(symbol)` | DONE | Income statement, balance sheet, cash flow |
 
 ### Agent prompt design
 
 Each agent gets a role-aware system prompt tailored to its capabilities:
-- **Agents with function tools** (Grok, OpenAI): Full tool documentation, cost awareness
-  section, investigation guidance (url_fetch, market data tools, etc.)
-- **Agents without function tools** (Gemini): Synthesis-focused guidance, told it does NOT
-  have market data tools or url_fetch — all data is in the prompt from prior agents
+- **All agents now get function tools** — Grok, OpenAI, and Gemini all have full
+  tool access (16 market data tools + url_fetch). Gemini also gets Google Search
+  grounding simultaneously (impossible with PydanticAI, enabled by native SDK).
 - All agents: role description, prior findings, news event, task instructions
-- The final agent (only) has `output_type=TradingSignal`
+- Pre-fetched data explicitly marked "DO NOT re-fetch for primary symbols"
+- The final agent gets JSON output format instructions for TradingSignal
 
 ---
 
@@ -251,16 +257,17 @@ Each agent gets a role-aware system prompt tailored to its capabilities:
 
 ### 4a. LLM Providers — DONE
 
-`trader/llm/client.py` — unified interface, three providers.
+`trader/llm/client.py` — unified interface for non-pipeline LLM calls.
 
-For the explorer pipeline, agents use PydanticAI's native provider support:
+The explorer pipeline uses **native SDKs directly** (not PydanticAI):
 
-| Provider | PydanticAI model | Native search | Mix search + function tools? |
-|----------|-----------------|---------------|----------------------------|
-| Grok (xAI) | `OpenAIResponsesModel` + xAI base_url | `WebSearchTool(search_context_size=None)` | Yes |
-| OpenAI | `openai-responses:gpt-5-mini` | `WebSearchTool()` | Yes |
-| Claude | `anthropic:claude-sonnet-4-0` | `WebSearchTool()` | Yes |
-| Gemini | `google-gla:gemini-3-flash` | Google grounding | **No** — requires two-instance workaround |
+| Provider | SDK | Pipeline runner | Server-side tools |
+|----------|-----|----------------|-------------------|
+| Grok (xAI) | `openai` → `https://api.x.ai/v1/` | `runners/grok_runner.py` | web_search + x_search |
+| OpenAI | `openai` (Responses API) | `runners/openai_runner.py` | web_search |
+| Gemini | `google-genai` | `runners/gemini_runner.py` | Google Search grounding |
+
+PydanticAI is still used for: watcher check-ins (`watcher.py`), follow-up query planning, and test mode (`TestModel`).
 
 ### 4b. Schwab Market Data — DONE
 
@@ -683,9 +690,15 @@ trader/
 ├── online/
 │   ├── orchestrator.py             # Watch loop, queue-decoupled processing
 │   ├── triage.py                   # Pre-filter + LLM triage
-│   ├── explorer_agent.py           # PydanticAI tools, TradingSignal, TracingToolset
-│   ├── agent_pipeline.py           # Multi-agent sequential pipeline
-│   ├── watcher.py                  # Watch monitoring scheduler
+│   ├── explorer_agent.py           # PydanticAI tools, TradingSignal, TracingToolset (watcher/tests)
+│   ├── agent_common.py             # Shared types: AgentRunResult, ToolDef, build_trace_dict
+│   ├── tool_core.py                # Pure tool functions (16 tools) + TOOL_REGISTRY
+│   ├── agent_pipeline.py           # Multi-agent sequential pipeline + runner dispatch
+│   ├── runners/                    # Native SDK runners
+│   │   ├── grok_runner.py          # openai SDK → xAI (server-side x_search + web_search)
+│   │   ├── openai_runner.py        # openai SDK Responses API (server-side web_search)
+│   │   └── gemini_runner.py        # google-genai SDK (Google Search + function tools)
+│   ├── watcher.py                  # Watch monitoring scheduler (still PydanticAI)
 │   ├── follow_up_collector.py      # Follow-up data collection daemon
 │   ├── activity_tracker.py         # Thread-safe in-flight activity tracking
 │   ├── backfill.py                 # Batch reprocessing

@@ -1,17 +1,20 @@
 """Multi-agent sequential pipeline for news investigation.
 
-Runs multiple PydanticAI agents (each backed by a different LLM provider)
-sequentially. Basic market data is pre-fetched once and included in the
-prompt. Each agent's investigative tool results are passed downstream
-via a tool call ledger.
+Runs multiple agents sequentially, each backed by a different LLM provider
+using native SDKs (not PydanticAI). Basic market data is pre-fetched once
+and included in the prompt. Each agent's investigative tool results are
+passed downstream via a tool call ledger.
 
-Architecture:
-    Agent 1 (Grok)   → web_search + x_search + all function tools
-    Agent 2 (OpenAI) → web_search + all function tools
-    Agent 3 (Gemini) → Google grounding web search (no function tools) → TradingSignal
+Architecture (native SDK runners):
+    Agent 1 (Grok)   → xAI Responses API — server-side x_search + web_search + function tools
+    Agent 2 (OpenAI) → OpenAI Responses API — server-side web_search + function tools
+    Agent 3 (Gemini) → google-genai SDK — Google Search grounding + function tools → TradingSignal
 
-Graceful degradation: if an agent fails (e.g. token limit exceeded),
-partial traces are preserved and the pipeline continues to the next agent.
+PydanticAI fallback runner is available for testing (TestModel) and
+watcher check-ins.
+
+Graceful degradation: if an agent fails, partial traces are preserved
+and the pipeline continues to the next agent.
 """
 
 from __future__ import annotations
@@ -24,101 +27,15 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
 
-from pydantic_ai import Agent, UsageLimits, WebSearchTool
-from pydantic_ai.exceptions import AgentRunError, UsageLimitExceeded
-from pydantic_ai.messages import ModelResponse, ThinkingPart
-from pydantic_ai.models.google import GoogleModelSettings
-from pydantic_ai.models.openai import OpenAIResponsesModel, OpenAIResponsesModelSettings
-from pydantic_ai.providers.openai import OpenAIProvider
-
 from trader.market.data_service import MarketDataService
+from trader.online.agent_common import AgentRunResult, TradingSignal
 from trader.online.explorer_agent import (
     ExplorerDeps,
     ExploreResult,
-    TracingToolset,
-    TradingSignal,
-    market_toolset,
     _build_user_message,
 )
 
 DEBUG = os.getenv("DEBUG", "false").lower() in ("true", "1")
-
-
-# ---------------------------------------------------------------------------
-# Builtin tool extraction
-# ---------------------------------------------------------------------------
-
-
-def _extract_builtin_tool_traces(
-    messages: list[Any],
-    deps: ExplorerDeps,
-) -> list[dict[str, Any]]:
-    """Extract builtin tool calls (e.g. web_search) from message history.
-
-    PydanticAI's WebSearchTool is a server-side builtin tool that doesn't
-    go through TracingToolset. We recover those calls from the message
-    history as BuiltinToolCallPart / BuiltinToolReturnPart pairs.
-    """
-    from pydantic_ai.messages import BuiltinToolCallPart, BuiltinToolReturnPart
-
-    traces: list[dict[str, Any]] = []
-
-    for msg in messages:
-        if not isinstance(msg, ModelResponse):
-            continue
-        # Use the convenience property if available
-        for call_part, return_part in msg.builtin_tool_calls:
-            hop = deps.hop_index
-            deps.hop_index += 1
-
-            # Serialize the return content
-            content = return_part.content
-            if content is None:
-                content = "[server-side grounding — results not exposed by provider]"
-            elif hasattr(content, "model_dump"):
-                content = content.model_dump()
-            elif not isinstance(content, (str, dict, list)):
-                content = str(content)
-
-            trace: dict[str, Any] = {
-                "trace_id": f"trace_{hop}",
-                "hop_index": hop,
-                "timestamp": (return_part.timestamp or datetime.now(tz=timezone.utc)).isoformat(),
-                "modality": "web_research",
-                "action": {
-                    "tool": call_part.tool_name,
-                    "args": call_part.args if isinstance(call_part.args, dict) else {"query": call_part.args},
-                },
-                "execution": {
-                    "start_time": (msg.timestamp or datetime.now(tz=timezone.utc)).isoformat(),
-                    "end_time": (return_part.timestamp or datetime.now(tz=timezone.utc)).isoformat(),
-                    "duration_s": 0.0,  # server-side, no client timing available
-                    "cost_usd": 0.0,    # baked into provider's token cost
-                },
-                "raw_tool_output": content,
-                "error": None,
-                "builtin": True,
-            }
-            traces.append(trace)
-
-    return traces
-
-
-def _extract_thinking_content(messages: list[Any]) -> str | None:
-    """Extract reasoning/thinking summaries from model response messages.
-
-    PydanticAI represents reasoning summaries as ThinkingPart objects in
-    ModelResponse.parts. These come from OpenAI's reasoning_summary or
-    Gemini's include_thoughts settings.
-    """
-    parts: list[str] = []
-    for msg in messages:
-        if not isinstance(msg, ModelResponse):
-            continue
-        for part in msg.parts:
-            if isinstance(part, ThinkingPart) and part.content:
-                parts.append(part.content)
-    return "\n\n".join(parts) if parts else None
 
 
 # ---------------------------------------------------------------------------
@@ -130,16 +47,17 @@ def _extract_thinking_content(messages: list[Any]) -> str | None:
 class AgentSpec:
     """Specification for one agent in the pipeline."""
 
-    name: str                       # e.g. "grok", "openai", "claude"
-    model: Any                      # PydanticAI model string or Model instance
-    builtin_tools: list[Any]        # e.g. [WebSearchTool()]
-    role_description: str = ""      # injected into the agent's system prompt
+    name: str                       # e.g. "grok", "openai", "gemini"
+    model: Any                      # model name string or PydanticAI Model object (for testing)
+    builtin_tools: list[Any] = field(default_factory=list)  # PydanticAI only (for fallback)
+    role_description: str = ""
     is_final: bool = False          # only the final agent produces TradingSignal
-    function_tools: bool = True     # False = skip TracingToolset (e.g. Gemini with grounding)
-    excluded_tools: frozenset[str] = frozenset()  # tool names to exclude from this agent
+    function_tools: bool = True     # False = skip function tools (legacy; native runners ignore)
+    excluded_tools: frozenset[str] = frozenset()
     web_search_limit: int = 0       # 0 = unlimited; >0 = prompt-enforced cap
-    x_search_limit: int = 0         # 0 = unlimited; >0 = hard-enforced cap per agent
-    model_settings: dict[str, Any] | None = None  # provider-specific settings (reasoning effort, etc.)
+    x_search_limit: int = 0         # 0 = unlimited; >0 = prompt-enforced cap
+    model_settings: dict[str, Any] | None = None  # runner-specific settings
+    runner: str = "pydanticai"      # "grok", "openai", "gemini", or "pydanticai" (fallback/testing)
 
 
 @dataclass
@@ -164,33 +82,27 @@ class PipelineConfig:
 # ---------------------------------------------------------------------------
 
 
-def build_grok_model(
-    model_name: str | None = None,
-    api_key: str | None = None,
-) -> OpenAIResponsesModel:
-    """Create an OpenAIResponsesModel pointed at xAI's Responses API."""
-    key = api_key or os.environ["XAI_API_KEY"]
-    name = model_name or os.getenv("XSEARCH_MODEL", "grok-4-1-fast-reasoning")
-    provider = OpenAIProvider(api_key=key, base_url="https://api.x.ai/v1/")
-    return OpenAIResponsesModel(name, provider=provider)
-
-
 def build_default_pipeline() -> PipelineConfig:
     """Build the default 3-agent pipeline from environment variables.
+
+    Uses native SDK runners for each provider:
+    - Grok: xAI Responses API (server-side x_search + web_search)
+    - OpenAI: OpenAI Responses API (server-side web_search)
+    - Gemini: google-genai SDK (Google Search grounding + function tools)
 
     Falls back gracefully: if a provider's API key is missing, that agent
     is skipped. At minimum one agent must be available.
     """
     agents: list[AgentSpec] = []
 
-    # Agent 1: Grok (web_search + x_search via function tool)
+    # Agent 1: Grok (server-side x_search + web_search + function tools)
     xai_key = os.getenv("XAI_API_KEY")
     if xai_key:
         grok_model_name = os.getenv("XSEARCH_MODEL", "grok-4-1-fast-reasoning")
         agents.append(AgentSpec(
             name="grok",
-            model=build_grok_model(model_name=grok_model_name, api_key=xai_key),
-            builtin_tools=[WebSearchTool(search_context_size=None)],
+            model=grok_model_name,
+            runner="grok",
             role_description=(
                 "You are the FIRST investigator. Your strength is web and social "
                 "media research. Use web_search to find news context, and x_search "
@@ -199,14 +111,14 @@ def build_default_pipeline() -> PipelineConfig:
             ),
         ))
 
-    # Agent 2: OpenAI (web_search + function tools, no x_search)
+    # Agent 2: OpenAI (server-side web_search + function tools)
     openai_key = os.getenv("OPENAI_API_KEY")
     if openai_key:
         openai_model = os.getenv("RESEARCH_MODEL", "gpt-5.1")
         agents.append(AgentSpec(
             name="openai",
-            model=f"openai-responses:{openai_model}",
-            builtin_tools=[WebSearchTool()],
+            model=openai_model,
+            runner="openai",
             role_description=(
                 "You are the SECOND investigator. Review what the previous agent "
                 "found, then dig deeper. Use web_search to verify claims, find "
@@ -217,17 +129,14 @@ def build_default_pipeline() -> PipelineConfig:
             excluded_tools=frozenset({"x_search", "x_stream_cache"}),
         ))
 
-    # Agent 3: Gemini (Google grounding web search, no function tools)
-    # Gemini cannot mix Google grounding with function tools. With pre-fetched
-    # market data and tool ledgers from prior agents, Gemini gets all data in
-    # the prompt. Web search is for finding NEW angles, not repeating prior work.
+    # Agent 3: Gemini (Google Search grounding + ALL function tools)
     google_key = os.getenv("GOOGLE_API_KEY")
     if google_key:
         gemini_model = os.getenv("SYNTHESIS_MODEL", "gemini-3-flash-preview")
         agents.append(AgentSpec(
             name="gemini",
-            model=f"google-gla:{gemini_model}",
-            builtin_tools=[WebSearchTool()],
+            model=gemini_model,
+            runner="gemini",
             role_description=(
                 "You are the FINAL analyst. All prior agents' evidence — market "
                 "data, web research, X/Twitter sentiment, and full tool results "
@@ -239,7 +148,7 @@ def build_default_pipeline() -> PipelineConfig:
                 "Produce a clear, actionable trading signal."
             ),
             is_final=True,
-            function_tools=False,
+            excluded_tools=frozenset({"x_search", "x_stream_cache"}),
         ))
 
     if not agents:
@@ -271,21 +180,19 @@ def build_default_pipeline() -> PipelineConfig:
 
     # Apply reasoning / thinking settings per provider
     for a in agents:
-        if a.name == "openai":
-            a.model_settings = OpenAIResponsesModelSettings(
-                openai_reasoning_effort=settings.openai_reasoning_effort,  # type: ignore[arg-type]
-                openai_reasoning_summary="detailed",
-            )
-        elif a.name == "gemini":
+        if a.runner == "openai":
+            a.model_settings = {
+                "reasoning_effort": settings.openai_reasoning_effort,
+                "reasoning_summary": "detailed",
+            }
+        elif a.runner == "gemini":
             thinking_level = settings.gemini_thinking_level
             if thinking_level == "off":
-                thinking_config: dict[str, Any] = {"thinking_budget": 0}
+                a.model_settings = {"thinking_config": {"thinking_budget": 0}}
             elif thinking_level == "dynamic":
-                thinking_config = {"include_thoughts": True}
+                a.model_settings = {"thinking_config": {"include_thoughts": True}}
             else:
-                # low, medium, high → pass as thinking_level
-                thinking_config = {"thinking_level": thinking_level, "include_thoughts": True}
-            a.model_settings = GoogleModelSettings(google_thinking_config=thinking_config)
+                a.model_settings = {"thinking_config": {"thinking_level": thinking_level, "include_thoughts": True}}
 
     return PipelineConfig(
         agents=agents,
@@ -308,7 +215,7 @@ def _build_system_prompt(
 ) -> str:
     """Build a role-aware system prompt for an agent."""
     parts = [
-        f"You are a financial research analyst investigating a breaking news event.",
+        "You are a financial research analyst investigating a breaking news event.",
         f"You are Agent {agent_index + 1} of {total_agents} in a sequential research pipeline.",
         "",
         "## Your role",
@@ -317,7 +224,10 @@ def _build_system_prompt(
         "## Your tools",
     ]
 
-    if spec.function_tools:
+    # All native runners get function tools
+    has_tools = spec.runner != "pydanticai" or spec.function_tools
+
+    if has_tools:
         parts.extend([
             "**Research tools (cost per call — use purposefully):**",
             "- web_search — search the web for news, analysis, SEC filings, earnings reports",
@@ -357,7 +267,7 @@ def _build_system_prompt(
         "market context, and news for the primary symbol(s). Do NOT re-fetch this data.",
     ])
 
-    if spec.function_tools:
+    if has_tools:
         parts.extend([
             "",
             "**Your job is to INVESTIGATE beyond the basics:**",
@@ -381,22 +291,22 @@ def _build_system_prompt(
     if spec.web_search_limit > 0:
         parts.extend([
             "",
-            f"## Web search budget",
+            "## Web search budget",
             f"You have a STRICT budget of **{spec.web_search_limit} web searches**.",
             "Plan your searches carefully. Each search should have a clear purpose.",
             "Do NOT repeat searches that prior agents already performed.",
         ])
 
-    # x_search budget (hard-enforced in tool)
+    # x_search budget
     if spec.x_search_limit > 0 and "x_search" not in spec.excluded_tools:
         parts.extend([
             "",
-            f"## X/Twitter search budget",
+            "## X/Twitter search budget",
             f"You have a STRICT budget of **{spec.x_search_limit} x_search calls**.",
             "Each call is expensive (~$0.02). Make each query count.",
         ])
 
-    if spec.function_tools:
+    if has_tools:
         parts.extend([
             "",
             "## Cost awareness",
@@ -426,6 +336,28 @@ def _build_system_prompt(
             "- **Weigh** these against each other to reach your conclusion.",
         ])
 
+        # JSON output instructions for native runners
+        if spec.runner != "pydanticai":
+            parts.extend([
+                "",
+                "## Output format",
+                "After your analysis, you MUST output a JSON object in a ```json code block",
+                "with EXACTLY this schema:",
+                "```json",
+                "{",
+                '  "direction": "bullish" | "bearish" | "neutral",',
+                '  "confidence": 0.0 to 1.0,',
+                '  "horizon": "15m" | "60m" | "1d",',
+                '  "magnitude_estimate": "e.g. 0.5-1.5%",',
+                '  "key_catalyst": "one-sentence summary of the main catalyst",',
+                '  "bull_case": "brief bull case argument",',
+                '  "bear_case": "brief bear case argument",',
+                '  "risk_factors": ["risk1", "risk2", ...]',
+                "}",
+                "```",
+                "This JSON block MUST be the last thing in your response.",
+            ])
+
     return "\n".join(parts)
 
 
@@ -449,7 +381,6 @@ def _build_pipeline_user_message(
                 f"### Agent: {agent_name} (model: {model_name}, {tool_count} tool calls)\n"
                 f"{findings}\n"
             )
-            # Tool results ledger — pass investigative results downstream
             ledger = _format_tool_ledger(rnd.get("tool_traces", []))
             if ledger:
                 parts.append(ledger)
@@ -457,7 +388,7 @@ def _build_pipeline_user_message(
     return "\n".join(parts)
 
 
-# Tools whose results are already in the prompt via pre-fetch (Change 2).
+# Tools whose results are already in the prompt via pre-fetch.
 # Their outputs are NOT included in the tool ledger to avoid duplication.
 _PREFETCHED_TOOLS = frozenset({
     "check_price", "get_fundamentals", "get_technical_indicators",
@@ -483,11 +414,8 @@ def _format_tool_ledger(tool_traces: list[dict[str, Any]]) -> str:
         action = trace.get("action", {})
         tool_name = action.get("tool", "")
 
-        # Skip pre-fetched tools — their data is already in the prompt
         if tool_name in _PREFETCHED_TOOLS:
             continue
-
-        # Skip errored calls
         if trace.get("error"):
             continue
 
@@ -495,11 +423,9 @@ def _format_tool_ledger(tool_traces: list[dict[str, Any]]) -> str:
         if raw is None:
             continue
 
-        # Format the args summary
         args = action.get("args", {})
         args_str = ", ".join(f"{k}={v!r}" for k, v in args.items()) if args else ""
 
-        # Get string representation of output
         if isinstance(raw, str):
             output_str = raw
         elif isinstance(raw, dict):
@@ -509,7 +435,6 @@ def _format_tool_ledger(tool_traces: list[dict[str, Any]]) -> str:
         else:
             output_str = str(raw)
 
-        # Cap url_fetch output
         if tool_name == "url_fetch" and len(output_str) > _URL_FETCH_MAX_CHARS:
             output_str = output_str[:_URL_FETCH_MAX_CHARS] + "... [truncated]"
 
@@ -518,6 +443,249 @@ def _format_tool_ledger(tool_traces: list[dict[str, Any]]) -> str:
     if not lines:
         return ""
     return "#### Tool results from this agent:\n" + "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# Runner dispatch
+# ---------------------------------------------------------------------------
+
+
+async def _dispatch_runner(
+    spec: AgentSpec,
+    system_prompt: str,
+    user_message: str,
+    market: MarketDataService,
+    x_stream_service: Any,
+    config: PipelineConfig,
+) -> AgentRunResult:
+    """Dispatch to the appropriate runner based on spec.runner."""
+
+    if spec.runner == "grok":
+        from trader.online.runners.grok_runner import run_grok
+        return await run_grok(
+            system_prompt=system_prompt,
+            user_message=user_message,
+            model=spec.model,
+            excluded_tools=spec.excluded_tools,
+            market=market,
+            x_stream_service=x_stream_service,
+            max_turns=config.request_limit,
+            is_final=spec.is_final,
+        )
+
+    elif spec.runner == "openai":
+        from trader.online.runners.openai_runner import run_openai
+        settings = spec.model_settings or {}
+        return await run_openai(
+            system_prompt=system_prompt,
+            user_message=user_message,
+            model=spec.model,
+            excluded_tools=spec.excluded_tools,
+            market=market,
+            x_stream_service=x_stream_service,
+            max_turns=config.request_limit,
+            reasoning_effort=settings.get("reasoning_effort"),
+            reasoning_summary=settings.get("reasoning_summary"),
+            is_final=spec.is_final,
+        )
+
+    elif spec.runner == "gemini":
+        from trader.online.runners.gemini_runner import run_gemini
+        settings = spec.model_settings or {}
+        return await run_gemini(
+            system_prompt=system_prompt,
+            user_message=user_message,
+            model=spec.model,
+            excluded_tools=spec.excluded_tools,
+            market=market,
+            x_stream_service=x_stream_service,
+            max_turns=config.request_limit,
+            thinking_config=settings.get("thinking_config"),
+            is_final=spec.is_final,
+        )
+
+    elif spec.runner == "pydanticai":
+        return await _run_pydanticai_agent(
+            spec=spec,
+            system_prompt=system_prompt,
+            user_message=user_message,
+            market=market,
+            x_stream_service=x_stream_service,
+            config=config,
+        )
+
+    else:
+        raise ValueError(f"Unknown runner: {spec.runner!r}")
+
+
+# ---------------------------------------------------------------------------
+# PydanticAI fallback runner (for testing with TestModel)
+# ---------------------------------------------------------------------------
+
+
+async def _run_pydanticai_agent(
+    *,
+    spec: AgentSpec,
+    system_prompt: str,
+    user_message: str,
+    market: MarketDataService,
+    x_stream_service: Any,
+    config: PipelineConfig,
+) -> AgentRunResult:
+    """Run an agent using PydanticAI (for TestModel and backward compat)."""
+    from pydantic_ai import Agent, UsageLimits
+    from pydantic_ai.exceptions import AgentRunError, UsageLimitExceeded
+
+    from trader.online.explorer_agent import (
+        ExplorerDeps,
+        TracingToolset,
+        market_toolset,
+    )
+
+    xai_key = os.getenv("XAI_API_KEY")
+
+    deps = ExplorerDeps(
+        market=market,
+        news={},
+        symbols=[],
+        x_stream_service=x_stream_service,
+        xai_api_key=xai_key,
+        tool_calls_limit=config.tool_calls_limit,
+        request_limit=config.request_limit,
+        web_search_limit=spec.web_search_limit,
+        x_search_limit=spec.x_search_limit,
+    )
+
+    if spec.function_tools:
+        base_toolset = market_toolset
+        if spec.excluded_tools:
+            base_toolset = market_toolset.filtered(
+                lambda _ctx, td, _excl=spec.excluded_tools: td.name not in _excl,
+            )
+        toolsets = [TracingToolset(base_toolset)]
+    else:
+        toolsets = []
+
+    usage_limits = UsageLimits(
+        request_limit=config.request_limit,
+        tool_calls_limit=config.tool_calls_limit,
+    )
+
+    if spec.is_final:
+        agent: Agent[ExplorerDeps, Any] = Agent(
+            spec.model,
+            deps_type=ExplorerDeps,
+            output_type=TradingSignal,
+            system_prompt=system_prompt,
+            builtin_tools=spec.builtin_tools,
+            toolsets=toolsets,
+        )
+    else:
+        agent = Agent(
+            spec.model,
+            deps_type=ExplorerDeps,
+            output_type=str,
+            system_prompt=system_prompt,
+            builtin_tools=spec.builtin_tools,
+            toolsets=toolsets,
+        )
+
+    result = await agent.run(
+        user_message,
+        deps=deps,
+        usage_limits=usage_limits,
+        model_settings=spec.model_settings,
+    )
+
+    usage = result.usage()
+
+    # Extract builtin tool traces
+    builtin_traces = _extract_builtin_tool_traces(result.all_messages(), deps)
+    deps.tool_traces.extend(builtin_traces)
+
+    # Extract thinking content
+    thinking_summary = _extract_thinking_content(result.all_messages())
+
+    reasoning_tokens = (
+        usage.details.get("reasoning_tokens", 0)
+        or usage.details.get("thoughts_tokens", 0)
+    )
+
+    return AgentRunResult(
+        output=result.output,
+        tool_traces=deps.tool_traces,
+        usage={
+            "input_tokens": usage.input_tokens or 0,
+            "output_tokens": usage.output_tokens or 0,
+            "total_tokens": usage.total_tokens or 0,
+            "requests": usage.requests or 0,
+            "tool_calls": len(deps.tool_traces),
+            "reasoning_tokens": reasoning_tokens,
+        },
+        thinking_summary=thinking_summary,
+    )
+
+
+def _extract_builtin_tool_traces(
+    messages: list[Any],
+    deps: "ExplorerDeps",
+) -> list[dict[str, Any]]:
+    """Extract builtin tool calls (e.g. web_search) from PydanticAI message history."""
+    from pydantic_ai.messages import BuiltinToolCallPart, BuiltinToolReturnPart, ModelResponse
+
+    traces: list[dict[str, Any]] = []
+
+    for msg in messages:
+        if not isinstance(msg, ModelResponse):
+            continue
+        for call_part, return_part in msg.builtin_tool_calls:
+            hop = deps.hop_index
+            deps.hop_index += 1
+
+            content = return_part.content
+            if content is None:
+                content = "[server-side grounding — results not exposed by provider]"
+            elif hasattr(content, "model_dump"):
+                content = content.model_dump()
+            elif not isinstance(content, (str, dict, list)):
+                content = str(content)
+
+            trace: dict[str, Any] = {
+                "trace_id": f"trace_{hop}",
+                "hop_index": hop,
+                "timestamp": (return_part.timestamp or datetime.now(tz=timezone.utc)).isoformat(),
+                "modality": "web_research",
+                "action": {
+                    "tool": call_part.tool_name,
+                    "args": call_part.args if isinstance(call_part.args, dict) else {"query": call_part.args},
+                },
+                "execution": {
+                    "start_time": (msg.timestamp or datetime.now(tz=timezone.utc)).isoformat(),
+                    "end_time": (return_part.timestamp or datetime.now(tz=timezone.utc)).isoformat(),
+                    "duration_s": 0.0,
+                    "cost_usd": 0.0,
+                },
+                "raw_tool_output": content,
+                "error": None,
+                "builtin": True,
+            }
+            traces.append(trace)
+
+    return traces
+
+
+def _extract_thinking_content(messages: list[Any]) -> str | None:
+    """Extract reasoning/thinking summaries from PydanticAI model response messages."""
+    from pydantic_ai.messages import ModelResponse, ThinkingPart
+
+    parts: list[str] = []
+    for msg in messages:
+        if not isinstance(msg, ModelResponse):
+            continue
+        for part in msg.parts:
+            if isinstance(part, ThinkingPart) and part.content:
+                parts.append(part.content)
+    return "\n\n".join(parts) if parts else None
 
 
 # ---------------------------------------------------------------------------
@@ -561,7 +729,6 @@ async def run_pipeline(
     if config is None:
         config = build_default_pipeline()
 
-    xai_key = os.getenv("XAI_API_KEY")
     all_tool_traces: list[dict[str, Any]] = []
     all_rounds: list[dict[str, Any]] = []
     total_usage: dict[str, int] = {
@@ -573,110 +740,57 @@ async def run_pipeline(
         "reasoning_tokens": 0,
     }
     signal: TradingSignal | None = None
-
-    # UsageLimits: only request_limit and tool_calls_limit as safety nets.
-    # No token limits — agents run to completion. Budget control is done
-    # at the pipeline level: check cumulative cost after each agent.
-    usage_limits = UsageLimits(
-        request_limit=config.request_limit,
-        tool_calls_limit=config.tool_calls_limit,
-    )
     cumulative_cost: float = 0.0
 
     for round_num in range(config.max_rounds):
         for i, spec in enumerate(config.agents):
-            # Cost-based skip: if we've exceeded budget and this isn't the
-            # final agent, skip to the next one (final agent always runs).
+            # Cost-based skip
             if not spec.is_final and cumulative_cost >= config.max_cost_usd > 0:
                 if DEBUG:
                     print(f"[Pipeline]   Skipping {spec.name} — "
                           f"cumulative cost ${cumulative_cost:.3f} >= ${config.max_cost_usd:.2f}")
                 continue
 
-            # Fresh deps per agent, but shared trace accumulator
-            deps = ExplorerDeps(
-                market=market,
-                news=news,
-                symbols=symbols,
-                x_stream_service=x_stream_service,
-                xai_api_key=xai_key,
-                tool_calls_limit=config.tool_calls_limit,
-                request_limit=config.request_limit,
-                web_search_limit=spec.web_search_limit,
-                x_search_limit=spec.x_search_limit,
-            )
-
-            # Build agent with appropriate output type
-            # Agents with function_tools=False (e.g. Gemini with Google grounding)
-            # skip TracingToolset — they can't mix builtin + function tools.
-            if spec.function_tools:
-                base_toolset = market_toolset
-                if spec.excluded_tools:
-                    base_toolset = market_toolset.filtered(
-                        lambda _ctx, td, _excl=spec.excluded_tools: td.name not in _excl,
-                    )
-                toolsets = [TracingToolset(base_toolset)]
-            else:
-                toolsets = []
             system_prompt = _build_system_prompt(
                 spec, agent_index=i, total_agents=len(config.agents),
             )
 
-            if spec.is_final:
-                agent: Agent[ExplorerDeps, Any] = Agent(
-                    spec.model,
-                    deps_type=ExplorerDeps,
-                    output_type=TradingSignal,
-                    system_prompt=system_prompt,
-                    builtin_tools=spec.builtin_tools,
-                    toolsets=toolsets,
-                )
-            else:
-                agent = Agent(
-                    spec.model,
-                    deps_type=ExplorerDeps,
-                    output_type=str,
-                    system_prompt=system_prompt,
-                    builtin_tools=spec.builtin_tools,
-                    toolsets=toolsets,
-                )
-
             # Build prompt with accumulated context + pre-fetched market data
-            # Only pass market to the first agent's message (subsequent agents
-            # get it via the first message, which is re-used in prior_rounds).
             msg_market = market if (round_num == 0 and i == 0) else None
             user_message = _build_pipeline_user_message(
                 news, symbols, all_rounds, market=msg_market,
             )
 
-            if DEBUG:
-                print(f"[Pipeline] Round {round_num + 1}, Agent {i + 1}/{len(config.agents)}: "
-                      f"{spec.name} ({'final' if spec.is_final else 'intermediate'})")
-
-            start_time = time.time()
-
-            # Determine model name for logging (needed in both success and error paths)
+            # Determine model name for logging
             model_name = spec.name
             if isinstance(spec.model, str):
                 model_name = spec.model
             elif hasattr(spec.model, "model_name"):
                 model_name = spec.model.model_name
 
+            if DEBUG:
+                print(f"[Pipeline] Round {round_num + 1}, Agent {i + 1}/{len(config.agents)}: "
+                      f"{spec.name} ({spec.runner}, {'final' if spec.is_final else 'intermediate'})")
+
+            start_time = time.time()
+
             try:
-                _coro = agent.run(
-                    user_message,
-                    deps=deps,
-                    usage_limits=usage_limits,
-                    model_settings=spec.model_settings,
+                _coro = _dispatch_runner(
+                    spec=spec,
+                    system_prompt=system_prompt,
+                    user_message=user_message,
+                    market=market,
+                    x_stream_service=x_stream_service,
+                    config=config,
                 )
                 if config.agent_timeout_s > 0:
-                    result = await asyncio.wait_for(_coro, timeout=config.agent_timeout_s)
+                    agent_result = await asyncio.wait_for(_coro, timeout=config.agent_timeout_s)
                 else:
-                    result = await _coro
-            except (UsageLimitExceeded, AgentRunError, TimeoutError) as e:
-                # Graceful degradation: capture partial work and continue
+                    agent_result = await _coro
+
+            except (TimeoutError, Exception) as e:
+                # Graceful degradation
                 elapsed = round(time.time() - start_time, 1)
-                all_tool_traces.extend(deps.tool_traces)
                 error_msg = str(e)
                 round_record = {
                     "agent": spec.name,
@@ -685,8 +799,8 @@ async def run_pipeline(
                     "system_prompt": system_prompt,
                     "user_message": user_message,
                     "findings": f"[INCOMPLETE: {type(e).__name__}: {e}]",
-                    "tool_traces": deps.tool_traces,
-                    "usage": {"tool_calls": len(deps.tool_traces)},
+                    "tool_traces": [],
+                    "usage": {"tool_calls": 0},
                     "cost_usd": 0.0,
                     "elapsed_s": elapsed,
                     "error": {"type": type(e).__name__, "message": error_msg},
@@ -696,47 +810,37 @@ async def run_pipeline(
                     f"[Pipeline] Agent {spec.name} ({model_name}) FAILED "
                     f"after {elapsed}s: {type(e).__name__}: {error_msg}"
                 )
-                continue  # try next agent
+                continue
 
             elapsed = round(time.time() - start_time, 1)
-            usage = result.usage()
 
             # Accumulate usage
-            total_usage["input_tokens"] += usage.input_tokens or 0
-            total_usage["output_tokens"] += usage.output_tokens or 0
-            total_usage["total_tokens"] += usage.total_tokens or 0
-            total_usage["requests"] += usage.requests or 0
-            total_usage["tool_calls"] += len(deps.tool_traces)
-            total_usage["reasoning_tokens"] += (
-                usage.details.get("reasoning_tokens", 0)
-                or usage.details.get("thoughts_tokens", 0)
-            )
+            for key in ("input_tokens", "output_tokens", "total_tokens",
+                        "requests", "tool_calls", "reasoning_tokens"):
+                total_usage[key] += agent_result.usage.get(key, 0)
 
-            # Extract builtin tool calls (e.g. web_search) from message history
-            builtin_traces = _extract_builtin_tool_traces(
-                result.all_messages(), deps,
-            )
-            deps.tool_traces.extend(builtin_traces)
-
-            # Collect traces and findings
-            all_tool_traces.extend(deps.tool_traces)
+            # Collect traces
+            all_tool_traces.extend(agent_result.tool_traces)
 
             # Estimate per-agent cost
             agent_cost = _estimate_agent_cost(
                 spec.name, model_name,
-                input_tokens=usage.input_tokens or 0,
-                output_tokens=usage.output_tokens or 0,
+                input_tokens=agent_result.usage.get("input_tokens", 0),
+                output_tokens=agent_result.usage.get("output_tokens", 0),
             )
-
             cumulative_cost += agent_cost
 
-            # Extract reasoning data
-            # OpenAI: details['reasoning_tokens'], Gemini: details['thoughts_tokens']
-            reasoning_tokens = (
-                usage.details.get("reasoning_tokens", 0)
-                or usage.details.get("thoughts_tokens", 0)
-            )
-            thinking_summary = _extract_thinking_content(result.all_messages())
+            # Build round record
+            findings = ""
+            if spec.is_final and isinstance(agent_result.output, TradingSignal):
+                signal = agent_result.output
+                findings = (
+                    f"Direction: {signal.direction}, "
+                    f"Confidence: {signal.confidence}, "
+                    f"Catalyst: {signal.key_catalyst}"
+                )
+            elif not spec.is_final:
+                findings = str(agent_result.output) if agent_result.output else ""
 
             round_record = {
                 "agent": spec.name,
@@ -744,36 +848,19 @@ async def run_pipeline(
                 "round": round_num + 1,
                 "system_prompt": system_prompt,
                 "user_message": user_message,
-                "findings": str(result.output) if not spec.is_final else "",
-                "tool_traces": deps.tool_traces,
-                "usage": {
-                    "input_tokens": usage.input_tokens,
-                    "output_tokens": usage.output_tokens,
-                    "total_tokens": usage.total_tokens,
-                    "requests": usage.requests,
-                    "tool_calls": len(deps.tool_traces),
-                    "reasoning_tokens": reasoning_tokens,
-                    "details": dict(usage.details),
-                },
+                "findings": findings,
+                "tool_traces": agent_result.tool_traces,
+                "usage": agent_result.usage,
                 "cost_usd": agent_cost,
                 "elapsed_s": elapsed,
-                "thinking_summary": thinking_summary,
+                "thinking_summary": agent_result.thinking_summary,
             }
             all_rounds.append(round_record)
 
             if DEBUG:
-                print(f"[Pipeline]   → {len(deps.tool_traces)} tool calls, "
-                      f"{usage.total_tokens} tokens, ${agent_cost:.3f} "
+                print(f"[Pipeline]   → {len(agent_result.tool_traces)} tool calls, "
+                      f"{agent_result.usage.get('total_tokens', 0)} tokens, ${agent_cost:.3f} "
                       f"(cumulative: ${cumulative_cost:.3f}), {elapsed}s")
-
-            # If this is the final agent, capture the signal
-            if spec.is_final:
-                signal = result.output
-                round_record["findings"] = (
-                    f"Direction: {signal.direction}, "
-                    f"Confidence: {signal.confidence}, "
-                    f"Catalyst: {signal.key_catalyst}"
-                )
 
         # Check if we should loop again
         if signal is not None and signal.confidence >= config.confidence_threshold:
@@ -837,11 +924,10 @@ async def explore(
 
 
 # ---------------------------------------------------------------------------
-# Cost estimation from pipeline results
+# Cost estimation
 # ---------------------------------------------------------------------------
 
 
-# Map default agent names → provider names for pricing lookup
 _AGENT_TO_PROVIDER: dict[str, str] = {
     "grok": "grok",
     "openai": "openai",
@@ -892,11 +978,10 @@ def _extract_model_for_pricing(spec_name: str, model_string: str) -> tuple[str, 
       - "grok" agent name → provider "grok", model from model_string
       - "openai-responses:gpt-5-mini" → ("openai", "gpt-5-mini")
       - "google-gla:gemini-3-flash-preview" → ("gemini", "gemini-3-flash-preview")
-      - OpenAIResponsesModel objects → model_name attribute
+      - Raw model names like "gpt-5.1" → use agent name for provider
     """
     provider = _AGENT_TO_PROVIDER.get(spec_name, spec_name)
 
-    # Strip PydanticAI model prefixes
     raw_model = model_string
     for prefix in ("openai-responses:", "openai:", "google-gla:", "anthropic:"):
         if raw_model.startswith(prefix):
