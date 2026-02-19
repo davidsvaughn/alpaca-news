@@ -254,22 +254,24 @@ def get_stock_metrics(
 
 
 def format_metrics_for_prompt(metrics: dict[str, Any]) -> str:
-    """Format cherry-picked stock metrics into a concise text block for an LLM prompt."""
+    """Format cherry-picked stock metrics as a markdown table for the LLM prompt."""
     if not metrics:
         return ""
-    lines: list[str] = []
+    rows = ["| Metric | Value |", "|--------|-------|"]
     for metric_key, label in _STOCK_METRIC_KEYS:
         val = metrics.get(metric_key)
         if val is None:
             continue
         if isinstance(val, float):
             if any(kw in label for kw in ("Growth", "Margin", "ROA", "vs S&P")):
-                lines.append(f"{label}: {val:+.1f}%")
+                rows.append(f"| {label} | {val:+.1f}% |")
             else:
-                lines.append(f"{label}: {val:.2f}")
+                rows.append(f"| {label} | {val:.2f} |")
         else:
-            lines.append(f"{label}: {val}")
-    return " | ".join(lines)
+            rows.append(f"| {label} | {val} |")
+    if len(rows) <= 2:
+        return ""
+    return "\n".join(rows)
 
 
 # ---- /stock/insider-transactions — SEC Form 4 filings ----

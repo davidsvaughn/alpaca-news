@@ -235,12 +235,16 @@ def prefetch_market_data(symbols: list[str], market: MarketDataService) -> str:
                 except Exception:
                     pass
 
-                lines = [line1]
+                rows = [
+                    "| Metric | Value |",
+                    "|--------|-------|",
+                    f"| Current | {line1} |",
+                ]
                 if returns_str:
-                    lines.append(f"Returns: {returns_str}")
+                    rows.append(f"| Returns | {returns_str} |")
                 if range_str:
-                    lines.append(range_str)
-                sym_sections.append(f"### {sym} — Price & Trend\n" + "\n".join(lines))
+                    rows.append(f"| 52-week | {range_str} |")
+                sym_sections.append(f"### {sym} — Price & Trend\n" + "\n".join(rows))
         except Exception:
             pass
 
@@ -302,20 +306,23 @@ def prefetch_market_data(symbols: list[str], market: MarketDataService) -> str:
                 except Exception:
                     pass
 
-                lines = []
+                tech_rows = [
+                    "| Indicator | Value | Signal |",
+                    "|-----------|-------|--------|",
+                ]
 
                 # RSI with trend
                 if "rsi" in techs and isinstance(techs["rsi"], (int, float)):
                     rsi = techs["rsi"]
                     signal = "overbought" if rsi > 70 else "oversold" if rsi < 30 else "neutral"
-                    rsi_str = f"RSI(14): {rsi:.1f} ({signal})"
+                    trend_str = ""
                     rsi_hist = trend_data.get("rsi", [])
                     if len(rsi_hist) >= 2:
                         old_rsi = rsi_hist[0].get("value")
                         if old_rsi is not None:
                             direction = "rising" if rsi > old_rsi + 3 else "declining" if rsi < old_rsi - 3 else "flat"
-                            rsi_str += f" — {direction} from {old_rsi:.0f} over {len(rsi_hist)}d"
-                    lines.append(rsi_str)
+                            trend_str = f" — {direction} from {old_rsi:.0f} over {len(rsi_hist)}d"
+                    tech_rows.append(f"| RSI(14) | {rsi:.1f} | {signal}{trend_str} |")
 
                 # MACD with crossover info
                 if "macd" in techs and "macds" in techs:
@@ -323,18 +330,13 @@ def prefetch_market_data(symbols: list[str], market: MarketDataService) -> str:
                     signal_val = techs["macds"]
                     if isinstance(macd_val, (int, float)) and isinstance(signal_val, (int, float)):
                         side = "bullish" if macd_val > signal_val else "bearish"
-                        macd_str = f"MACD: {macd_val:.4f} ({side}"
-                        # Check for recent crossover from history
+                        cross_str = ""
                         macd_hist = trend_data.get("macd", [])
                         if len(macd_hist) >= 2:
-                            # Look backwards for sign change in (macd - signal)
-                            # We only have macd history, not signal, so just note direction
                             old_macd = macd_hist[0].get("value")
-                            if old_macd is not None:
-                                if (macd_val > 0) != (old_macd > 0):
-                                    macd_str += f", crossed zero in last {len(macd_hist)}d"
-                        macd_str += ")"
-                        lines.append(macd_str)
+                            if old_macd is not None and (macd_val > 0) != (old_macd > 0):
+                                cross_str = f", crossed zero in last {len(macd_hist)}d"
+                        tech_rows.append(f"| MACD | {macd_val:.4f} | {side}{cross_str} |")
 
                 # Bollinger with position percentage
                 if "boll_ub" in techs and "boll_lb" in techs and "boll" in techs:
@@ -345,33 +347,28 @@ def prefetch_market_data(symbols: list[str], market: MarketDataService) -> str:
                         boll_range = ub - lb
                         if boll_range > 0 and current_price > 0:
                             pct = (current_price - lb) / boll_range * 100
-                            pos = "near upper band" if pct > 80 else "near lower band" if pct < 20 else "mid-band"
-                            lines.append(f"Bollinger: at {pct:.0f}% of band ({pos}) — lower: ${lb:.2f}, mid: ${mid:.2f}, upper: ${ub:.2f}")
-                        else:
-                            lines.append(f"Bollinger: ${lb:.2f} / ${mid:.2f} / ${ub:.2f}")
+                            pos = "near upper" if pct > 80 else "near lower" if pct < 20 else "mid-band"
+                            tech_rows.append(f"| Bollinger | {pct:.0f}% of band | {pos} (${lb:.2f} / ${mid:.2f} / ${ub:.2f}) |")
                     except (TypeError, ValueError):
                         pass
 
-                # Price vs SMAs (relative)
-                sma_parts = []
+                # Price vs SMAs
                 for sma_key, sma_label in [("close_50_sma", "50-SMA"), ("close_200_sma", "200-SMA")]:
                     sma_val = techs.get(sma_key)
                     if sma_val and isinstance(sma_val, (int, float)) and current_price > 0 and sma_val > 0:
                         pct_diff = (current_price - sma_val) / sma_val * 100
                         side = "above" if pct_diff > 0 else "below"
-                        sma_parts.append(f"vs {sma_label}: {pct_diff:+.1f}% ({side})")
-                if sma_parts:
-                    lines.append("Price " + " | ".join(sma_parts))
+                        tech_rows.append(f"| vs {sma_label} | {pct_diff:+.1f}% | {side} |")
 
-                # ATR as % of price (volatility context)
+                # ATR as % of price
                 if "atr" in techs and isinstance(techs["atr"], (int, float)) and current_price > 0:
                     atr = techs["atr"]
                     atr_pct = atr / current_price * 100
                     vol_label = "high" if atr_pct > 5 else "low" if atr_pct < 1 else "moderate"
-                    lines.append(f"ATR: ${atr:.4f} ({atr_pct:.1f}% of price — {vol_label} volatility)")
+                    tech_rows.append(f"| ATR | ${atr:.4f} ({atr_pct:.1f}%) | {vol_label} volatility |")
 
-                if lines:
-                    sym_sections.append(f"### {sym} — Technical Summary\n" + "\n".join(lines))
+                if len(tech_rows) > 2:  # more than just the header
+                    sym_sections.append(f"### {sym} — Technical Summary\n" + "\n".join(tech_rows))
         except Exception:
             pass
 
@@ -421,21 +418,31 @@ def prefetch_market_data(symbols: list[str], market: MarketDataService) -> str:
                         return f"{n/1e3:+.0f}K"
                     return f"{n:+,}"
 
-                line = (
-                    f"Net delta: {_fmt_delta(net)} shares ({direction}) | "
-                    f"Imbalance: {imb:+.2f} (uptick {uptick_pct:.0f}% / downtick {100-uptick_pct:.0f}%)"
-                )
+                vd_rows = [
+                    "| Day | Net Delta | Imbalance | Direction |",
+                    "|-----|-----------|-----------|-----------|",
+                    f"| Today | {_fmt_delta(net)} | {imb:+.2f} (uptick {uptick_pct:.0f}% / downtick {100-uptick_pct:.0f}%) | {direction} |",
+                ]
 
                 # Multi-day volume delta (yfinance 1-min bars, up to 5 days)
                 try:
                     daily_deltas = market.compute_volume_delta_history(sym, days=5)
                     if daily_deltas and len(daily_deltas) > 1:
-                        delta_strs = [_fmt_delta(d["net_delta"]) for d in daily_deltas]
-                        line += f"\n5-day net deltas (recent→old): [{', '.join(delta_strs)}]"
+                        # Skip first entry if it's today (already shown above)
+                        for d in daily_deltas[1:]:
+                            d_net = d["net_delta"]
+                            d_imb = d["imbalance"]
+                            d_dir = d["direction"]
+                            d_up_pct = (0.5 + d_imb / 2) * 100  # derive from imbalance
+                            d_dn_pct = 100 - d_up_pct
+                            vd_rows.append(
+                                f"| {d['date']} | {_fmt_delta(d_net)} | "
+                                f"{d_imb:+.2f} (uptick {d_up_pct:.0f}% / downtick {d_dn_pct:.0f}%) | {d_dir} |"
+                            )
                 except Exception:
                     pass
 
-                sym_sections.append(f"### {sym} — Volume Delta\n{line}")
+                sym_sections.append(f"### {sym} — Volume Delta\n" + "\n".join(vd_rows))
         except Exception:
             pass
 
@@ -490,37 +497,40 @@ def prefetch_market_data(symbols: list[str], market: MarketDataService) -> str:
             from trader.market.finnhub_client import get_recommendation_trends
             trends = get_recommendation_trends(sym)
             if trends:
-                rating_lines: list[str] = []
+                ar_rows = [
+                    "| Month | Strong Buy | Buy | Hold | Sell | Strong Sell | Total |",
+                    "|-------|-----------|-----|------|------|------------|-------|",
+                ]
+                valid_count = 0
                 for t in trends[:6]:
                     total = (t.get("strongBuy", 0) + t.get("buy", 0)
                              + t.get("hold", 0) + t.get("sell", 0)
                              + t.get("strongSell", 0))
                     if total <= 0:
                         continue
+                    valid_count += 1
                     period = t.get("period", "?")
-                    rating_lines.append(
-                        f"{period}: Strong Buy: {t.get('strongBuy', 0)} | "
-                        f"Buy: {t.get('buy', 0)} | Hold: {t.get('hold', 0)} | "
-                        f"Sell: {t.get('sell', 0)} | Strong Sell: {t.get('strongSell', 0)} "
-                        f"({total} analysts)"
+                    ar_rows.append(
+                        f"| {period} | {t.get('strongBuy', 0)} | {t.get('buy', 0)} | "
+                        f"{t.get('hold', 0)} | {t.get('sell', 0)} | "
+                        f"{t.get('strongSell', 0)} | {total} |"
                     )
-                if rating_lines:
-                    # Compute buy-side trend (strongBuy + buy)
+                if valid_count > 0:
+                    # Compute buy-side trend
                     first = trends[0]
                     last = trends[min(len(trends) - 1, 5)]
                     buy_now = first.get("strongBuy", 0) + first.get("buy", 0)
                     buy_then = last.get("strongBuy", 0) + last.get("buy", 0)
                     delta = buy_now - buy_then
                     if delta > 0:
-                        trend_str = f"Trend: Buy-side expanding (+{delta} over {len(rating_lines)} months)"
+                        trend_str = f"\nTrend: Buy-side expanding (+{delta} over {valid_count} months)"
                     elif delta < 0:
-                        trend_str = f"Trend: Buy-side contracting ({delta} over {len(rating_lines)} months)"
+                        trend_str = f"\nTrend: Buy-side contracting ({delta} over {valid_count} months)"
                     else:
-                        trend_str = "Trend: Stable"
-                    rating_lines.append(trend_str)
+                        trend_str = "\nTrend: Stable"
                     sym_sections.append(
-                        f"### {sym} — Analyst Ratings ({len(rating_lines) - 1}-month trend)\n"
-                        + "\n".join(rating_lines)
+                        f"### {sym} — Analyst Ratings ({valid_count}-month trend)\n"
+                        + "\n".join(ar_rows) + trend_str
                     )
         except Exception:
             pass
