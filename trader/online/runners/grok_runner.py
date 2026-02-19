@@ -109,14 +109,17 @@ async def run_grok(
     tool_traces: list[dict[str, Any]] = []
     hop_index = 0
 
-    conversation: list[Any] = [
+    input_messages: list[Any] = [
         {"role": "system", "content": system_prompt},
         {"role": "user", "content": user_message},
     ]
 
+    # store=True (default) so previous_response_id works for stateful
+    # continuation — required for server-side tools (x_search, web_search)
+    # to retain their results across turns in the tool-calling loop.
     response = client.responses.create(
         model=model,
-        input=conversation,
+        input=input_messages,
         tools=tools,
     )
 
@@ -137,19 +140,34 @@ async def run_grok(
 
     _accumulate_usage(response)
 
+    # Names used by xAI for server-side x_search sub-tools
+    _X_SEARCH_NAMES = {"x_keyword_search", "x_semantic_search"}
+
     # Extract server-side tool traces (x_search, web_search)
     def _extract_builtin_traces(resp: Any) -> None:
         nonlocal hop_index
         for item in resp.output:
             item_type = getattr(item, "type", None)
+            item_name = getattr(item, "name", "") or ""
 
-            if item_type in ("web_search_call", "x_search_call"):
-                tool_name = "web_search" if item_type == "web_search_call" else "x_search"
-                # Extract args and result based on action type:
-                #   search → query, open_page → url, find_in_page → pattern+url
-                action = getattr(item, "action", None)
-                action_type = getattr(action, "type", None) if action else None
-                args: dict[str, Any] = {}
+            # web_search: still reported as "web_search_call"
+            # x_search: now reported as "custom_tool_call" with name
+            #   "x_keyword_search" or "x_semantic_search"
+            if item_type == "web_search_call":
+                tool_name = "web_search"
+            elif item_type == "custom_tool_call" and item_name in _X_SEARCH_NAMES:
+                tool_name = "x_search"
+            elif item_type == "x_search_call":
+                # Legacy format (may still appear in older API versions)
+                tool_name = "x_search"
+            else:
+                continue
+
+            # Extract args based on action type or input field
+            args: dict[str, Any] = {}
+            action = getattr(item, "action", None)
+            if action:
+                action_type = getattr(action, "type", None)
                 if action_type == "search":
                     args["query"] = getattr(action, "query", "") or ""
                 elif action_type == "open_page":
@@ -157,22 +175,30 @@ async def run_grok(
                 elif action_type == "find_in_page":
                     args["pattern"] = getattr(action, "pattern", "") or ""
                     args["url"] = getattr(action, "url", "") or ""
-                # Serialize full item for diagnostics
-                item_data = item.model_dump() if hasattr(item, "model_dump") else None
-                trace = build_trace_dict(
-                    tool_name=tool_name,
-                    args=args,
-                    result=json.dumps(item_data) if item_data else None,
-                    error=None,
-                    start=time.time(),
-                    end=time.time(),
-                    hop_index=hop_index,
-                    cost_usd=_XAI_PER_CALL_FEE,
-                    builtin=True,
-                )
-                tool_traces.append(trace)
-                hop_index += 1
-                total_usage["tool_calls"] += 1
+            elif tool_name == "x_search":
+                # custom_tool_call format: query is in "input" field (JSON string)
+                raw_input = getattr(item, "input", "") or ""
+                try:
+                    parsed = json.loads(raw_input) if raw_input else {}
+                    args["query"] = parsed.get("query", "")
+                except (json.JSONDecodeError, TypeError):
+                    args["query"] = raw_input
+
+            item_data = item.model_dump() if hasattr(item, "model_dump") else None
+            trace = build_trace_dict(
+                tool_name=tool_name,
+                args=args,
+                result=json.dumps(item_data) if item_data else None,
+                error=None,
+                start=time.time(),
+                end=time.time(),
+                hop_index=hop_index,
+                cost_usd=_XAI_PER_CALL_FEE,
+                builtin=True,
+            )
+            tool_traces.append(trace)
+            hop_index += 1
+            total_usage["tool_calls"] += 1
 
     _extract_builtin_traces(response)
 
@@ -232,14 +258,13 @@ async def run_grok(
         if DEBUG:
             print(f"  [Grok] Turn {turn}: executed {len(function_calls)} function calls")
 
-        # Build full conversation for next turn (no previous_response_id —
-        # xAI doesn't support response storage)
-        conversation.extend(response.output)
-        conversation.extend(tool_results)
-
+        # Use previous_response_id for stateful continuation —
+        # this preserves server-side tool results (x_search, web_search)
+        # across turns. Requires store=True (default) on initial request.
         response = client.responses.create(
             model=model,
-            input=conversation,
+            input=tool_results,
+            previous_response_id=response.id,
             tools=tools,
         )
         _accumulate_usage(response)
