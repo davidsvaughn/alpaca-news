@@ -37,11 +37,13 @@
     "maintains in-line",
     "raises price target to",
     "Reports Next Week",
-    "Wall Street Expects Earnings Growth"
+    "Wall Street Expects Earnings Growth",
+    "pilot initiative",
+    "collaboration agreement for pilot"
   ],
   "sources_to_skip": [],
   "symbol_contexts": {},
-  "last_updated": "2026-02-17T23:46:35.546077+00:00",
-  "auto_learned": 38,
+  "last_updated": "2026-02-19T14:04:38.367201+00:00",
+  "auto_learned": 40,
   "human_edited": 0
 }
