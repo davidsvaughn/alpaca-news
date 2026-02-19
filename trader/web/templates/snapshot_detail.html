@@ -493,6 +493,7 @@
         <thead class="table-light">
           <tr>
             <th style="width:30px">#</th>
+            <th>Agent</th>
             <th>Tool</th>
             <th>Key Args</th>
             <th>Duration</th>
@@ -506,6 +507,12 @@
           {% set te = trace.get('execution', {}) %}
           <tr class="tool-trace-row" data-bs-toggle="collapse" data-bs-target="#gtrace-{{ loop.index }}">
             <td class="text-muted">{{ trace.get('hop_index', loop.index0) }}</td>
+            <td>
+              {% set agent = trace.get('agent', '') %}
+              {% if agent %}
+              <span class="badge bg-{{ 'danger' if agent == 'grok' else 'success' if agent == 'openai' else 'info' if agent == 'gemini' else 'secondary' }}" style="font-size: 0.68rem;">{{ agent }}</span>
+              {% endif %}
+            </td>
             <td><strong>{{ ta.get('tool', '?') }}</strong></td>
             <td class="text-truncate" style="max-width: 300px;">
               {% set args = ta.get('args', {}) %}
@@ -528,7 +535,7 @@
             </td>
           </tr>
           <tr class="collapse trace-collapse" id="gtrace-{{ loop.index }}">
-            <td colspan="6" class="p-0">
+            <td colspan="7" class="p-0">
               <div class="p-2 bg-light">
                 {% if trace.get('error') %}
                 <div class="alert alert-danger py-1 px-2 mb-2 small">{{ trace.error }}</div>

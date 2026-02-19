@@ -282,6 +282,7 @@ def process_news_file(
             label=trigger.headline[:80] if trigger.headline else path.name,
             symbols=trigger.symbols[:3],
             progress="triage",
+            stage_started_at=datetime.now(tz=timezone.utc).isoformat(),
             detail={"snapshot_id": snap_id},
         ))
 
@@ -332,10 +333,13 @@ def process_news_file(
 
     # Update activity after triage
     if tracker is not None:
+        _now = datetime.now(tz=timezone.utc).isoformat()
         if triage.action != "investigate":
-            tracker.update(_act_id, progress="skip", cost_usd=cost_tracker.item_spent)
+            tracker.update(_act_id, progress="skip", cost_usd=cost_tracker.item_spent,
+                           stage_started_at=_now)
         else:
-            tracker.update(_act_id, progress="exploring", cost_usd=cost_tracker.item_spent)
+            tracker.update(_act_id, progress="exploring", cost_usd=cost_tracker.item_spent,
+                           stage_started_at=_now)
 
     # --- Stage 2: Exploration (if investigate) ---
     signal = None  # set inside investigate block, used for watch creation
@@ -420,6 +424,14 @@ def process_news_file(
         if settings.mock_llm:
             pipeline_config = _build_mock_pipeline_config()
 
+        def _on_stage(name: str, idx: int, total: int) -> None:
+            if tracker is not None:
+                tracker.update(
+                    _act_id,
+                    progress=f"{name} ({idx}/{total})",
+                    stage_started_at=datetime.now(tz=timezone.utc).isoformat(),
+                )
+
         pipeline_result = None
         try:
             loop = _get_or_create_loop()
@@ -429,6 +441,7 @@ def process_news_file(
                 market=market,
                 config=pipeline_config,
                 x_stream_service=xstream,
+                on_stage=_on_stage if tracker is not None else None,
             ))
         except Exception as e:
             # Pipeline crashed entirely — save what we have

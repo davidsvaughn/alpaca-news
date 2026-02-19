@@ -26,11 +26,15 @@
   <span class="badge bg-primary">Exploring</span>
   <span class="text-muted small ms-1">({{ explorations|length }})</span>
   {% for a in explorations %}
-  <div class="d-flex align-items-center gap-2 ms-2 my-1 small">
+  <div class="d-flex align-items-center gap-2 ms-2 my-1 small"
+       data-started-at="{{ a.started_at }}"
+       {% if a.stage_started_at %}data-stage-started-at="{{ a.stage_started_at }}"{% endif %}>
     <div class="spinner-border spinner-border-sm text-primary" role="status"></div>
     {% for s in a.symbols %}<span class="badge bg-primary">{{ s }}</span>{% endfor %}
     <span class="text-muted">{{ a.label[:50] }}{% if a.label|length > 50 %}...{% endif %}</span>
     <span class="badge bg-secondary">{{ a.progress }}</span>
+    {% if a.stage_started_at %}<span class="stage-timer text-muted" style="font-size: 0.75rem;"></span>{% endif %}
+    <span class="elapsed-timer badge bg-light text-dark border" style="font-size: 0.72rem;"></span>
     {% if a.cost_usd > 0 %}<span class="text-warning">${{ "%.4f"|format(a.cost_usd) }}</span>{% endif %}
   </div>
   {% endfor %}
@@ -41,10 +45,12 @@
 <div class="mb-2">
   <span class="badge bg-secondary">Follow-up Collection</span>
   {% for a in fu_collections %}
-  <div class="d-flex align-items-center gap-2 ms-2 my-1 small">
+  <div class="d-flex align-items-center gap-2 ms-2 my-1 small"
+       data-started-at="{{ a.started_at }}">
     <div class="spinner-border spinner-border-sm text-secondary" role="status"></div>
     {% for s in a.symbols %}<span class="badge bg-primary">{{ s }}</span>{% endfor %}
     <span class="text-muted">{{ a.progress }}</span>
+    <span class="elapsed-timer badge bg-light text-dark border" style="font-size: 0.72rem;"></span>
   </div>
   {% endfor %}
 </div>

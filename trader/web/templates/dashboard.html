@@ -302,5 +302,35 @@
     addEvent(e.detail.type, e.detail.payload, null);
   });
 })();
+
+// Activity panel elapsed-time timers (update every second)
+(function() {
+  function fmt(secs) {
+    if (secs < 0) secs = 0;
+    var m = Math.floor(secs / 60), s = Math.floor(secs % 60);
+    return m + ':' + (s < 10 ? '0' : '') + s;
+  }
+  function tick() {
+    var now = Date.now();
+    document.querySelectorAll('#activity-panel [data-started-at]').forEach(function(el) {
+      var t0 = new Date(el.getAttribute('data-started-at')).getTime();
+      var span = el.querySelector('.elapsed-timer');
+      if (span && !isNaN(t0)) span.textContent = fmt((now - t0) / 1000);
+
+      var stageAttr = el.getAttribute('data-stage-started-at');
+      var stageSpan = el.querySelector('.stage-timer');
+      if (stageSpan && stageAttr) {
+        var st0 = new Date(stageAttr).getTime();
+        if (!isNaN(st0)) stageSpan.textContent = fmt((now - st0) / 1000);
+      }
+    });
+  }
+  setInterval(tick, 1000);
+  // Re-run immediately after HTMX swaps the activity panel
+  document.body.addEventListener('htmx:afterSwap', function(e) {
+    if (e.detail.target && e.detail.target.id === 'activity-panel') tick();
+  });
+  tick();
+})();
 </script>
 {% endblock %}

@@ -24,7 +24,7 @@ import json
 import os
 import time
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Callable
 
 from trader.market.data_service import MarketDataService
 from trader.online.agent_common import AgentRunResult, TradingSignal
@@ -537,6 +537,7 @@ async def run_pipeline(
     market: MarketDataService | None = None,
     config: PipelineConfig | None = None,
     x_stream_service: Any = None,
+    on_stage: Callable[[str, int, int], None] | None = None,
 ) -> PipelineResult:
     """Run the multi-agent sequential pipeline.
 
@@ -598,6 +599,9 @@ async def run_pipeline(
                 print(f"[Pipeline] Round {round_num + 1}, Agent {i + 1}/{len(config.agents)}: "
                       f"{spec.name} ({spec.runner}, {'final' if spec.is_final else 'intermediate'})")
 
+            if on_stage is not None:
+                on_stage(spec.name, i + 1, len(config.agents))
+
             start_time = time.time()
 
             try:
@@ -645,7 +649,9 @@ async def run_pipeline(
                         "requests", "tool_calls", "reasoning_tokens"):
                 total_usage[key] += agent_result.usage.get(key, 0)
 
-            # Collect traces
+            # Collect traces — stamp agent name on each
+            for _tr in agent_result.tool_traces:
+                _tr["agent"] = spec.name
             all_tool_traces.extend(agent_result.tool_traces)
 
             # Estimate per-agent cost
@@ -735,6 +741,7 @@ async def explore(
     market: MarketDataService | None = None,
     config: PipelineConfig | None = None,
     x_stream_service: Any = None,
+    on_stage: Callable[[str, int, int], None] | None = None,
 ) -> ExploreResult:
     """Run the multi-agent pipeline and return an ExploreResult.
 
@@ -747,6 +754,7 @@ async def explore(
         market=market,
         config=config,
         x_stream_service=x_stream_service,
+        on_stage=on_stage,
     )
 
     return ExploreResult(

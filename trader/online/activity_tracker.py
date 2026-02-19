@@ -23,6 +23,7 @@ class Activity:
     started_at: str = field(default_factory=lambda: datetime.now(tz=timezone.utc).isoformat())
     progress: str = ""  # "3/10", "triage", "agent 1/3", etc.
     cost_usd: float = 0.0
+    stage_started_at: str = ""  # ISO timestamp of when current stage/progress began
     detail: dict[str, Any] = field(default_factory=dict)
 
 
