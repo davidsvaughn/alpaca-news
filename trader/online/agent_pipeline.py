@@ -240,20 +240,12 @@ def _build_system_prompt(
         parts.extend([
             "- url_fetch — fetch and read the full text of any web page or article",
             "",
-            "**Market data tools (free — use liberally for non-primary symbols):**",
-            "- check_price — real-time quote with price, bid/ask, volume, change + trend context",
+            "**Market data tools (free — use for peer/competitor analysis):**",
+            "- check_price — real-time quote with price, bid/ask, volume, returns, 52-week range",
             "- get_price_history — historical OHLCV bars (1d–1y periods, 1m–1d intervals)",
             "- get_fundamentals — P/E, EPS, market cap, beta, 52-week range, dividend yield",
             "- get_financial_statements — income statement, balance sheet, or cash flow (last 4 periods)",
             "- get_technical_indicators — RSI, MACD, Bollinger, SMAs, ATR, etc. with interpretation",
-            "- check_options_activity — ATM IV, put/call volume & OI ratios",
-            "- check_volume_regime — current volume vs session average (detects abnormal volume)",
-            "- check_price_spike — detects significant recent price moves (>0.5% in 5 min)",
-            "- check_insider_activity — recent insider buys/sells/grants",
-            "- get_company_news — recent news articles (yfinance + Finnhub merged)",
-            "- get_analyst_ratings — analyst buy/hold/sell consensus and trends",
-            "- get_movers — top market gainers AND losers by index (one call, both directions)",
-            "- check_market_context — SPY, VIX, market session status",
         ])
     else:
         parts.append(
@@ -281,7 +273,6 @@ def _build_system_prompt(
             "- Read important articles with url_fetch for detailed information",
             "- Use market data tools for OTHER symbols (peers, sector ETFs, competitors)",
             "- Use get_financial_statements for deep fundamental digs (revenue trends, debt, cash flow)",
-            "- Use get_movers to check sector or market-wide dynamics",
         ])
     else:
         parts.extend([
@@ -591,6 +582,7 @@ class PipelineResult:
     all_tool_traces: list[dict[str, Any]]
     total_usage: dict[str, Any]
     rounds_completed: int
+    prefetched_market_data: str = ""
 
 
 async def run_pipeline(
@@ -631,6 +623,10 @@ async def run_pipeline(
     }
     signal: TradingSignal | None = None
     cumulative_cost: float = 0.0
+
+    # Pre-compute market data text (used in first agent's prompt, stored for export)
+    from trader.online.prompt_builder import prefetch_market_data
+    prefetch_text = prefetch_market_data(symbols, market) if market else ""
 
     for round_num in range(config.max_rounds):
         for i, spec in enumerate(config.agents):
@@ -790,6 +786,7 @@ async def run_pipeline(
         all_tool_traces=all_tool_traces,
         total_usage=total_usage,
         rounds_completed=round_num + 1,
+        prefetched_market_data=prefetch_text,
     )
 
 

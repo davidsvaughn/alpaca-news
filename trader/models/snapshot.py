@@ -63,6 +63,7 @@ class Snapshot:
     data_modalities: dict[str, list[int]]
     prediction: dict[str, Any]
     cost_summary: CostSummary
+    prefetched_market_data: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -120,6 +121,7 @@ class SnapshotBuilder:
         self.tool_traces: list[dict[str, Any]] = []
         self.rounds: list[dict[str, Any]] = []
         self.prediction: dict[str, Any] = {}
+        self.prefetched_market_data: str = ""
         self._cost_by_tool: dict[str, float] = {}
         self._cost_total: float = 0.0
 
@@ -192,4 +194,5 @@ class SnapshotBuilder:
                 total_usd=round(self._cost_total, 6),
                 by_tool={k: round(v, 6) for k, v in self._cost_by_tool.items()},
             ),
+            prefetched_market_data=self.prefetched_market_data,
         )

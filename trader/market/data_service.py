@@ -158,6 +158,59 @@ class MarketDataService:
                 raise
             return {"error": str(e), "symbol": symbol}
 
+    def compute_volume_delta_history(
+        self, symbol: str, days: int = 5,
+    ) -> list[dict[str, Any]]:
+        """Compute daily volume deltas for the last N trading days.
+
+        Uses yfinance 1-min bars (available for ~7 days back).
+        Returns list of per-day dicts (most recent first), each with
+        net_delta, imbalance, direction.
+        """
+        import numpy as np
+
+        try:
+            import yfinance as yf
+            ticker = yf.Ticker(symbol)
+            df = ticker.history(period=f"{days + 2}d", interval="1m")
+            if df is None or df.empty or len(df) < 10:
+                return []
+
+            results: list[dict[str, Any]] = []
+            # Group by trading date
+            df.index = df.index.tz_localize(None) if df.index.tz is None else df.index.tz_convert(None)
+            for date, group in df.groupby(df.index.date):
+                if len(group) < 5:
+                    continue
+                close = group["Close"].values.astype(float)
+                volume = group["Volume"].values.astype(float)
+
+                prev_close = np.roll(close, 1)
+                direction = np.sign(close - prev_close)
+                direction[0] = 0
+                for i in range(1, len(direction)):
+                    if direction[i] == 0:
+                        direction[i] = direction[i - 1]
+
+                uptick = float(np.sum(volume[direction > 0]))
+                downtick = float(np.sum(volume[direction < 0]))
+                total = uptick + downtick
+                net = uptick - downtick
+                imbalance = net / total if total > 0 else 0.0
+
+                results.append({
+                    "date": str(date),
+                    "net_delta": int(net),
+                    "imbalance": round(imbalance, 4),
+                    "direction": "bullish" if imbalance > 0.02 else ("bearish" if imbalance < -0.02 else "neutral"),
+                })
+
+            # Most recent first, limit to requested days
+            results.sort(key=lambda d: d["date"], reverse=True)
+            return results[:days]
+        except Exception:
+            return []
+
     # ------------------------------------------------------------------
     # Schwab-only tools
     # ------------------------------------------------------------------

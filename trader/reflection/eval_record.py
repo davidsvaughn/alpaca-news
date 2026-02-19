@@ -487,6 +487,18 @@ def snapshot_export_to_markdown(
             lines.append("")
 
     # ------------------------------------------------------------------
+    # Pre-fetched Market Data
+    # ------------------------------------------------------------------
+    prefetch_md = snapshot.get("prefetched_market_data") or ""
+    if prefetch_md:
+        lines.append("---")
+        lines.append("")
+        # The prefetch text starts with "## Pre-fetched market data\n\n"
+        # Include it directly — it's already markdown-formatted
+        lines.append(prefetch_md.strip())
+        lines.append("")
+
+    # ------------------------------------------------------------------
     # Triage
     # ------------------------------------------------------------------
     triage = snapshot.get("triage") or {}

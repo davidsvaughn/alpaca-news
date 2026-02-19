@@ -462,6 +462,9 @@ def process_news_file(
             for trace in pipeline_result.all_tool_traces:
                 builder.add_tool_trace(trace)
 
+            # Store pre-fetched market data text for export display
+            builder.prefetched_market_data = pipeline_result.prefetched_market_data
+
             # Store agent rounds (findings, usage, model) for training data
             for rnd in pipeline_result.rounds:
                 builder.add_round(rnd)

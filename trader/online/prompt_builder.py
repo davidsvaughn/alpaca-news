@@ -413,14 +413,28 @@ def prefetch_market_data(symbols: list[str], market: MarketDataService) -> str:
                 direction = vdelta["direction"]
                 uptick_pct = vdelta["uptick_volume"] / max(vdelta["uptick_volume"] + vdelta["downtick_volume"], 1) * 100
                 # Format net delta with K/M suffix
-                abs_net = abs(net)
-                if abs_net >= 1_000_000:
-                    net_str = f"{net/1e6:+.1f}M"
-                elif abs_net >= 1_000:
-                    net_str = f"{net/1e3:+.0f}K"
-                else:
-                    net_str = f"{net:+,}"
-                line = f"Net delta: {net_str} shares ({direction}) | Imbalance: {imb:+.2f} (uptick {uptick_pct:.0f}% / downtick {100-uptick_pct:.0f}%)"
+                def _fmt_delta(n: int) -> str:
+                    a = abs(n)
+                    if a >= 1_000_000:
+                        return f"{n/1e6:+.1f}M"
+                    if a >= 1_000:
+                        return f"{n/1e3:+.0f}K"
+                    return f"{n:+,}"
+
+                line = (
+                    f"Net delta: {_fmt_delta(net)} shares ({direction}) | "
+                    f"Imbalance: {imb:+.2f} (uptick {uptick_pct:.0f}% / downtick {100-uptick_pct:.0f}%)"
+                )
+
+                # Multi-day volume delta (yfinance 1-min bars, up to 5 days)
+                try:
+                    daily_deltas = market.compute_volume_delta_history(sym, days=5)
+                    if daily_deltas and len(daily_deltas) > 1:
+                        delta_strs = [_fmt_delta(d["net_delta"]) for d in daily_deltas]
+                        line += f"\n5-day net deltas (recent→old): [{', '.join(delta_strs)}]"
+                except Exception:
+                    pass
+
                 sym_sections.append(f"### {sym} — Volume Delta\n{line}")
         except Exception:
             pass
@@ -471,28 +485,43 @@ def prefetch_market_data(symbols: list[str], market: MarketDataService) -> str:
         except Exception:
             pass
 
-        # Analyst ratings (FinnHub)
+        # Analyst ratings — 6-month trend (FinnHub)
         try:
             from trader.market.finnhub_client import get_recommendation_trends
             trends = get_recommendation_trends(sym)
             if trends:
-                latest = trends[0]
-                total = (latest.get("strongBuy", 0) + latest.get("buy", 0)
-                         + latest.get("hold", 0) + latest.get("sell", 0)
-                         + latest.get("strongSell", 0))
-                if total > 0:
-                    parts_r = [
-                        f"Strong Buy: {latest.get('strongBuy', 0)}",
-                        f"Buy: {latest.get('buy', 0)}",
-                        f"Hold: {latest.get('hold', 0)}",
-                        f"Sell: {latest.get('sell', 0)}",
-                        f"Strong Sell: {latest.get('strongSell', 0)}",
-                    ]
-                    period = latest.get("period", "")
-                    header = f"### {sym} — Analyst Ratings"
-                    if period:
-                        header += f" ({period})"
-                    sym_sections.append(f"{header}\n{' | '.join(parts_r)} ({total} analysts)")
+                rating_lines: list[str] = []
+                for t in trends[:6]:
+                    total = (t.get("strongBuy", 0) + t.get("buy", 0)
+                             + t.get("hold", 0) + t.get("sell", 0)
+                             + t.get("strongSell", 0))
+                    if total <= 0:
+                        continue
+                    period = t.get("period", "?")
+                    rating_lines.append(
+                        f"{period}: Strong Buy: {t.get('strongBuy', 0)} | "
+                        f"Buy: {t.get('buy', 0)} | Hold: {t.get('hold', 0)} | "
+                        f"Sell: {t.get('sell', 0)} | Strong Sell: {t.get('strongSell', 0)} "
+                        f"({total} analysts)"
+                    )
+                if rating_lines:
+                    # Compute buy-side trend (strongBuy + buy)
+                    first = trends[0]
+                    last = trends[min(len(trends) - 1, 5)]
+                    buy_now = first.get("strongBuy", 0) + first.get("buy", 0)
+                    buy_then = last.get("strongBuy", 0) + last.get("buy", 0)
+                    delta = buy_now - buy_then
+                    if delta > 0:
+                        trend_str = f"Trend: Buy-side expanding (+{delta} over {len(rating_lines)} months)"
+                    elif delta < 0:
+                        trend_str = f"Trend: Buy-side contracting ({delta} over {len(rating_lines)} months)"
+                    else:
+                        trend_str = "Trend: Stable"
+                    rating_lines.append(trend_str)
+                    sym_sections.append(
+                        f"### {sym} — Analyst Ratings ({len(rating_lines) - 1}-month trend)\n"
+                        + "\n".join(rating_lines)
+                    )
         except Exception:
             pass
 
@@ -504,6 +533,60 @@ def prefetch_market_data(symbols: list[str], market: MarketDataService) -> str:
                 formatted = format_metrics_for_prompt(metrics)
                 if formatted:
                     sym_sections.append(f"### {sym} — Growth & Valuation\n{formatted}")
+        except Exception:
+            pass
+
+        # Analyst price targets (yfinance)
+        try:
+            import yfinance as yf
+            ticker = yf.Ticker(sym)
+            targets = ticker.analyst_price_targets
+            if targets is not None and hasattr(targets, "get"):
+                mean_t = targets.get("mean") or targets.get("current")
+                high_t = targets.get("high")
+                low_t = targets.get("low")
+                if mean_t:
+                    parts_t = [f"Mean Target: ${mean_t:.2f}"]
+                    if high_t:
+                        parts_t.append(f"High: ${high_t:.2f}")
+                    if low_t:
+                        parts_t.append(f"Low: ${low_t:.2f}")
+                    # Compute upside/downside vs current price
+                    current = None
+                    for s in sym_sections:
+                        if "Current:" in s and sym in s:
+                            import re
+                            m = re.search(r"Current:\s*\$?([\d.]+)", s)
+                            if m:
+                                current = float(m.group(1))
+                            break
+                    if current and current > 0:
+                        upside = (mean_t - current) / current * 100
+                        parts_t.append(f"Upside to mean: {upside:+.1f}%")
+                    sym_sections.append(f"### {sym} — Price Targets\n" + " | ".join(parts_t))
+        except Exception:
+            pass
+
+        # Ownership summary (yfinance)
+        try:
+            import yfinance as yf
+            ticker = yf.Ticker(sym)
+            holders = ticker.major_holders
+            if holders is not None and not holders.empty:
+                own_lines = []
+                for _, row in holders.iterrows():
+                    own_lines.append(f"{row.iloc[1]}: {row.iloc[0]}")
+                if own_lines:
+                    sym_sections.append(f"### {sym} — Ownership\n" + " | ".join(own_lines))
+        except Exception:
+            pass
+
+        # Peer companies (FinnHub)
+        try:
+            from trader.market.finnhub_client import get_company_peers
+            peers = get_company_peers(sym)
+            if peers:
+                sym_sections.append(f"### {sym} — Peers\n{', '.join(peers[:8])}")
         except Exception:
             pass
 

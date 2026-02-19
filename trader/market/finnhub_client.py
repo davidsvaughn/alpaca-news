@@ -150,6 +150,30 @@ def get_earnings_calendar(
         return []
 
 
+def get_company_peers(
+    symbol: str,
+    *,
+    api_key: str | None = None,
+) -> list[str]:
+    """Fetch peer/competitor tickers for a symbol from FinnHub."""
+    key = api_key or os.getenv("FINNHUB_API_KEY")
+    if not key:
+        return []
+    try:
+        resp = _get(
+            f"{_BASE_URL}/stock/peers",
+            {"symbol": symbol.upper(), "token": key},
+        )
+        resp.raise_for_status()
+        peers = resp.json()
+        if isinstance(peers, list):
+            # Filter out the symbol itself
+            return [p for p in peers if p.upper() != symbol.upper()][:10]
+        return []
+    except Exception:
+        return []
+
+
 def get_recommendation_trends(
     symbol: str,
     *,
@@ -351,9 +375,6 @@ def format_news_for_prompt(
         headline = article.get("headline", "?")
         source = article.get("source", "?")
         summary = article.get("summary", "")
-        # Truncate long summaries
-        if len(summary) > 200:
-            summary = summary[:197] + "..."
         lines.append(f"- [{dt}] ({source}) {headline}")
         if summary:
             lines.append(f"  {summary}")
