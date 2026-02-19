@@ -597,6 +597,14 @@ def create_app(
         follow_ups = get_follow_ups_by_snapshot(db, snapshot_id)
         return snap, watch, follow_ups
 
+    def _export_filename(snap: dict[str, Any], ext: str) -> str:
+        """Build export filename like snapshot_AAPL_0c5470b4.json."""
+        trigger = snap.get("trigger") or {}
+        symbols = trigger.get("symbols") or []
+        ticker = symbols[0] if symbols else "UNK"
+        short_id = snap.get("snapshot_id", "unknown")[:8]
+        return f"snapshot_{ticker}_{short_id}.{ext}"
+
     @app.get("/api/snapshots/{snapshot_id}/export")
     async def api_snapshot_export(snapshot_id: str):
         """Export snapshot + watch + follow-ups as a downloadable JSON file."""
@@ -609,11 +617,11 @@ def create_app(
             "follow_ups": follow_ups,
         }
         content = json.dumps(blob, indent=2, default=str, ensure_ascii=False)
-        short_id = snapshot_id[:12]
+        fname = _export_filename(snap, "json")
         return Response(
             content=content,
             media_type="application/json",
-            headers={"Content-Disposition": f'attachment; filename="snapshot_{short_id}.json"'},
+            headers={"Content-Disposition": f'attachment; filename="{fname}"'},
         )
 
     @app.get("/api/snapshots/{snapshot_id}/export/md")
@@ -623,11 +631,11 @@ def create_app(
         if snap is None:
             return Response(content="Snapshot not found", status_code=404)
         content = snapshot_export_to_markdown(snap, watch, follow_ups)
-        short_id = snapshot_id[:12]
+        fname = _export_filename(snap, "md")
         return Response(
             content=content,
             media_type="text/markdown; charset=utf-8",
-            headers={"Content-Disposition": f'attachment; filename="snapshot_{short_id}.md"'},
+            headers={"Content-Disposition": f'attachment; filename="{fname}"'},
         )
 
     # ------------------------------------------------------------------
