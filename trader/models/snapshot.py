@@ -9,8 +9,8 @@ then .seal() produces a frozen Snapshot.
 
 from __future__ import annotations
 
-import hashlib
 import json
+import random
 import uuid
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
@@ -77,22 +77,17 @@ class Snapshot:
 
 
 def deterministic_snapshot_id(news: dict[str, Any]) -> str:
-    """Derive a deterministic snapshot_id from the Alpaca article.
+    """Derive a snapshot_id from the news article.
 
-    Uses the Alpaca article ``id`` if present, otherwise hashes the headline +
-    created_at to produce a reproducible UUID.  This makes backfill idempotent:
-    processing the same news file twice yields the same snapshot_id.
+    Uses the Alpaca article ``id`` directly if present, otherwise generates
+    a random 8-digit integer (for manual explores).
     """
     alpaca_id = news.get("id")
     if alpaca_id is not None:
-        # Stable namespace UUID from the integer article id
-        return str(uuid.uuid5(uuid.NAMESPACE_URL, f"alpaca-news:{alpaca_id}"))
+        return str(alpaca_id)
 
-    # Fallback: hash headline + timestamp
-    key = f"{news.get('headline', '')}|{news.get('created_at', '')}"
-    digest = hashlib.sha256(key.encode("utf-8")).hexdigest()[:32]
-    # Format as UUID for consistency
-    return str(uuid.UUID(digest))
+    # Manual explore: random 8-digit integer
+    return str(random.randint(10_000_000, 99_999_999))
 
 
 class SnapshotBuilder:
