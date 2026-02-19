@@ -50,7 +50,7 @@ def mock_market():
     market.check_price_spike.return_value = {"spike": False}
     market.check_volume_regime.return_value = {"abnormal": False}
     market.get_financial_statements.return_value = {"statements": []}
-    market.get_finnhub_news.return_value = {"articles": []}
+    market.get_finnhub_news.return_value = {"symbol": "NVDA", "count": 0, "articles": [], "source": "finnhub"}
     market.get_analyst_ratings.return_value = {"ratings": []}
     return market
 

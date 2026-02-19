@@ -166,22 +166,13 @@ class FollowUpCollector:
             except Exception as e:
                 price_data[sym] = {"error": str(e)}
 
-        # 2b: News (free — yfinance + Finnhub)
+        # 2b: News (free — yfinance + Finnhub merged)
         news_data: list[dict[str, Any]] = []
         for sym in symbols:
             try:
-                news_data.append(self.market.get_company_news(sym, max_articles=5))
+                news_data.append(self.market.get_company_news(sym, max_articles=10))
             except Exception as e:
                 news_data.append({"symbol": sym, "error": str(e)})
-
-        finnhub_data: list[dict[str, Any]] = []
-        for sym in symbols:
-            try:
-                from trader.market.finnhub_client import get_company_news as _fh_news
-                articles = _fh_news(sym, days_back=3)
-                finnhub_data.append({"symbol": sym, "articles": articles[:10]})
-            except Exception as e:
-                finnhub_data.append({"symbol": sym, "error": str(e)})
 
         # 2c: Web search (paid — skip if over budget)
         web_results: list[dict[str, Any]] = []
@@ -211,7 +202,6 @@ class FollowUpCollector:
             x_results=x_results,
             query_plan=query_plan_dict,
             cost_usd=round(cost_this, 6),
-            finnhub_news=finnhub_data,
         )
         builder.add_collection(collection)
 

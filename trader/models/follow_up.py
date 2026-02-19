@@ -51,12 +51,11 @@ class FollowUpCollection:
     collected_at: str                   # ISO timestamp
     offset_label: str                   # "+1h", "+4h", "+1d", etc.
     price: dict[str, Any]               # get_quote() result per symbol
-    news: list[dict[str, Any]]          # get_company_news() results (yfinance)
+    news: list[dict[str, Any]]          # get_company_news() results (yfinance + Finnhub merged)
     web_results: list[dict[str, Any]]   # [{query, answer, citations, quality}, ...]
     x_results: list[dict[str, Any]]     # [{query, answer, citations, quality}, ...]
     query_plan: dict[str, Any]          # {web_queries, x_queries, reasoning}
     cost_usd: float
-    finnhub_news: list[dict[str, Any]] = field(default_factory=list)  # Finnhub company news
 
 
 @dataclass(frozen=True)

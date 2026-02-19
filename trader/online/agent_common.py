@@ -29,7 +29,6 @@ TOOL_MODALITY: dict[str, str] = {
     "get_technical_indicators": "market_data",
     "check_insider_activity": "fundamentals",
     "get_company_news": "news",
-    "get_finnhub_news": "news",
     "get_analyst_ratings": "fundamentals",
     "url_fetch": "web_research",
     "web_search": "web_research",

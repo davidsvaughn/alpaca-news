@@ -245,8 +245,7 @@ def _build_system_prompt(
             "- check_volume_regime — current volume vs session average (detects abnormal volume)",
             "- check_price_spike — detects significant recent price moves (>0.5% in 5 min)",
             "- check_insider_activity — recent insider buys/sells/grants",
-            "- get_company_news — recent news articles (yfinance)",
-            "- get_finnhub_news — recent news with headlines, summaries, sources (FinnHub)",
+            "- get_company_news — recent news articles (yfinance + Finnhub merged)",
             "- get_analyst_ratings — analyst buy/hold/sell consensus and trends",
             "- get_movers — top market gainers/losers by index (check for sector-wide moves)",
             "- check_market_context — SPY, VIX, market session status",
@@ -389,7 +388,7 @@ def _build_pipeline_user_message(
 _PREFETCHED_TOOLS = frozenset({
     "check_price", "get_fundamentals", "get_technical_indicators",
     "check_options_activity", "check_volume_regime", "check_price_spike",
-    "check_insider_activity", "get_company_news", "get_finnhub_news",
+    "check_insider_activity", "get_company_news",
     "get_analyst_ratings", "get_price_history", "check_market_context",
 })
 

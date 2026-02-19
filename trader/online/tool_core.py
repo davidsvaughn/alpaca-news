@@ -97,35 +97,10 @@ def check_insider_activity(market: MarketDataService, symbol: str) -> str:
 
 
 def get_company_news(market: MarketDataService, symbol: str) -> str:
-    """Get recent news articles for a company (yfinance)."""
-    result = market.get_company_news(symbol, max_articles=5)
+    """Get recent news articles for a company (yfinance + Finnhub)."""
+    result = market.get_company_news(symbol, max_articles=10)
     return json.dumps(result, default=str)
 
-
-def get_finnhub_news(market: MarketDataService, symbol: str, days_back: int = 3) -> str:
-    """Get recent company news from FinnHub.
-
-    Args:
-        symbol: Stock ticker (e.g. 'AAPL', 'NVDA')
-        days_back: How many days of history (default 3, max 7)
-    """
-    from trader.market.finnhub_client import get_company_news as _fh_news
-
-    days_back = min(days_back, 7)
-    articles = _fh_news(symbol, days_back=days_back)
-    if not articles:
-        return json.dumps({"symbol": symbol, "articles": [], "note": "No articles found or FINNHUB_API_KEY not set"})
-    trimmed = []
-    for a in articles[:15]:
-        trimmed.append({
-            "headline": a.get("headline", ""),
-            "summary": (a.get("summary") or "")[:300],
-            "source": a.get("source", ""),
-            "datetime": a.get("datetime", 0),
-            "url": a.get("url", ""),
-            "related": a.get("related", ""),
-        })
-    return json.dumps({"symbol": symbol, "count": len(articles), "articles": trimmed}, default=str)
 
 
 def get_analyst_ratings(market: MarketDataService, symbol: str) -> str:
@@ -417,23 +392,8 @@ TOOL_REGISTRY: list[ToolDef] = [
     ToolDef(
         name="get_company_news",
         func=get_company_news,
-        description="Get recent news articles for a company (yfinance).",
+        description="Get recent news articles for a company (yfinance + Finnhub merged).",
         parameters=_sym_param(),
-        modality="news",
-    ),
-    ToolDef(
-        name="get_finnhub_news",
-        func=get_finnhub_news,
-        description="Get recent company news from FinnHub with headlines, summaries, sources, and URLs.",
-        parameters={
-            "type": "object",
-            "properties": {
-                "symbol": {"type": "string", "description": "Stock ticker (e.g. 'AAPL', 'NVDA')"},
-                "days_back": {"type": "integer", "description": "How many days of history (default 3, max 7)", "default": 3},
-            },
-            "required": ["symbol"],
-            "additionalProperties": False,
-        },
         modality="news",
     ),
     ToolDef(

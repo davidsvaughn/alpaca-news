@@ -95,7 +95,6 @@ TOOL_MODALITY: dict[str, str] = {
     "get_technical_indicators": "market_data",
     "check_insider_activity": "fundamentals",
     "get_company_news": "news",
-    "get_finnhub_news": "news",
     "get_analyst_ratings": "fundamentals",
     "url_fetch": "web_research",
     "web_search": "web_research",
@@ -263,19 +262,6 @@ def get_company_news(ctx: RunContext[ExplorerDeps], symbol: str) -> str:
     from trader.online.tool_core import get_company_news as _impl
     return _impl(ctx.deps.market, symbol)
 
-
-@market_toolset.tool
-def get_finnhub_news(ctx: RunContext[ExplorerDeps], symbol: str, days_back: int = 3) -> str:
-    """Get recent company news from FinnHub. Free (60 req/min limit).
-    Returns headlines, summaries, sources, and URLs for a ticker.
-    Good for checking what's been reported recently about any company.
-
-    Args:
-        symbol: Stock ticker (e.g. 'AAPL', 'NVDA')
-        days_back: How many days of history (default 3, max 7)
-    """
-    from trader.online.tool_core import get_finnhub_news as _impl
-    return _impl(ctx.deps.market, symbol, days_back)
 
 
 @market_toolset.tool
@@ -481,7 +467,7 @@ You have access to:
 - **X stream cache** (free): get cached posts from the live X filtered stream
 
 ## Cost awareness
-- Financial data tools, url_fetch, get_finnhub_news, and x_stream_cache are **free** — use liberally.
+- Financial data tools, url_fetch, and x_stream_cache are **free** — use liberally.
 - web_search and x_search cost per call — use purposefully, not wastefully.
 
 ## Your task

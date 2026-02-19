@@ -6,8 +6,8 @@ Tries Schwab first (real-time, richer data) and falls back to yfinance
 
 For tools that only one vendor provides, delegates directly:
 - Schwab-only: options activity, movers, market hours, streaming, real-time quotes
-- yfinance-only: company news, technical indicators
-- Finnhub primary (yfinance fallback): insider activity
+- yfinance-only: company news (yfinance), technical indicators
+- Finnhub (yfinance fallback): company news (finnhub), insider activity
 
 For overlapping tools (fundamentals, price history), tries Schwab → yfinance.
 """
@@ -316,11 +316,49 @@ class MarketDataService:
         result["source"] = "yfinance"
         return result
 
-    def get_company_news(self, symbol: str, max_articles: int = 10) -> dict[str, Any]:
-        """Recent company news articles (yfinance only)."""
+    def get_company_news(
+        self, symbol: str, max_articles: int = 10, finnhub_days_back: int = 7,
+    ) -> dict[str, Any]:
+        """Recent company news articles (yfinance + Finnhub, merged)."""
+        from datetime import datetime as _dt, timezone as _tz
+
         result = self._yfinance.get_company_news(symbol, max_articles=max_articles)
-        result["source"] = "yfinance"
+
+        # Tag yfinance articles
+        for a in result.get("articles", []):
+            a.setdefault("source", "yfinance")
+
+        # Merge Finnhub articles
+        try:
+            fh = self.get_finnhub_news(symbol, days_back=finnhub_days_back, max_articles=max_articles)
+            for a in fh.get("articles", []):
+                a.setdefault("source", "finnhub")
+                # Normalize field names to match yfinance shape
+                if "headline" in a and "title" not in a:
+                    a["title"] = a["headline"]
+                if "datetime" in a and "published_at" not in a:
+                    ts = a["datetime"]
+                    if isinstance(ts, (int, float)) and ts > 0:
+                        a["published_at"] = _dt.fromtimestamp(ts, tz=_tz.utc).isoformat()
+                if "source" not in a:
+                    a["source"] = "finnhub"
+                result.setdefault("articles", []).append(a)
+        except Exception:
+            pass  # Finnhub failure shouldn't break news collection
+
+        result["source"] = "yfinance+finnhub"
+        result["article_count"] = len(result.get("articles", []))
         return result
+
+    def get_finnhub_news(
+        self, symbol: str, days_back: int = 7, max_articles: int = 15
+    ) -> dict[str, Any]:
+        """Recent company news from Finnhub."""
+        from trader.market.finnhub_client import get_company_news as _fh_news
+
+        articles = _fh_news(symbol, days_back=min(days_back, 7))
+        articles = articles[:max_articles]
+        return {"symbol": symbol, "count": len(articles), "articles": articles, "source": "finnhub"}
 
     def get_technical_indicators(
         self,
