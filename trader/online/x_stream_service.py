@@ -52,6 +52,14 @@ class QualityVerdict:
     reasoning: str
     revised_rule_values: list[str] | None = None
 
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "relevant": self.relevant,
+            "confidence": self.confidence,
+            "reasoning": self.reasoning,
+            "revised_rule_values": self.revised_rule_values,
+        }
+
 
 # Type alias for the quality callback.
 # Receives (collected_posts, current_rules) → QualityVerdict
@@ -85,6 +93,10 @@ class XStreamService:
         self._stop_evt = threading.Event()
         self._burst_stop_evt = threading.Event()
         self._current_burst_thread: threading.Thread | None = None
+
+        # Burst result (captured at end of _run_burst, thread-safe)
+        self._burst_result: dict[str, Any] | None = None
+        self._burst_result_lock = threading.Lock()
 
         # Usage polling state
         self._usage_last: dict[str, Any] | None = None
@@ -120,6 +132,18 @@ class XStreamService:
         with self._lock:
             items = list(self._cache.get(key, deque()))
         return items[-limit:]
+
+    def wait_burst_complete(self, timeout: float = 15.0) -> bool:
+        """Wait for the current burst thread to finish. Returns True if completed."""
+        t = self._current_burst_thread
+        if t is not None and t.is_alive():
+            t.join(timeout=timeout)
+        return t is None or not t.is_alive()
+
+    def get_burst_result(self) -> dict[str, Any] | None:
+        """Return the last burst's metadata (rules, verdict, timing, post count)."""
+        with self._burst_result_lock:
+            return self._burst_result
 
     # -----------------------------------------------------------------
     # Rule/burst execution
@@ -223,6 +247,7 @@ class XStreamService:
         global_start = time.time()
         total_posts = 0
         current_rules = list(rules)
+        last_verdict: QualityVerdict | None = None
 
         self.bus.publish(PipelineEvent(
             type="x_burst_start",
@@ -273,6 +298,7 @@ class XStreamService:
                     ):
                         try:
                             verdict = quality_check(collected, current_rules)  # type: ignore[misc]
+                            last_verdict = verdict
                             self.bus.publish(PipelineEvent(
                                 type="x_burst_quality",
                                 payload={
@@ -343,12 +369,24 @@ class XStreamService:
                 raise
             self.bus.publish(PipelineEvent(type="x_usage_error", payload={"error": str(e)}))
 
+        # Store burst result for snapshot capture
+        duration = round(time.time() - global_start, 1)
+        with self._burst_result_lock:
+            self._burst_result = {
+                "rules": [r.value for r in rules],
+                "rule_tags": [r.tag for r in rules],
+                "posts_collected": total_posts,
+                "quality_verdict": last_verdict.to_dict() if last_verdict else None,
+                "quality_attempts": attempt + 1,
+                "duration_s": duration,
+            }
+
         self.bus.publish(
             PipelineEvent(
                 type="x_burst_end",
                 payload={
                     "posts_seen": total_posts,
-                    "duration_s": round(time.time() - global_start, 3),
+                    "duration_s": duration,
                     "attempts": attempt + 1,
                 },
             )
@@ -391,19 +429,15 @@ def build_rules_for_symbols(
     """Build X stream filter rules for stock symbols.
 
     Strategy:
-    - Always include $TICKER cashtag (high signal)
-    - For short/ambiguous tickers (< 5 chars), also require context:166.*
-      (X Stocks domain) to ensure financial relevance
+    - Always include $TICKER cashtag (high signal for financial tweets)
     - If a company name is provided, include it as an alternative match
-    - Only include bare TICKER word for longer/uncommon tickers (5+ chars)
+    - For longer tickers (5+ chars), also match the bare word
     - Exclude retweets, English only
-
-    The context:166.* operator requires Pro tier. If not available, the
-    quality gate serves as fallback.
+    - The quality gate filters out irrelevant tweets after collection
     """
     names = company_names or {}
     out: list[StreamRule] = []
-    for s in symbols[:3]:  # cap tightness in the rule set
+    for s in symbols[:3]:
         sym = s.strip().upper()
         if not sym:
             continue
@@ -417,9 +451,8 @@ def build_rules_for_symbols(
             # Short ticker + known company name: use both for better signal
             value = f"(${sym} OR \"{name}\") -is:retweet lang:en"
         else:
-            # Short ticker, no company name: require Stocks domain context
-            # (context:166.* = X's ML classification for stock-related content)
-            # Falls back to cashtag-only if context: operator unavailable
-            value = f"${sym} context:166.* -is:retweet lang:en"
+            # Short ticker, no company name: cashtag only
+            # Quality gate filters irrelevant matches
+            value = f"${sym} -is:retweet lang:en"
         out.append(StreamRule(value=value, tag=sym))
     return out

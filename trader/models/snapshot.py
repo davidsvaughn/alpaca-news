@@ -64,6 +64,7 @@ class Snapshot:
     prediction: dict[str, Any]
     cost_summary: CostSummary
     prefetched_market_data: str = ""
+    x_stream_burst: dict[str, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -122,6 +123,7 @@ class SnapshotBuilder:
         self.rounds: list[dict[str, Any]] = []
         self.prediction: dict[str, Any] = {}
         self.prefetched_market_data: str = ""
+        self.x_stream_burst: dict[str, Any] | None = None
         self._cost_by_tool: dict[str, float] = {}
         self._cost_total: float = 0.0
 
@@ -195,4 +197,5 @@ class SnapshotBuilder:
                 by_tool={k: round(v, 6) for k, v in self._cost_by_tool.items()},
             ),
             prefetched_market_data=self.prefetched_market_data,
+            x_stream_burst=self.x_stream_burst,
         )

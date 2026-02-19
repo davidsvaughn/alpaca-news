@@ -533,37 +533,16 @@ def process_news_file(
                         raise
                     bus.publish(PipelineEvent(type="evidence_acquire_error", payload={"error": str(e)}))
 
-            # Optional: attach a small snapshot of X cache as evidence.
-            # Only relevant for fresh news where a burst was actually started.
+            # Capture X stream burst data (wait for burst to finish, then grab results)
             if xstream is not None and settings.x_stream_enabled and _news_is_fresh(trigger):
                 try:
-                    x_items = xstream.get_recent_posts(key="_all", limit=10)
-                    if x_items:
-                        from trader.models.tool_trace import TraceExecution, new_tool_trace, utc_now_iso
-
-                        builder.add_tool_trace(
-                            new_tool_trace(
-                                trace_id=f"trace_x_cache_{int(time.time())}",
-                                hop_index=len(builder.tool_traces) + 1,
-                                parent_trace_id=None,
-                                decision_context={
-                                    "state_summary": "",
-                                    "reason_for_action": "Attach recent X stream cache posts",
-                                    "symbols": symbols,
-                                },
-                                action={
-                                    "tool": "x_stream_cache",
-                                    "provider": "xapi",
-                                    "query_template": "x_stream_cache_recent",
-                                    "query": "_all",
-                                    "filters": {"limit": 10},
-                                },
-                                execution=TraceExecution(model="xapi", start_time=utc_now_iso(), end_time=utc_now_iso(), cost_usd=0.0),
-                                results=[{"source_type": "x_stream", "title": "x_post", "snippet": json.dumps(x, ensure_ascii=False)[:800]} for x in x_items],
-                                extracted_signals={"posts_included": len(x_items)},
-                                stop_signal={"should_stop": False, "reason": ""},
-                            )
-                        )
+                    xstream.wait_burst_complete(timeout=15)
+                    burst_result = xstream.get_burst_result()
+                    if burst_result:
+                        all_posts = xstream.get_recent_posts(key="_all", limit=100)
+                        burst_result["posts"] = all_posts
+                        burst_result["posts_in_cache"] = len(all_posts)
+                        builder.x_stream_burst = burst_result
                 except Exception as e:
                     if DEBUG:
                         raise

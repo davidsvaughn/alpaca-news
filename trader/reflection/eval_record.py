@@ -721,6 +721,42 @@ def snapshot_export_to_markdown(
         lines.append("")
 
     # ------------------------------------------------------------------
+    # X Stream Burst
+    # ------------------------------------------------------------------
+    x_burst = snapshot.get("x_stream_burst")
+    if x_burst:
+        lines.append("---")
+        lines.append("")
+        lines.append("## X Stream Burst")
+        lines.append("")
+        _kv(lines, "Rules", ", ".join(x_burst.get("rules", [])))
+        _kv(lines, "Duration", f"{x_burst.get('duration_s', 0)}s")
+        _kv(lines, "Posts Collected", x_burst.get("posts_collected", 0))
+        _kv(lines, "Posts in Cache", x_burst.get("posts_in_cache", 0))
+        _kv(lines, "Quality Attempts", x_burst.get("quality_attempts", 0))
+
+        verdict = x_burst.get("quality_verdict")
+        if verdict:
+            _kv(lines, "Quality Relevant", verdict.get("relevant"))
+            _kv(lines, "Quality Confidence", verdict.get("confidence"))
+            _kv(lines, "Quality Reasoning", verdict.get("reasoning"))
+            if verdict.get("revised_rule_values"):
+                _kv(lines, "Revised Rules", ", ".join(verdict["revised_rule_values"]))
+
+        posts = x_burst.get("posts", [])
+        if posts:
+            lines.append("")
+            lines.append(f"### Collected Posts ({len(posts)})")
+            lines.append("")
+            for p in posts[:20]:
+                data = p.get("data", {})
+                text = data.get("text", p.get("text", "?"))
+                author = data.get("author_id", "?")
+                tags = [r.get("tag") for r in (p.get("matching_rules") or [])]
+                lines.append(f"- [{', '.join(tags)}] @{author}: {text[:300]}")
+        lines.append("")
+
+    # ------------------------------------------------------------------
     # Watch
     # ------------------------------------------------------------------
     if watch:
