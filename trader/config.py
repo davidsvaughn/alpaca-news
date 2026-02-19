@@ -142,6 +142,9 @@ class Settings:
     pipeline_max_cost_usd: float
     # Per-agent timeout (seconds). 0 = no timeout.
     pipeline_agent_timeout_s: float
+    # Include the OpenAI middle agent in the pipeline (default: False).
+    # When False, pipeline is Grok → Gemini (2 agents).
+    pipeline_include_openai: bool
     # OpenAI (gpt-5-mini) web_search cap (0 = unlimited). Prompt-enforced.
     openai_web_search_limit: int
     # Max concurrent exploration workers. 1 = sequential (no parallelism).
@@ -257,6 +260,7 @@ def load_settings(*, dotenv_path: str | None = None, override: bool = False) -> 
     pipeline_tool_calls_limit = _env_int("PIPELINE_TOOL_CALLS_LIMIT", 25)
     pipeline_max_cost_usd = _env_float("PIPELINE_MAX_COST_USD", 0.50)
     pipeline_agent_timeout_s = _env_float("PIPELINE_AGENT_TIMEOUT_S", 120.0)
+    pipeline_include_openai = _env_bool("PIPELINE_INCLUDE_OPENAI", False)
     openai_web_search_limit = _env_int("OPENAI_WEB_SEARCH_LIMIT", 10)
     max_parallel_explores = _env_int("MAX_PARALLEL_EXPLORES", 1)
 
@@ -333,6 +337,7 @@ def load_settings(*, dotenv_path: str | None = None, override: bool = False) -> 
         pipeline_tool_calls_limit=pipeline_tool_calls_limit,
         pipeline_max_cost_usd=pipeline_max_cost_usd,
         pipeline_agent_timeout_s=pipeline_agent_timeout_s,
+        pipeline_include_openai=pipeline_include_openai,
         openai_web_search_limit=openai_web_search_limit,
         max_parallel_explores=max_parallel_explores,
 

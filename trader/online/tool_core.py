@@ -79,15 +79,19 @@ def get_fundamentals(market: MarketDataService, symbol: str) -> str:
     return json.dumps(result, default=str)
 
 
-def get_movers(market: MarketDataService, index: str = "$SPX", direction: str = "up") -> str:
-    """Get top market movers (gainers or losers) for an index.
+def get_movers(market: MarketDataService, index: str = "$SPX") -> str:
+    """Get top market movers for an index — returns BOTH gainers AND losers.
 
     Args:
         index: '$SPX', '$DJI', '$COMPX', 'NYSE', or 'NASDAQ'
-        direction: 'up' for gainers, 'down' for losers
     """
-    result = market.get_movers(index, direction=direction)
-    return json.dumps(result, default=str)
+    gainers = market.get_movers(index, direction="up")
+    losers = market.get_movers(index, direction="down")
+    return json.dumps({
+        "index": index,
+        "gainers": gainers.get("movers", [])[:5],
+        "losers": losers.get("movers", [])[:5],
+    }, default=str)
 
 
 def check_insider_activity(market: MarketDataService, symbol: str) -> str:
@@ -370,12 +374,11 @@ TOOL_REGISTRY: list[ToolDef] = [
     ToolDef(
         name="get_movers",
         func=get_movers,
-        description="Get top market movers (gainers or losers) for an index. Must be called during market hours.",
+        description="Get top market movers (both gainers AND losers) for an index. Returns both directions in one call — do NOT call twice. Must be called during market hours.",
         parameters={
             "type": "object",
             "properties": {
                 "index": {"type": "string", "description": "'$SPX', '$DJI', '$COMPX', 'NYSE', or 'NASDAQ'", "default": "$SPX"},
-                "direction": {"type": "string", "description": "'up' for gainers, 'down' for losers", "default": "up"},
             },
             "required": [],
             "additionalProperties": False,

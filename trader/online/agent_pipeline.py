@@ -79,16 +79,22 @@ class PipelineConfig:
 
 
 def build_default_pipeline() -> PipelineConfig:
-    """Build the default 3-agent pipeline from environment variables.
+    """Build the default agent pipeline from environment variables.
+
+    Default: Grok → Gemini (2 agents). Set PIPELINE_INCLUDE_OPENAI=1 for
+    the full 3-agent pipeline (Grok → OpenAI → Gemini).
 
     Uses native SDK runners for each provider:
     - Grok: xAI Responses API (server-side x_search + web_search)
-    - OpenAI: OpenAI Responses API (server-side web_search)
+    - OpenAI: OpenAI Responses API (server-side web_search) [optional]
     - Gemini: google-genai SDK (Google Search grounding + function tools)
 
     Falls back gracefully: if a provider's API key is missing, that agent
     is skipped. At minimum one agent must be available.
     """
+    from trader.config import load_settings
+    settings = load_settings()
+
     agents: list[AgentSpec] = []
 
     # Agent 1: Grok (server-side x_search + web_search + function tools)
@@ -107,23 +113,24 @@ def build_default_pipeline() -> PipelineConfig:
             ),
         ))
 
-    # Agent 2: OpenAI (server-side web_search + function tools)
-    openai_key = os.getenv("OPENAI_API_KEY")
-    if openai_key:
-        openai_model = os.getenv("RESEARCH_MODEL", "gpt-5.1")
-        agents.append(AgentSpec(
-            name="openai",
-            model=openai_model,
-            runner="openai",
-            role_description=(
-                "You are the SECOND investigator. Review what the previous agent "
-                "found, then dig deeper. Use web_search to verify claims, find "
-                "contradicting evidence, or explore angles the first agent missed. "
-                "Check market data that hasn't been checked yet. Focus on depth "
-                "and verification."
-            ),
-            excluded_tools=frozenset({"x_search", "x_stream_cache"}),
-        ))
+    # Agent 2: OpenAI (optional — OFF by default, set PIPELINE_INCLUDE_OPENAI=1)
+    if settings.pipeline_include_openai:
+        openai_key = os.getenv("OPENAI_API_KEY")
+        if openai_key:
+            openai_model = os.getenv("RESEARCH_MODEL", "gpt-5.1")
+            agents.append(AgentSpec(
+                name="openai",
+                model=openai_model,
+                runner="openai",
+                role_description=(
+                    "You are the SECOND investigator. Review what the previous agent "
+                    "found, then dig deeper. Use web_search to verify claims, find "
+                    "contradicting evidence, or explore angles the first agent missed. "
+                    "Check market data that hasn't been checked yet. Focus on depth "
+                    "and verification."
+                ),
+                excluded_tools=frozenset({"x_search", "x_stream_cache"}),
+            ))
 
     # Agent 3: Gemini (Google Search grounding only — synthesis agent)
     google_key = os.getenv("GOOGLE_API_KEY")
@@ -156,9 +163,6 @@ def build_default_pipeline() -> PipelineConfig:
 
     # Mark the last agent as final (in case some were skipped)
     agents[-1].is_final = True
-
-    from trader.config import load_settings
-    settings = load_settings()
 
     # Apply web_search_limit to gpt-5-mini agents only
     ws_limit = settings.openai_web_search_limit
@@ -209,6 +213,7 @@ def _build_system_prompt(
     spec: AgentSpec,
     agent_index: int,
     total_agents: int,
+    primary_symbols: list[str] | None = None,
 ) -> str:
     """Build a role-aware system prompt for an agent."""
     parts = [
@@ -247,7 +252,7 @@ def _build_system_prompt(
             "- check_insider_activity — recent insider buys/sells/grants",
             "- get_company_news — recent news articles (yfinance + Finnhub merged)",
             "- get_analyst_ratings — analyst buy/hold/sell consensus and trends",
-            "- get_movers — top market gainers/losers by index (check for sector-wide moves)",
+            "- get_movers — top market gainers AND losers by index (one call, both directions)",
             "- check_market_context — SPY, VIX, market session status",
         ])
     else:
@@ -255,11 +260,16 @@ def _build_system_prompt(
             "You have web search (Google grounding) for finding new angles."
         )
 
+    primary_str = ", ".join((primary_symbols or [])[:3]) or "the primary symbol(s)"
     parts.extend([
         "",
-        "**Background data is ALREADY provided** in the prompt below — current price,",
-        "fundamentals, technicals, options, volume, insider activity, analyst ratings,",
-        "market context, and news for the primary symbol(s). Do NOT re-fetch this data.",
+        f"**Background data is ALREADY provided** in the prompt below for **{primary_str}**.",
+        "Do NOT call these tools for the primary symbol(s) — the data is right there:",
+        "check_price, get_fundamentals, get_technical_indicators, check_options_activity,",
+        "check_volume_regime, check_price_spike, check_insider_activity, get_company_news,",
+        "get_analyst_ratings, get_price_history, check_market_context.",
+        "",
+        "These tools are **free** and encouraged for OTHER symbols (peers, sector ETFs, competitors).",
     ])
 
     if has_tools:
@@ -270,7 +280,7 @@ def _build_system_prompt(
             "- Read important articles with url_fetch for detailed information",
             "- Use market data tools for OTHER symbols (peers, sector ETFs, competitors)",
             "- Use get_financial_statements for deep fundamental digs (revenue trends, debt, cash flow)",
-            "- Use get_movers / check_market_context to check sector or market-wide dynamics",
+            "- Use get_movers to check sector or market-wide dynamics",
         ])
     else:
         parts.extend([
@@ -315,6 +325,15 @@ def _build_system_prompt(
         "Think step by step. Focus on areas NOT yet covered by prior agents (if any).",
         "Stop when you have enough evidence.",
     ])
+
+    if not spec.is_final:
+        parts.extend([
+            "",
+            "## IMPORTANT: Automated pipeline",
+            "You are in an automated pipeline with no human in the loop.",
+            "Do NOT ask follow-up questions, present menus of options,",
+            "or offer to do additional work. State your findings concisely and stop.",
+        ])
 
     if spec.is_final:
         parts.extend([
@@ -376,7 +395,10 @@ def _build_pipeline_user_message(
                 f"### Agent: {agent_name} (model: {model_name}, {tool_count} tool calls)\n"
                 f"{findings}\n"
             )
-            ledger = _format_tool_ledger(rnd.get("tool_traces", []))
+            ledger = _format_tool_ledger(
+                rnd.get("tool_traces", []),
+                primary_symbols=symbols,
+            )
             if ledger:
                 parts.append(ledger)
 
@@ -396,36 +418,63 @@ _PREFETCHED_TOOLS = frozenset({
 _URL_FETCH_MAX_CHARS = 3000
 
 
-def _format_tool_ledger(tool_traces: list[dict[str, Any]]) -> str:
-    """Format investigative tool results as a ledger for downstream agents.
+def _format_tool_ledger(
+    tool_traces: list[dict[str, Any]],
+    primary_symbols: list[str] | None = None,
+) -> str:
+    """Format tool results as a ledger for downstream agents.
 
-    Includes full output for web_search, x_search, x_stream_cache.
-    Caps url_fetch at _URL_FETCH_MAX_CHARS.
-    Skips pre-fetched data tools entirely (already in prompt).
+    - **Builtin (server-side) search traces** (web_search, x_search from
+      Grok/OpenAI): shown as a compact list of queries/URLs. The actual
+      results are opaque (consumed internally by the model) and reflected
+      in the agent's findings text — NOT in the trace output.
+    - **Function tool results** (get_financial_statements, get_movers, etc.):
+      shown with full output.
+    - **Pre-fetched tools** (check_price, get_fundamentals, etc.): skipped
+      for primary symbols (already in the prompt), but INCLUDED for peer
+      symbols that were not pre-fetched.
+    - **url_fetch**: capped at _URL_FETCH_MAX_CHARS.
     """
-    lines: list[str] = []
+    primary_set = {s.upper() for s in (primary_symbols or [])[:3]}
+    func_lines: list[str] = []
+    builtin_lines: list[str] = []
 
     for trace in tool_traces:
         action = trace.get("action", {})
         tool_name = action.get("tool", "")
+        args = action.get("args", {})
 
-        if tool_name in _PREFETCHED_TOOLS:
-            continue
         if trace.get("error"):
             continue
+
+        # Builtin (server-side) search traces — compact summary only
+        if trace.get("builtin"):
+            if "query" in args:
+                builtin_lines.append(f"- {tool_name}: \"{args['query']}\"")
+            elif "url" in args:
+                builtin_lines.append(f"- {tool_name}: opened {args['url']}")
+            elif "pattern" in args:
+                builtin_lines.append(
+                    f"- {tool_name}: find_in_page \"{args['pattern']}\""
+                )
+            continue
+
+        # Pre-fetched tools: skip for primary symbols, include for peers
+        if tool_name in _PREFETCHED_TOOLS:
+            call_symbol = args.get("symbol", "")
+            if not call_symbol or call_symbol.upper() in primary_set:
+                continue
+            # Peer-symbol call — fall through to include output
 
         raw = trace.get("raw_tool_output")
         if raw is None:
             continue
 
-        args = action.get("args", {})
         args_str = ", ".join(f"{k}={v!r}" for k, v in args.items()) if args else ""
 
         if isinstance(raw, str):
             output_str = raw
-        elif isinstance(raw, dict):
-            output_str = json.dumps(raw, default=str)
-        elif isinstance(raw, list):
+        elif isinstance(raw, (dict, list)):
             output_str = json.dumps(raw, default=str)
         else:
             output_str = str(raw)
@@ -433,11 +482,24 @@ def _format_tool_ledger(tool_traces: list[dict[str, Any]]) -> str:
         if tool_name == "url_fetch" and len(output_str) > _URL_FETCH_MAX_CHARS:
             output_str = output_str[:_URL_FETCH_MAX_CHARS] + "... [truncated]"
 
-        lines.append(f"**{tool_name}({args_str})**:\n```\n{output_str}\n```\n")
+        func_lines.append(f"**{tool_name}({args_str})**:\n```\n{output_str}\n```\n")
 
-    if not lines:
-        return ""
-    return "#### Tool results from this agent:\n" + "\n".join(lines)
+    result_parts: list[str] = []
+
+    if builtin_lines:
+        result_parts.append(
+            "#### Web/social searches performed by this agent:\n"
+            "(Results were consumed by the agent and reflected in the "
+            "findings above. Do NOT repeat these searches.)\n"
+            + "\n".join(builtin_lines)
+        )
+
+    if func_lines:
+        result_parts.append(
+            "#### Tool results from this agent:\n" + "\n".join(func_lines)
+        )
+
+    return "\n\n".join(result_parts)
 
 
 # ---------------------------------------------------------------------------
@@ -580,6 +642,7 @@ async def run_pipeline(
 
             system_prompt = _build_system_prompt(
                 spec, agent_index=i, total_agents=len(config.agents),
+                primary_symbols=symbols,
             )
 
             # Build prompt with accumulated context + pre-fetched market data
