@@ -168,11 +168,11 @@ def _collect_events(bus: EventBus) -> list[PipelineEvent]:
 
 
 class TestBuildRules:
-    def test_short_ticker_uses_context_domain(self):
-        """Short tickers (< 5 chars) should use context:166.* for stock domain."""
+    def test_short_ticker_uses_cashtag(self):
+        """Short tickers (< 5 chars) should use cashtag-only (no context:166.*)."""
         rules = build_rules_for_symbols(symbols=["PARA"])
         assert len(rules) == 1
-        assert "context:166.*" in rules[0].value
+        assert "context:166" not in rules[0].value
         assert "$PARA" in rules[0].value
         assert "lang:en" in rules[0].value
 

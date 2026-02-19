@@ -583,6 +583,58 @@
 {% endif %}
 
 {# ============================================================ #}
+{# X STREAM BURST                                               #}
+{# ============================================================ #}
+{% if s.x_stream_burst %}
+<div class="card mb-4">
+  <div class="card-header">X Stream Burst</div>
+  <div class="card-body">
+    <dl class="row mb-0 small">
+      <dt class="col-sm-3">Rules</dt>
+      <dd class="col-sm-9"><code>{{ s.x_stream_burst.rules | join(', ') }}</code></dd>
+      <dt class="col-sm-3">Duration</dt>
+      <dd class="col-sm-9">{{ s.x_stream_burst.duration_s }}s</dd>
+      <dt class="col-sm-3">Posts Collected</dt>
+      <dd class="col-sm-9">{{ s.x_stream_burst.posts_collected }} ({{ s.x_stream_burst.get('posts_in_cache', 0) }} in cache)</dd>
+      <dt class="col-sm-3">Quality Attempts</dt>
+      <dd class="col-sm-9">{{ s.x_stream_burst.quality_attempts }}</dd>
+      {% if s.x_stream_burst.quality_verdict %}
+      <dt class="col-sm-3">Quality Verdict</dt>
+      <dd class="col-sm-9">
+        {% if s.x_stream_burst.quality_verdict.relevant %}
+          <span class="badge bg-success">Relevant</span>
+        {% else %}
+          <span class="badge bg-warning text-dark">Not Relevant</span>
+        {% endif %}
+        ({{ "%.0f"|format(s.x_stream_burst.quality_verdict.confidence * 100) }}% confidence)
+      </dd>
+      <dt class="col-sm-3">Reasoning</dt>
+      <dd class="col-sm-9">{{ s.x_stream_burst.quality_verdict.reasoning }}</dd>
+      {% if s.x_stream_burst.quality_verdict.revised_rule_values %}
+      <dt class="col-sm-3">Revised Rules</dt>
+      <dd class="col-sm-9"><code>{{ s.x_stream_burst.quality_verdict.revised_rule_values | join(', ') }}</code></dd>
+      {% endif %}
+      {% endif %}
+    </dl>
+    {% if s.x_stream_burst.posts and s.x_stream_burst.posts | length > 0 %}
+    <hr class="my-2">
+    <details>
+      <summary class="small text-muted">Collected Posts ({{ s.x_stream_burst.posts | length }})</summary>
+      <div class="mt-2" style="max-height: 300px; overflow-y: auto;">
+        {% for p in s.x_stream_burst.posts[:20] %}
+        <div class="border-bottom py-1 small">
+          <strong>@{{ p.data.author_id if p.data else '?' }}</strong>:
+          {{ (p.data.text if p.data else p.get('text', '?'))[:300] }}
+        </div>
+        {% endfor %}
+      </div>
+    </details>
+    {% endif %}
+  </div>
+</div>
+{% endif %}
+
+{# ============================================================ #}
 {# COST + METADATA                                              #}
 {# ============================================================ #}
 <div class="row g-3 mb-4">
