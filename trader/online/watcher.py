@@ -14,6 +14,7 @@ import asyncio
 import os
 import threading
 import time
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
 
@@ -133,6 +134,19 @@ FORCE_EXIT_NOTE = (
 )
 
 
+@dataclass
+class AgentCheckinResult:
+    """Rich result from an LLM check-in agent, including traces."""
+    decision: CheckinDecision
+    system_prompt: str
+    user_message: str
+    tool_traces: list[dict[str, Any]] = field(default_factory=list)
+    usage: dict[str, Any] = field(default_factory=dict)
+    findings: str = ""
+    thinking_summary: str | None = None
+    elapsed_s: float = 0.0
+
+
 # ---------------------------------------------------------------------------
 # WatchMonitor
 # ---------------------------------------------------------------------------
@@ -148,11 +162,13 @@ class WatchMonitor:
         db: Database,
         bus: EventBus,
         market: MarketDataService | None = None,
+        observer: "ObserverMode | None" = None,
     ) -> None:
         self.settings = settings
         self.db = db
         self.bus = bus
         self.market = market
+        self.observer = observer
 
     def run_check_cycle(self) -> None:
         """Run one check cycle across all active (non-sealed) watches."""
@@ -173,6 +189,8 @@ class WatchMonitor:
                     raise
                 wid = watch_dict.get("watch_id", "?")
                 print(f"WARN: Check-in failed for {wid}: {e}")
+                # Advance last_checkin_at to prevent retry storms
+                self._bump_last_checkin(watch_dict)
 
     def _is_due(self, watch_dict: dict[str, Any]) -> bool:
         """Check if enough time has passed since the last check-in."""
@@ -200,6 +218,9 @@ class WatchMonitor:
         _interval, depth = _get_schedule(minutes_held)
 
         if depth == "lightweight":
+            self._lightweight_checkin(watch_dict, minutes_held)
+        elif self.observer is not None and self.observer.enabled:
+            # Observer mode: downgrade LLM check-ins to lightweight (no API costs)
             self._lightweight_checkin(watch_dict, minutes_held)
         else:
             self._agent_checkin(watch_dict, depth, minutes_held)
@@ -278,9 +299,10 @@ class WatchMonitor:
         symbol = watch_dict["symbol"]
         wid = watch_dict["watch_id"]
 
-        decision = _get_or_create_loop().run_until_complete(
+        agent_result = _get_or_create_loop().run_until_complete(
             self._run_agent(watch_dict, depth, minutes_held)
         )
+        decision = agent_result.decision
 
         # Hard override: force_exit must always exit, even if agent says hold
         if depth == "force_exit" and decision.action != "exit":
@@ -301,6 +323,14 @@ class WatchMonitor:
             "price": current_price,
             "pnl_pct": decision.unrealized_pnl_pct,
             "model": self.settings.watch_checkin_model,
+            # LLM trace data
+            "system_prompt": agent_result.system_prompt,
+            "user_message": agent_result.user_message,
+            "findings": agent_result.findings,
+            "tool_traces": agent_result.tool_traces,
+            "usage": agent_result.usage,
+            "thinking_summary": agent_result.thinking_summary,
+            "elapsed_s": agent_result.elapsed_s,
         })
 
         if decision.action == "exit":
@@ -335,8 +365,10 @@ class WatchMonitor:
         watch_dict: dict[str, Any],
         depth: str,
         minutes_held: float,
-    ) -> CheckinDecision:
-        """Create and run a single monitoring agent."""
+    ) -> AgentCheckinResult:
+        """Create and run a single monitoring agent, returning full traces."""
+        from trader.online.runners.pydanticai_runner import _extract_thinking_content
+
         entry = watch_dict["entry"]
         symbol = watch_dict["symbol"]
 
@@ -345,7 +377,7 @@ class WatchMonitor:
         if not any(model_str.startswith(p) for p in ("google-gla:", "openai:", "anthropic:", "openai-responses:")):
             model_str = f"google-gla:{model_str}"
 
-        prompt = MONITORING_PROMPT.format(
+        system_prompt = MONITORING_PROMPT.format(
             symbol=symbol,
             direction=entry["direction"],
             entry_price=entry["price"],
@@ -354,6 +386,11 @@ class WatchMonitor:
             horizon=entry["horizon"],
             minutes_held=minutes_held,
             force_exit_instruction=FORCE_EXIT_NOTE if depth == "force_exit" else "",
+        )
+
+        user_message = (
+            f"Check on {symbol} position (entry ${entry['price']:.2f}, "
+            f"held {minutes_held:.0f} min, thesis: {entry['thesis']})"
         )
 
         # Reuse ExplorerDeps + market_toolset (avoids duplicating tool defs)
@@ -368,13 +405,13 @@ class WatchMonitor:
             model_str,
             deps_type=ExplorerDeps,
             output_type=CheckinDecision,
-            system_prompt=prompt,
+            system_prompt=system_prompt,
             toolsets=[tracing],
         )
 
+        t0 = time.time()
         result = await agent.run(
-            f"Check on {symbol} position (entry ${entry['price']:.2f}, "
-            f"held {minutes_held:.0f} min, thesis: {entry['thesis']})",
+            user_message,
             deps=deps,
             usage_limits=UsageLimits(
                 request_limit=5,
@@ -382,7 +419,27 @@ class WatchMonitor:
                 total_tokens_limit=15_000,
             ),
         )
-        return result.output
+        elapsed = time.time() - t0
+
+        usage = result.usage()
+        thinking = _extract_thinking_content(result.all_messages())
+
+        return AgentCheckinResult(
+            decision=result.output,
+            system_prompt=system_prompt,
+            user_message=user_message,
+            tool_traces=deps.tool_traces,
+            usage={
+                "input_tokens": usage.input_tokens or 0,
+                "output_tokens": usage.output_tokens or 0,
+                "total_tokens": usage.total_tokens or 0,
+                "requests": usage.requests or 0,
+                "tool_calls": len(deps.tool_traces),
+            },
+            findings=str(result.output),
+            thinking_summary=thinking,
+            elapsed_s=round(elapsed, 2),
+        )
 
     # ------------------------------------------------------------------
     # Retrospective phase (post-exit price tracking)
@@ -565,6 +622,17 @@ class WatchMonitor:
     # ------------------------------------------------------------------
     # Helpers
     # ------------------------------------------------------------------
+
+    def _bump_last_checkin(self, watch_dict: dict[str, Any]) -> None:
+        """Advance last_checkin_at on failure to prevent retry storms."""
+        try:
+            wid = watch_dict.get("watch_id", "")
+            builder = WatchBuilder.from_dict(watch_dict)
+            builder.last_checkin_at = _utc_now()
+            updated = builder.to_watch()
+            update_watch(self.db, wid, updated.to_dict())
+        except Exception:
+            pass  # best-effort — don't mask the original error
 
     def _get_current_price(self, symbol: str) -> float | None:
         """Get current price from market data service."""

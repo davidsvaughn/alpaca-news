@@ -510,7 +510,7 @@ def create_app(
 
                 # Write temp file to trigger the standard pipeline
                 import tempfile
-                tmp = Path(tempfile.mktemp(suffix=".json", dir=app.state.settings.alpaca_output_dir))
+                tmp = Path(tempfile.mktemp(suffix=".json", dir=tempfile.gettempdir()))
                 tmp.parent.mkdir(parents=True, exist_ok=True)
                 tmp.write_text(json.dumps(news, ensure_ascii=False), encoding="utf-8")
 

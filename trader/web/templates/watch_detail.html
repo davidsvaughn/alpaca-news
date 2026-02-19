@@ -82,6 +82,182 @@
   {% endif %}
 </div>
 
+<!-- Check-in History -->
+{% if w.checkin_history %}
+<div class="card mb-4">
+  <div class="card-header">Check-in History ({{ w.checkin_history|length }} check-ins)</div>
+  <div class="card-body p-0">
+    <div class="accordion" id="checkin-accordion">
+      {% for ci in w.checkin_history %}
+      {% set ci_idx = loop.index %}
+      {% set has_traces = ci.get('tool_traces') or ci.get('system_prompt') %}
+      {% set u = ci.get('usage', {}) %}
+      <div class="accordion-item">
+        <h2 class="accordion-header">
+          <button class="accordion-button collapsed py-2" type="button"
+                  {% if has_traces %}data-bs-toggle="collapse" data-bs-target="#ci-{{ ci_idx }}"{% endif %}
+                  style="font-size: 0.85rem; {% if not has_traces %}cursor: default;{% endif %}">
+            <span class="badge bg-secondary me-2">{{ ci_idx }}</span>
+            <span class="small text-muted me-2">{{ ci.get('time', '')[:19] }}</span>
+            {% if ci.depth == 'lightweight' %}
+              <span class="badge bg-light text-dark border me-1">lightweight</span>
+            {% elif ci.depth == 'medium' %}
+              <span class="badge bg-info me-1">medium</span>
+            {% elif ci.depth == 'full' %}
+              <span class="badge bg-primary me-1">full</span>
+            {% elif ci.depth == 'force_exit' %}
+              <span class="badge bg-danger me-1">force_exit</span>
+            {% endif %}
+            {% if ci.action == 'hold' %}
+              <span class="badge bg-success me-1">HOLD</span>
+            {% elif ci.action == 'exit' %}
+              <span class="badge bg-danger me-1">EXIT</span>
+            {% elif ci.action == 'auto_stop_loss' %}
+              <span class="badge bg-warning text-dark me-1">STOP LOSS</span>
+            {% endif %}
+            {% if ci.price is defined and ci.price %}
+              <span class="small me-1">${{ "%.2f"|format(ci.price) }}</span>
+            {% endif %}
+            {% if ci.pnl_pct is defined %}
+              <span class="{% if ci.pnl_pct >= 0 %}pnl-positive{% else %}pnl-negative{% endif %} small me-1">{{ "%+.2f"|format(ci.pnl_pct) }}%</span>
+            {% endif %}
+            {% if ci.model %}
+              <code class="text-muted small me-1">{{ ci.model }}</code>
+            {% endif %}
+            {% if u.get('total_tokens') %}
+              <span class="badge bg-light text-dark border me-1">{{ "{:,}".format(u.get('total_tokens', 0)|int) }} tok</span>
+            {% endif %}
+            {% if ci.get('elapsed_s') %}
+              <span class="badge bg-light text-dark border me-1">{{ "%.1f"|format(ci.get('elapsed_s', 0)|float) }}s</span>
+            {% endif %}
+          </button>
+        </h2>
+        {% if has_traces %}
+        <div id="ci-{{ ci_idx }}" class="accordion-collapse collapse" data-bs-parent="#checkin-accordion">
+          <div class="accordion-body">
+            {# System prompt #}
+            {% if ci.get('system_prompt') %}
+            <details class="mb-3">
+              <summary class="fw-bold small">System Prompt ({{ ci.system_prompt|length }} chars)</summary>
+              <pre class="trace-output bg-light p-2 rounded border mt-1 mb-0" style="white-space: pre-wrap; font-size: 0.82rem; max-height: 400px; overflow-y: auto;">{{ ci.system_prompt }}</pre>
+            </details>
+            {% endif %}
+
+            {# User message #}
+            {% if ci.get('user_message') %}
+            <details class="mb-3">
+              <summary class="fw-bold small">User Message</summary>
+              <pre class="trace-output bg-light p-2 rounded border mt-1 mb-0" style="white-space: pre-wrap; font-size: 0.82rem;">{{ ci.user_message }}</pre>
+            </details>
+            {% endif %}
+
+            {# Tool calls table #}
+            {% if ci.tool_traces %}
+            <h6 class="mt-1 mb-2">Tool Calls ({{ ci.tool_traces|length }})</h6>
+            <div class="table-responsive mb-3">
+              <table class="table table-sm table-hover mb-0" style="font-size: 0.82rem;">
+                <thead class="table-light">
+                  <tr>
+                    <th style="width:30px">#</th>
+                    <th>Tool</th>
+                    <th>Arguments</th>
+                    <th>Duration</th>
+                    <th>Modality</th>
+                    <th>Status</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {% for t in ci.tool_traces %}
+                  {% set ta = t.get('action', {}) %}
+                  {% set te = t.get('execution', {}) %}
+                  <tr class="tool-trace-row" data-bs-toggle="collapse" data-bs-target="#citrace-{{ ci_idx }}-{{ loop.index }}">
+                    <td class="text-muted">{{ t.get('hop_index', loop.index0) }}</td>
+                    <td><strong>{{ ta.get('tool', '?') }}</strong></td>
+                    <td class="text-truncate" style="max-width: 250px;">
+                      {% set args = ta.get('args', {}) %}
+                      {% if args %}
+                        {% for k, v in args.items() %}
+                        <span class="text-muted">{{ k }}=</span>{{ v }}{{ ', ' if not loop.last else '' }}
+                        {% endfor %}
+                      {% endif %}
+                    </td>
+                    <td>{{ "%.3f"|format(te.get('duration_s', 0)|float) }}s</td>
+                    <td>
+                      {% if t.get('modality') %}
+                      <span class="badge modality-{{ t.modality }}" style="font-size: 0.7rem;">{{ t.modality }}</span>
+                      {% endif %}
+                    </td>
+                    <td>
+                      {% if t.get('error') %}
+                        <span class="badge bg-danger">error</span>
+                      {% else %}
+                        <span class="badge bg-success">ok</span>
+                      {% endif %}
+                    </td>
+                  </tr>
+                  <tr class="collapse" id="citrace-{{ ci_idx }}-{{ loop.index }}">
+                    <td colspan="6" class="p-0">
+                      <div class="p-2 bg-light">
+                        {% if t.get('error') %}
+                        <div class="alert alert-danger py-1 px-2 mb-2 small">{{ t.error }}</div>
+                        {% endif %}
+                        <div class="row">
+                          <div class="col-md-6">
+                            <strong class="small">Input Args:</strong>
+                            <pre class="trace-output bg-white p-2 rounded border mb-0">{{ ta.get('args', {})|to_json(indent=2) }}</pre>
+                          </div>
+                          <div class="col-md-6">
+                            <strong class="small">Output:</strong>
+                            {% set output = t.get('raw_tool_output') %}
+                            {% if output is string %}
+                            <pre class="trace-output bg-white p-2 rounded border mb-0">{{ output[:2000] }}</pre>
+                            {% else %}
+                            <pre class="trace-output bg-white p-2 rounded border mb-0">{{ output|to_json(indent=2) }}</pre>
+                            {% endif %}
+                          </div>
+                        </div>
+                        <div class="small text-muted mt-1">
+                          {{ te.get('start_time', '')[:19] }} &rarr; {{ te.get('end_time', '')[:19] }}
+                          | cost: ${{ "%.4f"|format(te.get('cost_usd', 0)|float) }}
+                        </div>
+                      </div>
+                    </td>
+                  </tr>
+                  {% endfor %}
+                </tbody>
+              </table>
+            </div>
+            {% endif %}
+
+            {# Thinking/reasoning summary #}
+            {% if ci.get('thinking_summary') %}
+            <details class="mb-3">
+              <summary class="fw-bold small text-warning">Reasoning Summary (click to expand)</summary>
+              <pre class="trace-output bg-light p-2 rounded border mt-1 mb-0" style="white-space: pre-wrap; font-size: 0.82rem;">{{ ci.thinking_summary }}</pre>
+            </details>
+            {% endif %}
+
+            {# Agent findings/decision #}
+            {% if ci.get('findings') %}
+            <h6>Agent Output</h6>
+            <div class="p-2 bg-light rounded border" style="font-size: 0.85rem;">{{ ci.findings }}</div>
+            {% endif %}
+
+            {# Reason (always present for agent check-ins) #}
+            {% if ci.reason %}
+            <h6 class="mt-2">Decision Reason</h6>
+            <p class="mb-0">{{ ci.reason }}</p>
+            {% endif %}
+          </div>
+        </div>
+        {% endif %}
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+</div>
+{% endif %}
+
 <!-- Retrospective data -->
 {% if w.retrospective_data %}
 <div class="card mb-4">

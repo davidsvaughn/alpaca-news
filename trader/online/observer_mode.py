@@ -6,7 +6,8 @@ When observer mode is ON:
 - No new backfill processing
 - No manual explores via dashboard
 - In-flight operations finish naturally
-- WatchMonitor continues running (safety)
+- WatchMonitor continues running but LLM check-ins are downgraded
+  to lightweight (price-only, free APIs). No API costs incurred.
 """
 
 from __future__ import annotations

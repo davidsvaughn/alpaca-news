@@ -807,7 +807,7 @@ def run_watch_loop(
     if settings.watch_enabled:
         from trader.online.watcher import WatchMonitor, monitoring_loop
 
-        monitor = WatchMonitor(settings=settings, db=db, bus=bus)
+        monitor = WatchMonitor(settings=settings, db=db, bus=bus, observer=observer)
         monitor_thread = threading.Thread(
             target=monitoring_loop,
             args=(monitor,),
