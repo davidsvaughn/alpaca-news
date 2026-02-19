@@ -606,12 +606,13 @@ def snapshot_export_to_markdown(
             if r.get("system_prompt"):
                 lines.append("#### System Prompt")
                 lines.append("")
+                open_f, close_f = _safe_code_fence(r["system_prompt"])
                 lines.append("<details>")
                 lines.append(f"<summary>Show system prompt ({len(r['system_prompt'])} chars)</summary>")
                 lines.append("")
-                lines.append("```")
+                lines.append(open_f)
                 lines.append(r["system_prompt"])
-                lines.append("```")
+                lines.append(close_f)
                 lines.append("")
                 lines.append("</details>")
                 lines.append("")
@@ -620,12 +621,13 @@ def snapshot_export_to_markdown(
             if r.get("user_message"):
                 lines.append("#### User Message")
                 lines.append("")
+                open_f, close_f = _safe_code_fence(r["user_message"])
                 lines.append("<details>")
                 lines.append(f"<summary>Show user message ({len(r['user_message'])} chars)</summary>")
                 lines.append("")
-                lines.append("```")
+                lines.append(open_f)
                 lines.append(r["user_message"])
-                lines.append("```")
+                lines.append(close_f)
                 lines.append("")
                 lines.append("</details>")
                 lines.append("")
@@ -634,9 +636,8 @@ def snapshot_export_to_markdown(
             if r.get("thinking_summary"):
                 lines.append("#### Reasoning Summary")
                 lines.append("")
-                lines.append("```")
-                lines.append(r["thinking_summary"])
-                lines.append("```")
+                for ts_line in r["thinking_summary"].splitlines():
+                    lines.append(f"> {ts_line}")
                 lines.append("")
 
             # Agent findings
@@ -650,12 +651,13 @@ def snapshot_export_to_markdown(
             if r.get("raw_output") and r["raw_output"] != r.get("findings"):
                 lines.append("#### Raw Output")
                 lines.append("")
+                open_f, close_f = _safe_code_fence(r["raw_output"])
                 lines.append("<details>")
                 lines.append(f"<summary>Show raw output ({len(r['raw_output'])} chars)</summary>")
                 lines.append("")
-                lines.append("```")
+                lines.append(open_f)
                 lines.append(r["raw_output"])
-                lines.append("```")
+                lines.append(close_f)
                 lines.append("")
                 lines.append("</details>")
                 lines.append("")
@@ -676,18 +678,6 @@ def snapshot_export_to_markdown(
                 lines.append("")
                 for j, t in enumerate(traces, 1):
                     _render_tool_trace_md(lines, t, j)
-
-    # ------------------------------------------------------------------
-    # All Tool Traces (flat timeline)
-    # ------------------------------------------------------------------
-    all_traces = snapshot.get("tool_traces") or []
-    if all_traces:
-        lines.append("---")
-        lines.append("")
-        lines.append(f"## All Tool Traces ({len(all_traces)} total)")
-        lines.append("")
-        for j, t in enumerate(all_traces, 1):
-            _render_tool_trace_md(lines, t, j, show_agent=True)
 
     # ------------------------------------------------------------------
     # Cost Summary
@@ -951,6 +941,56 @@ def _kv(lines: list[str], key: str, value: Any) -> None:
         lines.append(f"- **{key}:** {value}")
 
 
+def _safe_code_fence(content: str, lang: str = "") -> tuple[str, str]:
+    """Return (open_fence, close_fence) safe for *content*.
+
+    Scans for the longest consecutive backtick run and uses one more.
+    """
+    max_run = current = 0
+    for ch in content:
+        if ch == "`":
+            current += 1
+            if current > max_run:
+                max_run = current
+        else:
+            current = 0
+    fence = "`" * max(3, max_run + 1)
+    open_fence = f"{fence}{lang}" if lang else fence
+    return open_fence, fence
+
+
+def _tool_summary_line(trace: dict[str, Any], index: int) -> str:
+    """Build a one-line summary for a collapsed tool call."""
+    action = trace.get("action") or {}
+    execution = trace.get("execution") or {}
+    tool = action.get("tool", "?")
+    args = action.get("args") or {}
+    error = trace.get("error")
+
+    # Pick the most informative arg to display.
+    display_arg = ""
+    for key in ("query", "symbol", "url", "pattern"):
+        if key in args:
+            val = str(args[key])
+            if len(val) > 60:
+                val = val[:57] + "..."
+            display_arg = f"{key}='{val}'"
+            break
+    else:
+        for k, v in args.items():
+            if isinstance(v, str) and v:
+                val = v if len(v) <= 60 else v[:57] + "..."
+                display_arg = f"{k}='{val}'"
+                break
+
+    call_str = f"{tool}({display_arg})"
+    status = "ERROR" if error else "ok"
+    cost = execution.get("cost_usd", 0)
+    duration = execution.get("duration_s", 0)
+
+    return f"{index}. <code>{call_str}</code> &mdash; {status}, ${cost:.4f}, {duration:.1f}s"
+
+
 def _render_tool_trace_md(
     lines: list[str],
     trace: dict[str, Any],
@@ -958,19 +998,18 @@ def _render_tool_trace_md(
     *,
     show_agent: bool = False,
 ) -> None:
-    """Render a single tool trace to markdown."""
+    """Render a single tool trace as a collapsible details block."""
     action = trace.get("action") or {}
     execution = trace.get("execution") or {}
-    tool = action.get("tool", "?")
     args = action.get("args") or {}
     error = trace.get("error")
 
-    header = f"##### {index}. {tool}"
+    summary = _tool_summary_line(trace, index)
     if show_agent and trace.get("agent"):
-        header += f" [{trace['agent']}]"
-    if error:
-        header += " (ERROR)"
-    lines.append(header)
+        summary += f" [{trace['agent']}]"
+
+    lines.append("<details>")
+    lines.append(f"<summary>{summary}</summary>")
     lines.append("")
 
     _kv(lines, "Duration", f"{execution.get('duration_s', 0):.3f}s")
@@ -1008,3 +1047,6 @@ def _render_tool_trace_md(
             lines.append(str(output))
             lines.append("```")
         lines.append("")
+
+    lines.append("</details>")
+    lines.append("")
