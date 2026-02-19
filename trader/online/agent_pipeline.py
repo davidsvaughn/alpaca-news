@@ -267,7 +267,8 @@ def _build_system_prompt(
         "Do NOT call these tools for the primary symbol(s) — the data is right there:",
         "check_price, get_fundamentals, get_technical_indicators, check_options_activity,",
         "check_volume_regime, check_price_spike, check_insider_activity, get_company_news,",
-        "get_analyst_ratings, get_price_history, check_market_context.",
+        "get_analyst_ratings, get_price_history.",
+        "Market context (SPY, VIX, session) is also already provided — do NOT call check_market_context.",
         "",
         "These tools are **free** and encouraged for OTHER symbols (peers, sector ETFs, competitors).",
     ])
@@ -307,8 +308,8 @@ def _build_system_prompt(
         parts.extend([
             "",
             "## X/Twitter search budget",
-            f"You have a STRICT budget of **{spec.x_search_limit} x_search calls**.",
-            "Each call is expensive (~$0.02). Make each query count.",
+            f"You have a budget of **{spec.x_search_limit} x_search calls**.",
+            "Use x_search to check real-time sentiment and chatter — aim for at least 1-2 calls.",
         ])
 
     if has_tools:
