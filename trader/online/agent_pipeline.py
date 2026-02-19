@@ -8,7 +8,7 @@ passed downstream via a tool call ledger.
 Architecture (native SDK runners):
     Agent 1 (Grok)   → xAI Responses API — server-side x_search + web_search + function tools
     Agent 2 (OpenAI) → OpenAI Responses API — server-side web_search + function tools
-    Agent 3 (Gemini) → google-genai SDK — Google Search grounding + function tools → TradingSignal
+    Agent 3 (Gemini) → google-genai SDK — Google Search grounding (no function tools) → TradingSignal
 
 PydanticAI fallback runner is available for testing (TestModel) and
 watcher check-ins.

@@ -145,15 +145,24 @@ async def run_grok(
 
             if item_type in ("web_search_call", "x_search_call"):
                 tool_name = "web_search" if item_type == "web_search_call" else "x_search"
-                # Query is nested: item.action.query (ActionSearch type)
-                query = ""
+                # Extract args and result based on action type:
+                #   search → query, open_page → url, find_in_page → pattern+url
                 action = getattr(item, "action", None)
-                if action and getattr(action, "type", None) == "search":
-                    query = getattr(action, "query", "") or ""
+                action_type = getattr(action, "type", None) if action else None
+                args: dict[str, Any] = {}
+                if action_type == "search":
+                    args["query"] = getattr(action, "query", "") or ""
+                elif action_type == "open_page":
+                    args["url"] = getattr(action, "url", "") or ""
+                elif action_type == "find_in_page":
+                    args["pattern"] = getattr(action, "pattern", "") or ""
+                    args["url"] = getattr(action, "url", "") or ""
+                # Serialize full item for diagnostics
+                item_data = item.model_dump() if hasattr(item, "model_dump") else None
                 trace = build_trace_dict(
                     tool_name=tool_name,
-                    args={"query": query},
-                    result=None,
+                    args=args,
+                    result=json.dumps(item_data) if item_data else None,
                     error=None,
                     start=time.time(),
                     end=time.time(),

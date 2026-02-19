@@ -87,6 +87,8 @@ async def run_gemini(
         if gm:
             queries = getattr(gm, "web_search_queries", []) or []
             for q in queries:
+                if not q:  # skip empty grounding queries
+                    continue
                 trace = build_trace_dict(
                     tool_name="web_search",
                     args={"query": q},
