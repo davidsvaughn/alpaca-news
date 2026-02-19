@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, Form, Request
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, Response
 from fastapi.templating import Jinja2Templates
 
 from trader.config import Settings, load_settings
@@ -41,7 +41,7 @@ from trader.models.watch import WatchBuilder
 from trader.online.activity_tracker import ActivityTracker
 from trader.online.event_bus import EventBus, PipelineEvent
 from trader.online.observer_mode import ObserverMode
-from trader.reflection.eval_record import build_eval_record
+from trader.reflection.eval_record import build_eval_record, snapshot_export_to_markdown
 from trader.web.sse import sse_response
 
 
@@ -585,28 +585,50 @@ def create_app(
         return get_recent_events(db, limit=min(limit, 500))
 
     # ------------------------------------------------------------------
-    # Snapshot export (combined snapshot + watch + follow-ups as single JSON blob)
+    # Snapshot export (JSON + Markdown downloads)
     # ------------------------------------------------------------------
+
+    def _export_data(snapshot_id: str) -> tuple[dict[str, Any] | None, dict[str, Any] | None, list]:
+        """Fetch snapshot + watch + follow-ups for export."""
+        snap = get_snapshot(db, snapshot_id)
+        if snap is None:
+            return None, None, []
+        watch = get_watch_by_snapshot(db, snapshot_id)
+        follow_ups = get_follow_ups_by_snapshot(db, snapshot_id)
+        return snap, watch, follow_ups
 
     @app.get("/api/snapshots/{snapshot_id}/export")
     async def api_snapshot_export(snapshot_id: str):
-        """Export a snapshot + linked watch + follow-ups as a single JSON blob.
-
-        Returns the complete investigation record: trigger, triage, pipeline
-        rounds, tool traces, prediction, cost summary, watch lifecycle
-        (if created), and follow-up data collections.
-        """
-        snap = get_snapshot(db, snapshot_id)
+        """Export snapshot + watch + follow-ups as a downloadable JSON file."""
+        snap, watch, follow_ups = _export_data(snapshot_id)
         if snap is None:
             return {"error": f"Snapshot {snapshot_id} not found"}
-        watch = get_watch_by_snapshot(db, snapshot_id)
-        follow_ups = get_follow_ups_by_snapshot(db, snapshot_id)
         blob: dict[str, Any] = {
             "snapshot": snap,
-            "watch": watch,  # None if no watch was created
+            "watch": watch,
             "follow_ups": follow_ups,
         }
-        return blob
+        content = json.dumps(blob, indent=2, default=str, ensure_ascii=False)
+        short_id = snapshot_id[:12]
+        return Response(
+            content=content,
+            media_type="application/json",
+            headers={"Content-Disposition": f'attachment; filename="snapshot_{short_id}.json"'},
+        )
+
+    @app.get("/api/snapshots/{snapshot_id}/export/md")
+    async def api_snapshot_export_md(snapshot_id: str):
+        """Export snapshot + watch + follow-ups as a downloadable Markdown file."""
+        snap, watch, follow_ups = _export_data(snapshot_id)
+        if snap is None:
+            return Response(content="Snapshot not found", status_code=404)
+        content = snapshot_export_to_markdown(snap, watch, follow_ups)
+        short_id = snapshot_id[:12]
+        return Response(
+            content=content,
+            media_type="text/markdown; charset=utf-8",
+            headers={"Content-Disposition": f'attachment; filename="snapshot_{short_id}.md"'},
+        )
 
     # ------------------------------------------------------------------
     # Manual override: BUY / SELL
