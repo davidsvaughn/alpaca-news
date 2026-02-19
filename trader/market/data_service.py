@@ -163,53 +163,85 @@ class MarketDataService:
     ) -> list[dict[str, Any]]:
         """Compute daily volume deltas for the last N trading days.
 
-        Uses yfinance 1-min bars (available for ~7 days back).
+        Uses Schwab 1-min candles (up to 10 trading days back) with
+        yfinance fallback (~7 calendar days of 1-min bars).
         Returns list of per-day dicts (most recent first), each with
         net_delta, imbalance, direction.
         """
         import numpy as np
+        from datetime import date as date_type
 
-        try:
-            import yfinance as yf
-            ticker = yf.Ticker(symbol)
-            df = ticker.history(period=f"{days + 2}d", interval="1m")
-            if df is None or df.empty or len(df) < 10:
-                return []
+        bars: list[dict] = []
 
-            results: list[dict[str, Any]] = []
-            # Group by trading date
-            df.index = df.index.tz_localize(None) if df.index.tz is None else df.index.tz_convert(None)
-            for date, group in df.groupby(df.index.date):
-                if len(group) < 5:
-                    continue
-                close = group["Close"].values.astype(float)
-                volume = group["Volume"].values.astype(float)
+        # Try Schwab first — supports up to period=10 days of 1-min bars
+        if self._schwab.available:
+            try:
+                candles = self._schwab.get_intraday_candles(
+                    symbol, period=min(days + 1, 10),
+                )
+                if candles:
+                    bars = [
+                        {"date": c.t, "c": c.c, "v": c.v}
+                        for c in candles
+                    ]
+            except Exception:
+                pass
 
-                prev_close = np.roll(close, 1)
-                direction = np.sign(close - prev_close)
-                direction[0] = 0
-                for i in range(1, len(direction)):
-                    if direction[i] == 0:
-                        direction[i] = direction[i - 1]
+        # Fallback to yfinance
+        if not bars:
+            try:
+                import yfinance as yf
+                ticker = yf.Ticker(symbol)
+                df = ticker.history(period=f"{days + 2}d", interval="1m")
+                if df is not None and not df.empty:
+                    idx = df.index.tz_convert(None) if df.index.tz else df.index
+                    bars = [
+                        {"date": str(idx[i]), "c": float(df["Close"].iloc[i]), "v": float(df["Volume"].iloc[i])}
+                        for i in range(len(df))
+                    ]
+            except Exception:
+                pass
 
-                uptick = float(np.sum(volume[direction > 0]))
-                downtick = float(np.sum(volume[direction < 0]))
-                total = uptick + downtick
-                net = uptick - downtick
-                imbalance = net / total if total > 0 else 0.0
-
-                results.append({
-                    "date": str(date),
-                    "net_delta": int(net),
-                    "imbalance": round(imbalance, 4),
-                    "direction": "bullish" if imbalance > 0.02 else ("bearish" if imbalance < -0.02 else "neutral"),
-                })
-
-            # Most recent first, limit to requested days
-            results.sort(key=lambda d: d["date"], reverse=True)
-            return results[:days]
-        except Exception:
+        if len(bars) < 10:
             return []
+
+        # Group bars by trading date and compute per-day delta
+        from collections import defaultdict
+        by_date: dict[str, list[dict]] = defaultdict(list)
+        for b in bars:
+            day_str = b["date"][:10]  # YYYY-MM-DD prefix
+            by_date[day_str].append(b)
+
+        results: list[dict[str, Any]] = []
+        for day_str in sorted(by_date.keys(), reverse=True):
+            day_bars = by_date[day_str]
+            if len(day_bars) < 5:
+                continue
+
+            close = np.array([b["c"] for b in day_bars], dtype=float)
+            volume = np.array([b["v"] for b in day_bars], dtype=float)
+
+            prev_close = np.roll(close, 1)
+            direction = np.sign(close - prev_close)
+            direction[0] = 0
+            for i in range(1, len(direction)):
+                if direction[i] == 0:
+                    direction[i] = direction[i - 1]
+
+            uptick = float(np.sum(volume[direction > 0]))
+            downtick = float(np.sum(volume[direction < 0]))
+            total = uptick + downtick
+            net = uptick - downtick
+            imbalance = net / total if total > 0 else 0.0
+
+            results.append({
+                "date": day_str,
+                "net_delta": int(net),
+                "imbalance": round(imbalance, 4),
+                "direction": "bullish" if imbalance > 0.02 else ("bearish" if imbalance < -0.02 else "neutral"),
+            })
+
+        return results[:days]
 
     # ------------------------------------------------------------------
     # Schwab-only tools
