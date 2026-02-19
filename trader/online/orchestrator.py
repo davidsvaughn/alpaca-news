@@ -741,6 +741,7 @@ def _worker_loop(
     bus: EventBus,
     xstream: XStreamService | None = None,
     tracker: "ActivityTracker | None" = None,
+    observer: "ObserverMode | None" = None,
 ) -> None:
     """Pull paths from the queue and process them one at a time."""
     while True:
@@ -749,6 +750,14 @@ def _worker_loop(
         except queue.Empty:
             continue
         try:
+            if observer is not None and observer.enabled:
+                print(f"OBSERVER: skipped {path.name}")
+                bus.publish(PipelineEvent(
+                    type="observer_skipped",
+                    payload={"path": str(path), "reason": "observer_mode"},
+                ))
+                continue
+
             process_news_file(
                 path=path,
                 settings=settings,
@@ -774,6 +783,7 @@ def run_watch_loop(
     bus: EventBus,
     xstream: XStreamService | None = None,
     tracker: "ActivityTracker | None" = None,
+    observer: "ObserverMode | None" = None,
 ) -> None:
     """Start watchdog observer + worker threads, block forever."""
     import threading
@@ -796,6 +806,7 @@ def run_watch_loop(
                 "bus": bus,
                 "xstream": xstream,
                 "tracker": tracker,
+                "observer": observer,
             },
             name=f"explorer-{i}",
             daemon=True,
@@ -827,7 +838,7 @@ def run_watch_loop(
     if settings.follow_up_enabled:
         from trader.online.follow_up_collector import FollowUpCollector, collector_loop
 
-        fu_collector = FollowUpCollector(settings=settings, db=db, bus=bus, tracker=tracker)
+        fu_collector = FollowUpCollector(settings=settings, db=db, bus=bus, tracker=tracker, observer=observer)
         fu_thread = threading.Thread(
             target=collector_loop,
             args=(fu_collector, settings.follow_up_collector_interval_s),

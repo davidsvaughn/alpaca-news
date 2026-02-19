@@ -80,15 +80,20 @@ class FollowUpCollector:
         bus: EventBus,
         market: MarketDataService | None = None,
         tracker: "ActivityTracker | None" = None,
+        observer: "ObserverMode | None" = None,
     ) -> None:
         self.settings = settings
         self.db = db
         self.bus = bus
         self.market = market or MarketDataService()
         self.tracker = tracker
+        self.observer = observer
 
     def run_cycle(self) -> None:
         """Check all active follow-ups, run collections that are due."""
+        if self.observer is not None and self.observer.enabled:
+            return  # Skip entire cycle in observer mode
+
         for fu_dict in get_active_follow_ups(self.db):
             try:
                 builder = FollowUpBuilder.from_dict(fu_dict)

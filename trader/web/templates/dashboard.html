@@ -8,7 +8,16 @@
 {% endblock %}
 
 {% block content %}
-<h2 class="mb-3">Dashboard</h2>
+<div class="d-flex align-items-center mb-3">
+  <h2 class="mb-0">Dashboard</h2>
+  <button id="observer-toggle-btn" class="btn btn-sm ms-3"
+          hx-post="/api/observer-toggle"
+          hx-target="#observer-toggle-result"
+          hx-swap="innerHTML">
+    Loading...
+  </button>
+  <div id="observer-toggle-result" class="ms-2"></div>
+</div>
 
 <!-- Stats cards (HTMX-loaded) -->
 <div id="stats-cards"
@@ -81,6 +90,27 @@
 
 {% block scripts %}
 <script>
+// Observer mode toggle button
+(function() {
+  function updateBtn(enabled) {
+    var btn = document.getElementById('observer-toggle-btn');
+    if (!btn) return;
+    if (enabled) {
+      btn.className = 'btn btn-warning btn-sm ms-3';
+      btn.textContent = 'Observer: ON';
+    } else {
+      btn.className = 'btn btn-outline-secondary btn-sm ms-3';
+      btn.textContent = 'Observer: OFF';
+    }
+  }
+  fetch('/api/observer-status').then(function(r) { return r.json(); }).then(function(d) { updateBtn(d.observer_mode); }).catch(function() {});
+  document.body.addEventListener('sse:observer_mode_changed', function(e) {
+    updateBtn(e.detail.enabled);
+    document.body.dispatchEvent(new CustomEvent('sse-refresh', {bubbles: true}));
+  });
+})();
+</script>
+<script>
 (function() {
   var eventFeed = document.getElementById('event-feed');
   var tweetFeed = document.getElementById('tweet-feed');
@@ -116,7 +146,9 @@
     backfill_complete: 'success',
     follow_up_collection: 'secondary',
     follow_up_complete: 'info',
-    follow_up_collector_started: 'info'
+    follow_up_collector_started: 'info',
+    observer_mode_changed: 'warning',
+    observer_skipped: 'secondary'
   };
 
   function snapLink(id, label) {
@@ -196,6 +228,10 @@
         return '<span class="feed-dim">[' + (p.current||0) + '/' + (p.total||0) + '] ' + (p.file||'') + '</span>';
       case 'backfill_complete':
         return (p.succeeded||0) + '/' + (p.total||0) + ' succeeded';
+      case 'observer_mode_changed':
+        return p.enabled ? 'Observer mode ENABLED' : 'Observer mode DISABLED';
+      case 'observer_skipped':
+        return '<span class="feed-dim">Skipped: ' + ((p.path || '').split('/').pop() || '') + '</span>';
       case 'follow_up_collection':
         return symBadges(p.symbols) + ' ' + (p.offset_label||'') + ' ($' + (p.cost_usd||0).toFixed(4) + ')';
       case 'follow_up_complete':

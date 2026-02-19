@@ -40,6 +40,7 @@ from trader.knowledge.store import KnowledgeStore
 from trader.models.watch import WatchBuilder
 from trader.online.activity_tracker import ActivityTracker
 from trader.online.event_bus import EventBus, PipelineEvent
+from trader.online.observer_mode import ObserverMode
 from trader.reflection.eval_record import build_eval_record
 from trader.web.sse import sse_response
 
@@ -51,9 +52,11 @@ def create_app(
     db: Database,
     knowledge: KnowledgeStore,
     tracker: ActivityTracker | None = None,
+    observer: ObserverMode | None = None,
 ) -> FastAPI:
     app = FastAPI(title="alpaca-news dashboard")
     app.state.settings = settings  # mutable ref for hot-reload
+    app.state.observer = observer
 
     templates_dir = Path(__file__).parent / "templates"
     templates = Jinja2Templates(directory=str(templates_dir))
@@ -279,6 +282,7 @@ def create_app(
                 "snapshots_today": count_snapshots_today(db),
                 "daily_cost": sealed_cost + inflight,
                 "max_daily_cost": app.state.settings.max_daily_cost,
+                "observer_mode": observer.enabled if observer else False,
             },
         )
 
@@ -358,6 +362,17 @@ def create_app(
             if old_val != new_val:
                 changes.append((field.name, old_val, new_val))
 
+        # Sync observer mode if .env changed it
+        if observer is not None:
+            for name, old_v, new_v in changes:
+                if name == "observer_mode":
+                    observer.set(new_v)
+                    bus.publish(PipelineEvent(
+                        type="observer_mode_changed",
+                        payload={"enabled": new_v, "source": "reload"},
+                    ))
+                    break
+
         app.state.settings = new
 
         if not changes:
@@ -390,6 +405,29 @@ def create_app(
             f"{restart_note}"
             "<script>setTimeout(() => location.reload(), 3000)</script>"
         )
+
+    # ------------------------------------------------------------------
+    # Observer mode
+    # ------------------------------------------------------------------
+
+    @app.get("/api/observer-status")
+    async def api_observer_status():
+        return {"observer_mode": observer.enabled if observer else False}
+
+    @app.post("/api/observer-toggle", response_class=HTMLResponse)
+    async def api_observer_toggle(request: Request):
+        if observer is None:
+            return HTMLResponse(
+                "<div class='alert alert-danger'>Observer mode not configured</div>",
+                status_code=500,
+            )
+        new_state = observer.toggle()
+        bus.publish(PipelineEvent(
+            type="observer_mode_changed",
+            payload={"enabled": new_state},
+        ))
+        label = "ON" if new_state else "OFF"
+        return HTMLResponse(f"<span class='small text-muted'>Observer mode: {label}</span>")
 
     @app.post("/api/watches/{watch_id}/exit", response_class=HTMLResponse)
     async def api_force_exit_watch(request: Request, watch_id: str):
@@ -444,6 +482,10 @@ def create_app(
         symbols: str = Form(""),
     ):
         """Trigger manual exploration for a headline + symbols."""
+        if observer is not None and observer.enabled:
+            return HTMLResponse(
+                "<div class='alert alert-warning'>Observer mode is active — manual exploration is blocked.</div>"
+            )
         symbol_list = [s.strip().upper() for s in symbols.split(",") if s.strip()]
         if not headline.strip():
             return HTMLResponse("<div class='alert alert-warning'>Headline is required</div>")
@@ -791,7 +833,7 @@ def _settings_groups(s: Settings) -> list[tuple[str, list[tuple[str, Any]]]]:
     """Group Settings fields by category for display."""
     # Map field names to groups (order matters for display)
     groups_map: list[tuple[str, list[str]]] = [
-        ("Modes", ["learning_mode", "trading_mode", "debug"]),
+        ("Modes", ["learning_mode", "trading_mode", "debug", "observer_mode"]),
         ("Paths", ["alpaca_output_dir", "data_dir", "sqlite_path", "snapshots_dir"]),
         (
             "Models & Providers",

@@ -10,6 +10,7 @@ Run:
 
 from __future__ import annotations
 
+import argparse
 import atexit
 import threading
 from pathlib import Path
@@ -17,6 +18,7 @@ from pathlib import Path
 import uvicorn
 
 from trader.config import load_settings
+from trader.online.observer_mode import ObserverMode
 from trader.db.database import insert_event, open_sqlite, prune_old_events
 from trader.knowledge.store import KnowledgeStore
 from trader.online.activity_tracker import Activity, ActivityTracker
@@ -27,7 +29,15 @@ from trader.web.app import create_app
 
 
 def main() -> None:
+    parser = argparse.ArgumentParser(description="alpaca-news trader")
+    parser.add_argument("--observer", action="store_true",
+                        help="Start in observer mode (no new jobs launched)")
+    args = parser.parse_args()
+
     settings = load_settings()
+    observer = ObserverMode(enabled=args.observer or settings.observer_mode)
+    if observer.enabled:
+        print("OBSERVER MODE: active — no new jobs will be launched")
     db = open_sqlite(settings.sqlite_path)
     knowledge = KnowledgeStore(root_dir=Path(settings.data_dir))
     knowledge.ensure_defaults()
@@ -93,13 +103,15 @@ def main() -> None:
         )
     t = threading.Thread(
         target=run_watch_loop,
-        kwargs={"settings": settings, "db": db, "knowledge": knowledge, "bus": bus, "xstream": xstream, "tracker": tracker},
+        kwargs={"settings": settings, "db": db, "knowledge": knowledge, "bus": bus, "xstream": xstream, "tracker": tracker, "observer": observer},
         daemon=True,
     )
     t.start()
 
     # Optional: process last N existing files on startup (background thread)
-    if settings.backfill_on_start:
+    if settings.backfill_on_start and observer.enabled:
+        print("OBSERVER: backfill skipped")
+    elif settings.backfill_on_start:
         def _backfill():
             root = Path(settings.alpaca_output_dir)
             files = sorted([p for p in root.glob("*.json") if p.is_file()])
@@ -150,7 +162,7 @@ def main() -> None:
 
         atexit.register(_shutdown_xstream)
 
-    app = create_app(settings=settings, bus=bus, db=db, knowledge=knowledge, tracker=tracker)
+    app = create_app(settings=settings, bus=bus, db=db, knowledge=knowledge, tracker=tracker, observer=observer)
     uvicorn.run(app, host="127.0.0.1", port=8000, log_level="info")
 
 

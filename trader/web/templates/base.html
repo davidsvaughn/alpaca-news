@@ -128,7 +128,8 @@
     // Also listen for new dashboard event types
     ['manual_explore_started','manual_explore_complete','manual_explore_error','knowledge_updated',
      'backfill_started','backfill_progress','backfill_complete',
-     'follow_up_collection','follow_up_complete','follow_up_created'].forEach(function(name) {
+     'follow_up_collection','follow_up_complete','follow_up_created',
+     'observer_mode_changed','observer_skipped'].forEach(function(name) {
       _es.addEventListener(name, function(e) {
         var data = JSON.parse(e.data);
         document.body.dispatchEvent(new CustomEvent('sse:' + name, {bubbles: true, detail: data}));
@@ -137,7 +138,7 @@
     });
 
     // Trigger HTMX refreshes on relevant SSE events
-    var _refreshEvents = ['snapshot_sealed','watch_created','watch_exited','watch_checkin','watch_sealed','watch_retrospective_started','manual_explore_complete','backfill_started','backfill_progress','backfill_complete','follow_up_collection','follow_up_complete'];
+    var _refreshEvents = ['snapshot_sealed','watch_created','watch_exited','watch_checkin','watch_sealed','watch_retrospective_started','manual_explore_complete','backfill_started','backfill_progress','backfill_complete','follow_up_collection','follow_up_complete','observer_mode_changed'];
     _refreshEvents.forEach(function(name) {
       document.body.addEventListener('sse:' + name, function() {
         document.body.dispatchEvent(new CustomEvent('sse-refresh', {bubbles: true}));
@@ -179,6 +180,11 @@
     document.body.addEventListener('sse:manual_explore_error', function(e) {
       var p = e.detail;
       showToast('Explore Error', (p.error||'').slice(0,80), 'danger');
+    });
+    document.body.addEventListener('sse:observer_mode_changed', function(e) {
+      var p = e.detail;
+      var label = p.enabled ? 'ON' : 'OFF';
+      showToast('Observer Mode', 'Observer mode is now ' + label, p.enabled ? 'warning' : 'success');
     });
   </script>
   {% block scripts %}{% endblock %}

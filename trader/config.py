@@ -59,6 +59,7 @@ class Settings:
     learning_mode: bool
     trading_mode: Literal["paper", "live"]
     debug: bool
+    observer_mode: bool
 
     # Paths
     alpaca_output_dir: str
@@ -170,6 +171,7 @@ def load_settings(*, dotenv_path: str | None = None, override: bool = False) -> 
         raise ValueError("TRADING_MODE must be 'paper' or 'live'")
 
     debug = _env_bool("DEBUG", False)
+    observer_mode = _env_bool("OBSERVER_MODE", False)
 
     alpaca_output_dir = _env_str("ALPACA_OUTPUT_DIR", "output/alpaca") or "output/alpaca"
     data_dir = _env_str("DATA_DIR", "data") or "data"
@@ -268,6 +270,7 @@ def load_settings(*, dotenv_path: str | None = None, override: bool = False) -> 
         learning_mode=learning_mode,
         trading_mode=trading_mode,  # type: ignore[arg-type]
         debug=debug,
+        observer_mode=observer_mode,
         alpaca_output_dir=alpaca_output_dir,
         data_dir=data_dir,
         sqlite_path=sqlite_path,
