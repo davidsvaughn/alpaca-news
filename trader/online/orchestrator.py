@@ -816,9 +816,9 @@ def run_watch_loop(
         print(f"Started {num_workers} parallel explorer threads")
 
     handler = _NewsHandler(work_queue=work_q)
-    observer = Observer()
-    observer.schedule(handler, str(watch_dir), recursive=False)
-    observer.start()
+    fs_observer = Observer()
+    fs_observer.schedule(handler, str(watch_dir), recursive=False)
+    fs_observer.start()
     bus.publish(PipelineEvent(type="watching", payload={"dir": str(watch_dir)}))
 
     # Monitoring thread for active watches
@@ -851,5 +851,5 @@ def run_watch_loop(
         while True:
             time.sleep(1)
     finally:
-        observer.stop()
-        observer.join()
+        fs_observer.stop()
+        fs_observer.join()
