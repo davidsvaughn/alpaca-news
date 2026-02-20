@@ -127,6 +127,9 @@
             {% if u.get('total_tokens') %}
               <span class="badge bg-light text-dark border me-1">{{ "{:,}".format(u.get('total_tokens', 0)|int) }} tok</span>
             {% endif %}
+            {% if ci.get('cost_usd') %}
+              <span class="badge bg-light text-dark border me-1">${{ "%.4f"|format(ci.get('cost_usd', 0)|float) }}</span>
+            {% endif %}
             {% if ci.get('elapsed_s') %}
               <span class="badge bg-light text-dark border me-1">{{ "%.1f"|format(ci.get('elapsed_s', 0)|float) }}s</span>
             {% endif %}

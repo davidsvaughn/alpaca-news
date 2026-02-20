@@ -316,6 +316,14 @@ class WatchMonitor:
         builder.last_checkin_at = _utc_now()
         current_price = self._get_current_price(symbol)
 
+        # Estimate LLM cost from token usage
+        from trader.online.agent_pipeline import _estimate_agent_cost
+        cost_usd = _estimate_agent_cost(
+            "gemini", self.settings.watch_checkin_model,
+            input_tokens=agent_result.usage.get("input_tokens", 0),
+            output_tokens=agent_result.usage.get("output_tokens", 0),
+        )
+
         builder.checkin_history.append({
             "time": _utc_now(), "depth": depth,
             "action": decision.action,
@@ -323,6 +331,7 @@ class WatchMonitor:
             "price": current_price,
             "pnl_pct": decision.unrealized_pnl_pct,
             "model": self.settings.watch_checkin_model,
+            "cost_usd": cost_usd,
             # LLM trace data
             "system_prompt": agent_result.system_prompt,
             "user_message": agent_result.user_message,

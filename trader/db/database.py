@@ -377,52 +377,143 @@ def count_snapshots_today(db: Database) -> int:
     return row[0] if row else 0
 
 
-def get_daily_cost_today(db: Database) -> float:
-    """Sum cost_summary.total_usd from today's snapshots."""
-    with db.engine.connect() as conn:
-        rows = conn.execute(
-            text("SELECT snapshot_json FROM snapshots WHERE date(created_at) = date('now')"),
-        ).fetchall()
+def _sum_watch_checkin_costs(watch_rows: list, date_filter: str | None = None) -> float:
+    """Sum cost_usd from watch checkin_history entries, optionally filtering by date."""
     total = 0.0
-    for row in rows:
-        raw = row[0]
-        snap = json.loads(raw) if isinstance(raw, str) else raw
-        cost = snap.get("cost_summary", {})
-        total += float(cost.get("total_usd", 0.0))
+    for row in watch_rows:
+        watch = json.loads(row[0]) if isinstance(row[0], str) else row[0]
+        for ci in watch.get("checkin_history", []):
+            cost = ci.get("cost_usd", 0.0)
+            if not cost:
+                continue
+            if date_filter:
+                ci_time = ci.get("time", "")
+                if not ci_time.startswith(date_filter):
+                    continue
+            total += float(cost)
+    return total
+
+
+def _sum_follow_up_costs(fu_rows: list, date_filter: str | None = None) -> float:
+    """Sum cost_usd from follow-up collections, optionally filtering by date."""
+    total = 0.0
+    for row in fu_rows:
+        fu = json.loads(row[0]) if isinstance(row[0], str) else row[0]
+        if date_filter:
+            # Sum per-collection costs for matching dates
+            for coll in fu.get("collections", []):
+                collected_at = coll.get("collected_at", "")
+                if collected_at.startswith(date_filter):
+                    total += float(coll.get("cost_usd", 0.0))
+        else:
+            total += float(fu.get("total_cost_usd", 0.0))
+    return total
+
+
+def get_daily_cost_today(db: Database) -> float:
+    """Sum all costs from today: snapshots + watch check-ins + follow-ups."""
+    from datetime import date as _date
+    today_str = _date.today().isoformat()  # "2026-02-19"
+
+    total = 0.0
+    with db.engine.connect() as conn:
+        # Snapshot costs
+        for row in conn.execute(
+            text("SELECT snapshot_json FROM snapshots WHERE date(created_at) = date('now')"),
+        ).fetchall():
+            snap = json.loads(row[0]) if isinstance(row[0], str) else row[0]
+            total += float(snap.get("cost_summary", {}).get("total_usd", 0.0))
+
+        # Watch check-in costs (filter individual entries by today's date)
+        watch_rows = conn.execute(
+            text("SELECT watch_json FROM watches WHERE date(updated_at) = date('now')"),
+        ).fetchall()
+        total += _sum_watch_checkin_costs(watch_rows, date_filter=today_str)
+
+        # Follow-up costs (filter individual collections by today's date)
+        fu_rows = conn.execute(
+            text("SELECT follow_up_json FROM follow_ups WHERE date(updated_at) = date('now')"),
+        ).fetchall()
+        total += _sum_follow_up_costs(fu_rows, date_filter=today_str)
+
     return total
 
 
 def get_daily_cost_history(db: Database, *, days: int = 30) -> list[dict[str, Any]]:
     """Return daily cost summary for the last N days.
 
+    Includes costs from snapshots, watch check-ins, and follow-up collections.
     Returns list of dicts: [{"date": "2026-02-10", "total_usd": 1.23, "count": 5, "by_tool": {...}}]
     """
-    with db.engine.connect() as conn:
-        rows = conn.execute(
-            text(
-                "SELECT date(created_at) as day, snapshot_json FROM snapshots "
-                "WHERE date(created_at) >= date('now', :offset) "
-                "ORDER BY day"
-            ),
-            {"offset": f"-{days} days"},
-        ).fetchall()
-
+    offset_param = f"-{days} days"
     daily: dict[str, dict[str, Any]] = {}
-    for row in rows:
-        day = row[0]
-        raw = row[1]
-        snap = json.loads(raw) if isinstance(raw, str) else raw
-        cost = snap.get("cost_summary", {})
 
+    def _ensure_day(day: str) -> dict[str, Any]:
         if day not in daily:
             daily[day] = {"date": day, "total_usd": 0.0, "count": 0, "by_tool": {}}
-        entry = daily[day]
-        entry["total_usd"] += float(cost.get("total_usd", 0.0))
-        entry["count"] += 1
-        for tool, amt in cost.get("by_tool", {}).items():
-            entry["by_tool"][tool] = entry["by_tool"].get(tool, 0.0) + float(amt)
+        return daily[day]
 
-    return list(daily.values())
+    with db.engine.connect() as conn:
+        # Snapshot costs (by creation date)
+        for row in conn.execute(
+            text(
+                "SELECT date(created_at) as day, snapshot_json FROM snapshots "
+                "WHERE date(created_at) >= date('now', :offset) ORDER BY day"
+            ),
+            {"offset": offset_param},
+        ).fetchall():
+            day = row[0]
+            snap = json.loads(row[1]) if isinstance(row[1], str) else row[1]
+            cost = snap.get("cost_summary", {})
+            entry = _ensure_day(day)
+            entry["total_usd"] += float(cost.get("total_usd", 0.0))
+            entry["count"] += 1
+            for tool, amt in cost.get("by_tool", {}).items():
+                entry["by_tool"][tool] = entry["by_tool"].get(tool, 0.0) + float(amt)
+
+        # Watch check-in costs (by individual checkin timestamp)
+        for row in conn.execute(
+            text(
+                "SELECT watch_json FROM watches "
+                "WHERE date(updated_at) >= date('now', :offset)"
+            ),
+            {"offset": offset_param},
+        ).fetchall():
+            watch = json.loads(row[0]) if isinstance(row[0], str) else row[0]
+            for ci in watch.get("checkin_history", []):
+                cost = ci.get("cost_usd", 0.0)
+                if not cost:
+                    continue
+                ci_day = ci.get("time", "")[:10]  # "2026-02-19"
+                if ci_day:
+                    entry = _ensure_day(ci_day)
+                    entry["total_usd"] += float(cost)
+                    entry["by_tool"]["watch_checkin"] = (
+                        entry["by_tool"].get("watch_checkin", 0.0) + float(cost)
+                    )
+
+        # Follow-up collection costs (by individual collection timestamp)
+        for row in conn.execute(
+            text(
+                "SELECT follow_up_json FROM follow_ups "
+                "WHERE date(updated_at) >= date('now', :offset)"
+            ),
+            {"offset": offset_param},
+        ).fetchall():
+            fu = json.loads(row[0]) if isinstance(row[0], str) else row[0]
+            for coll in fu.get("collections", []):
+                cost = coll.get("cost_usd", 0.0)
+                if not cost:
+                    continue
+                coll_day = coll.get("collected_at", "")[:10]
+                if coll_day:
+                    entry = _ensure_day(coll_day)
+                    entry["total_usd"] += float(cost)
+                    entry["by_tool"]["follow_up"] = (
+                        entry["by_tool"].get("follow_up", 0.0) + float(cost)
+                    )
+
+    return sorted(daily.values(), key=lambda d: d["date"])
 
 
 # ---------------------------------------------------------------------------
