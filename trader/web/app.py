@@ -578,6 +578,7 @@ def create_app(
         "signal_patterns.json",
         "anti_patterns.json",
         "model_notes.json",
+        "symbol_lists.json",
     }
 
     @app.post("/api/knowledge/{filename}", response_class=HTMLResponse)
