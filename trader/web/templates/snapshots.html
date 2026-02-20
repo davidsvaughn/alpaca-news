@@ -35,13 +35,15 @@
   </button>
 </div>
 
-<!-- Snapshots table (initial load triggered by JS below to respect localStorage) -->
+<!-- Snapshots table (initial load triggered by JS in scripts block, after htmx loads) -->
 <div id="snapshots-table"
      hx-trigger="refreshTable"
      hx-swap="innerHTML">
   <div class="text-center text-muted py-3">Loading...</div>
 </div>
+{% endblock %}
 
+{% block scripts %}
 <script>
 function _snapshotsUrl(explored) {
   var sym = document.querySelector('[name=symbol]').value || '';
@@ -53,18 +55,6 @@ function toggleExplored(checked) {
   document.getElementById('explored-input').value = checked ? '1' : '';
   htmx.ajax('GET', _snapshotsUrl(checked), {target: '#snapshots-table', swap: 'innerHTML'});
 }
-
-// Restore toggle from localStorage, then do the initial load with correct state
-(function() {
-  var explored = localStorage.getItem('snapshots_explored_only') === '1';
-  var toggle = document.getElementById('explored-toggle');
-  var input = document.getElementById('explored-input');
-  if (explored) {
-    toggle.checked = true;
-    input.value = '1';
-  }
-  htmx.ajax('GET', _snapshotsUrl(explored), {target: '#snapshots-table', swap: 'innerHTML'});
-})();
 
 function updateDeleteBtn() {
   const checked = document.querySelectorAll('.snap-check:checked');
@@ -91,20 +81,29 @@ async function deleteSelectedSnapshots() {
     body: JSON.stringify({snapshot_ids: ids}),
   });
   const data = await resp.json();
-  // Refresh the table
   htmx.trigger('#snapshots-table', 'refreshTable');
-  // Update total count
   const totalEl = document.getElementById('snap-total');
   const prev = parseInt(totalEl.textContent) || 0;
   totalEl.textContent = Math.max(0, prev - data.deleted) + ' total';
   updateDeleteBtn();
 }
 
-// Re-bind checkbox listeners after HTMX swaps
 document.addEventListener('htmx:afterSwap', function(e) {
   if (e.detail.target.id === 'snapshots-table') {
     updateDeleteBtn();
   }
 });
+
+// Restore toggle from localStorage, then do the initial load (htmx is available here)
+(function() {
+  var explored = localStorage.getItem('snapshots_explored_only') === '1';
+  var toggle = document.getElementById('explored-toggle');
+  var input = document.getElementById('explored-input');
+  if (explored) {
+    toggle.checked = true;
+    input.value = '1';
+  }
+  htmx.ajax('GET', _snapshotsUrl(explored), {target: '#snapshots-table', swap: 'innerHTML'});
+})();
 </script>
 {% endblock %}
