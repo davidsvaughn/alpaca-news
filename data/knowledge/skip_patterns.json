@@ -56,11 +56,14 @@
     "stocks are soaring",
     "10 stocks lead the rally",
     "top gainers following decision",
-    "tariffs continue to pose challenge"
+    "tariffs continue to pose challenge",
+    "Stock Of The Day",
+    "break its downtrend",
+    "testing its recent downtrend"
   ],
   "sources_to_skip": [],
   "symbol_contexts": {},
-  "last_updated": "2026-02-20T16:19:34.982148+00:00",
-  "auto_learned": 57,
+  "last_updated": "2026-02-20T16:22:39.066973+00:00",
+  "auto_learned": 60,
   "human_edited": 0
 }

@@ -469,7 +469,7 @@
             {% if round.get('thinking_summary') %}
             <details class="mb-3">
               <summary class="fw-bold small text-warning">Reasoning Summary (click to expand)</summary>
-              <pre class="trace-output bg-light p-2 rounded border mt-1 mb-0" style="white-space: pre-wrap; font-size: 0.82rem;">{{ round.thinking_summary }}</pre>
+              <div class="findings-text p-2 bg-light rounded border mt-1 mb-0 findings-md">{{ round.thinking_summary }}</div>
             </details>
             {% endif %}
 
