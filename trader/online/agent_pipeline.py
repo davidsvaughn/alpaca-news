@@ -61,7 +61,7 @@ class PipelineConfig:
     """Configuration for the full pipeline."""
 
     agents: list[AgentSpec]
-    max_rounds: int = 2
+    max_rounds: int = 1
     confidence_threshold: float = 0.7
     # Per-agent safety nets (prevent runaway loops, not budget control)
     request_limit: int = 15

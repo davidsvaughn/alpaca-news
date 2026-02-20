@@ -45,6 +45,7 @@
 
 <script>
 function toggleExplored(checked) {
+  localStorage.setItem('snapshots_explored_only', checked ? '1' : '');
   document.getElementById('explored-input').value = checked ? '1' : '';
   // Re-fetch with the updated filter
   htmx.ajax('GET',
@@ -52,6 +53,18 @@ function toggleExplored(checked) {
     '&explored=' + (checked ? '1' : ''),
     {target: '#snapshots-table', swap: 'innerHTML'});
 }
+
+// Restore toggle from localStorage on page load
+(function() {
+  const saved = localStorage.getItem('snapshots_explored_only');
+  if (saved === '1') {
+    const toggle = document.getElementById('explored-toggle');
+    if (toggle && !toggle.checked) {
+      toggle.checked = true;
+      toggleExplored(true);
+    }
+  }
+})();
 
 function updateDeleteBtn() {
   const checked = document.querySelectorAll('.snap-check:checked');
