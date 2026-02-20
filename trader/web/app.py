@@ -21,6 +21,7 @@ from trader.db.database import (
     count_snapshots,
     count_snapshots_today,
     count_watches_by_status,
+    delete_snapshots_bulk,
     get_active_follow_ups,
     get_active_watches,
     get_all_follow_ups,
@@ -305,13 +306,42 @@ def create_app(
         )
 
     @app.get("/api/snapshots", response_class=HTMLResponse)
-    async def api_snapshots(request: Request, symbol: str | None = None):
-        snaps = get_all_snapshots(db, symbol=symbol)
+    async def api_snapshots(
+        request: Request,
+        symbol: str | None = None,
+        page: int = 1,
+        per_page: int = 50,
+    ):
+        offset = (max(page, 1) - 1) * per_page
+        total = count_snapshots(db, symbol=symbol)
+        snaps = get_all_snapshots(db, symbol=symbol, limit=per_page, offset=offset)
+        total_pages = max(1, (total + per_page - 1) // per_page)
         return templates.TemplateResponse(
             request=request,
             name="partials/_snapshots_table.html",
-            context={"snapshots": [_DictObj(s) for s in snaps]},
+            context={
+                "snapshots": [_DictObj(s) for s in snaps],
+                "page": page,
+                "per_page": per_page,
+                "total": total,
+                "total_pages": total_pages,
+                "symbol_filter": symbol or "",
+            },
         )
+
+    @app.post("/api/snapshots/delete")
+    async def api_snapshots_delete(request: Request):
+        body = await request.json()
+        ids = body.get("snapshot_ids", [])
+        if not ids:
+            return {"deleted": 0}
+        # Also remove JSON files from disk
+        snap_dir = Path(settings.data_dir) / "snapshots"
+        for sid in ids:
+            for f in snap_dir.glob(f"*{sid}*"):
+                f.unlink(missing_ok=True)
+        deleted = delete_snapshots_bulk(db, ids)
+        return {"deleted": deleted}
 
     @app.get("/api/activity-panel", response_class=HTMLResponse)
     async def api_activity_panel(request: Request):

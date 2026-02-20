@@ -5,28 +5,77 @@
 {% block content %}
 <div class="d-flex align-items-center mb-3">
   <h2 class="mb-0 me-3">Snapshots</h2>
-  <span class="text-muted">{{ total }} total</span>
+  <span class="text-muted" id="snap-total">{{ total }} total</span>
 </div>
 
-<!-- Symbol filter -->
-<form class="mb-3 d-flex gap-2" style="max-width: 320px;"
-      hx-get="/api/snapshots"
-      hx-target="#snapshots-table"
-      hx-swap="innerHTML"
-      hx-trigger="submit">
-  <input type="text" name="symbol" class="form-control form-control-sm"
-         placeholder="Filter by symbol..." value="{{ symbol_filter or '' }}">
-  <button type="submit" class="btn btn-sm btn-outline-primary">Filter</button>
-  {% if symbol_filter %}
-  <a href="/snapshots" class="btn btn-sm btn-outline-secondary">Clear</a>
-  {% endif %}
-</form>
+<!-- Symbol filter + delete controls -->
+<div class="d-flex align-items-center gap-3 mb-3 flex-wrap">
+  <form class="d-flex gap-2" style="max-width: 320px;"
+        hx-get="/api/snapshots"
+        hx-target="#snapshots-table"
+        hx-swap="innerHTML"
+        hx-trigger="submit">
+    <input type="text" name="symbol" class="form-control form-control-sm"
+           placeholder="Filter by symbol..." value="{{ symbol_filter or '' }}">
+    <button type="submit" class="btn btn-sm btn-outline-primary">Filter</button>
+    {% if symbol_filter %}
+    <a href="/snapshots" class="btn btn-sm btn-outline-secondary">Clear</a>
+    {% endif %}
+  </form>
+  <button id="delete-selected-btn" class="btn btn-sm btn-outline-danger d-none"
+          onclick="deleteSelectedSnapshots()">
+    Delete selected (<span id="sel-count">0</span>)
+  </button>
+</div>
 
 <!-- Snapshots table -->
 <div id="snapshots-table"
      hx-get="/api/snapshots?symbol={{ symbol_filter or '' }}"
-     hx-trigger="load"
+     hx-trigger="load, refreshTable"
      hx-swap="innerHTML">
   <div class="text-center text-muted py-3">Loading...</div>
 </div>
+
+<script>
+function updateDeleteBtn() {
+  const checked = document.querySelectorAll('.snap-check:checked');
+  const btn = document.getElementById('delete-selected-btn');
+  const cnt = document.getElementById('sel-count');
+  cnt.textContent = checked.length;
+  btn.classList.toggle('d-none', checked.length === 0);
+}
+
+function toggleAllSnaps(src) {
+  document.querySelectorAll('.snap-check').forEach(cb => { cb.checked = src.checked; });
+  updateDeleteBtn();
+}
+
+async function deleteSelectedSnapshots() {
+  const checked = document.querySelectorAll('.snap-check:checked');
+  const ids = Array.from(checked).map(cb => cb.value);
+  if (!ids.length) return;
+  if (!confirm(`Delete ${ids.length} snapshot(s)? This also removes linked watches and follow-ups.`)) return;
+
+  const resp = await fetch('/api/snapshots/delete', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({snapshot_ids: ids}),
+  });
+  const data = await resp.json();
+  // Refresh the table
+  htmx.trigger('#snapshots-table', 'refreshTable');
+  // Update total count
+  const totalEl = document.getElementById('snap-total');
+  const prev = parseInt(totalEl.textContent) || 0;
+  totalEl.textContent = Math.max(0, prev - data.deleted) + ' total';
+  updateDeleteBtn();
+}
+
+// Re-bind checkbox listeners after HTMX swaps
+document.addEventListener('htmx:afterSwap', function(e) {
+  if (e.detail.target.id === 'snapshots-table') {
+    updateDeleteBtn();
+  }
+});
+</script>
 {% endblock %}

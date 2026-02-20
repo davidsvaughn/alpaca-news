@@ -644,7 +644,7 @@ def process_news_file(
         and signal.direction != "neutral"
         and signal.confidence >= settings.watch_confidence_threshold
     )
-    if settings.follow_up_enabled and not watch_was_created:
+    if settings.follow_up_enabled and triage.action == "investigate" and not watch_was_created:
         try:
             from trader.db.database import insert_follow_up
             from trader.models.follow_up import FollowUpBuilder

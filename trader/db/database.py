@@ -117,6 +117,22 @@ def delete_snapshot(db: Database, snapshot_id: str) -> bool:
     return result.rowcount > 0
 
 
+def delete_snapshots_bulk(db: Database, snapshot_ids: list[str]) -> int:
+    """Delete multiple snapshots and their linked follow-ups/watches. Returns count deleted."""
+    if not snapshot_ids:
+        return 0
+    placeholders = ",".join(f":sid{i}" for i in range(len(snapshot_ids)))
+    params = {f"sid{i}": sid for i, sid in enumerate(snapshot_ids)}
+    with db.engine.begin() as conn:
+        # Delete linked follow-ups
+        conn.execute(text(f"DELETE FROM follow_ups WHERE snapshot_id IN ({placeholders})"), params)
+        # Delete linked watches
+        conn.execute(text(f"DELETE FROM watches WHERE entry_snapshot_id IN ({placeholders})"), params)
+        # Delete snapshots
+        result = conn.execute(text(f"DELETE FROM snapshots WHERE snapshot_id IN ({placeholders})"), params)
+    return result.rowcount
+
+
 def is_mock_snapshot(db: Database, snapshot_id: str) -> bool:
     """Check if a snapshot was created with MOCK_LLM (model='test' in rounds)."""
     with db.engine.connect() as conn:
