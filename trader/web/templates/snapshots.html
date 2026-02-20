@@ -35,35 +35,35 @@
   </button>
 </div>
 
-<!-- Snapshots table -->
+<!-- Snapshots table (initial load triggered by JS below to respect localStorage) -->
 <div id="snapshots-table"
-     hx-get="/api/snapshots?symbol={{ symbol_filter or '' }}&explored={{ '1' if explored_only else '' }}"
-     hx-trigger="load, refreshTable"
+     hx-trigger="refreshTable"
      hx-swap="innerHTML">
   <div class="text-center text-muted py-3">Loading...</div>
 </div>
 
 <script>
+function _snapshotsUrl(explored) {
+  var sym = document.querySelector('[name=symbol]').value || '';
+  return '/api/snapshots?symbol=' + encodeURIComponent(sym) + '&explored=' + (explored ? '1' : '');
+}
+
 function toggleExplored(checked) {
   localStorage.setItem('snapshots_explored_only', checked ? '1' : '');
   document.getElementById('explored-input').value = checked ? '1' : '';
-  // Re-fetch with the updated filter
-  htmx.ajax('GET',
-    '/api/snapshots?symbol=' + encodeURIComponent(document.querySelector('[name=symbol]').value || '') +
-    '&explored=' + (checked ? '1' : ''),
-    {target: '#snapshots-table', swap: 'innerHTML'});
+  htmx.ajax('GET', _snapshotsUrl(checked), {target: '#snapshots-table', swap: 'innerHTML'});
 }
 
-// Restore toggle from localStorage on page load
+// Restore toggle from localStorage, then do the initial load with correct state
 (function() {
-  const saved = localStorage.getItem('snapshots_explored_only');
-  if (saved === '1') {
-    const toggle = document.getElementById('explored-toggle');
-    if (toggle && !toggle.checked) {
-      toggle.checked = true;
-      toggleExplored(true);
-    }
+  var explored = localStorage.getItem('snapshots_explored_only') === '1';
+  var toggle = document.getElementById('explored-toggle');
+  var input = document.getElementById('explored-input');
+  if (explored) {
+    toggle.checked = true;
+    input.value = '1';
   }
+  htmx.ajax('GET', _snapshotsUrl(explored), {target: '#snapshots-table', swap: 'innerHTML'});
 })();
 
 function updateDeleteBtn() {
