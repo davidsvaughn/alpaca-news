@@ -578,31 +578,35 @@ def count_all_watches(db: Database, *, status: str | None = None) -> int:
 
 
 def get_all_snapshots(
-    db: Database, *, symbol: str | None = None, limit: int = 50, offset: int = 0
+    db: Database, *, symbol: str | None = None, explored_only: bool = False,
+    limit: int = 50, offset: int = 0,
 ) -> list[dict[str, Any]]:
-    """Fetch snapshots ordered by created_at DESC, with optional symbol filter."""
+    """Fetch snapshots ordered by created_at DESC, with optional filters."""
+    clauses: list[str] = []
+    params: dict[str, Any] = {"lim": limit, "off": offset}
     if symbol:
-        sql = (
-            "SELECT snapshot_json FROM snapshots WHERE symbols LIKE :sym "
-            "ORDER BY created_at DESC LIMIT :lim OFFSET :off"
-        )
-        params: dict[str, Any] = {"sym": f"%{symbol}%", "lim": limit, "off": offset}
-    else:
-        sql = "SELECT snapshot_json FROM snapshots ORDER BY created_at DESC LIMIT :lim OFFSET :off"
-        params = {"lim": limit, "off": offset}
+        clauses.append("symbols LIKE :sym")
+        params["sym"] = f"%{symbol}%"
+    if explored_only:
+        clauses.append("json_extract(snapshot_json, '$.triage.action') = 'investigate'")
+    where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
+    sql = f"SELECT snapshot_json FROM snapshots{where} ORDER BY created_at DESC LIMIT :lim OFFSET :off"
     with db.engine.connect() as conn:
         rows = conn.execute(text(sql), params).fetchall()
     return _parse_rows(rows)
 
 
-def count_snapshots(db: Database, *, symbol: str | None = None) -> int:
-    """Count snapshots, optionally filtered by symbol."""
+def count_snapshots(db: Database, *, symbol: str | None = None, explored_only: bool = False) -> int:
+    """Count snapshots, optionally filtered by symbol and/or explored-only."""
+    clauses: list[str] = []
+    params: dict[str, Any] = {}
     if symbol:
-        sql = "SELECT COUNT(*) FROM snapshots WHERE symbols LIKE :sym"
-        params: dict[str, Any] = {"sym": f"%{symbol}%"}
-    else:
-        sql = "SELECT COUNT(*) FROM snapshots"
-        params = {}
+        clauses.append("symbols LIKE :sym")
+        params["sym"] = f"%{symbol}%"
+    if explored_only:
+        clauses.append("json_extract(snapshot_json, '$.triage.action') = 'investigate'")
+    where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
+    sql = f"SELECT COUNT(*) FROM snapshots{where}"
     with db.engine.connect() as conn:
         row = conn.execute(text(sql), params).fetchone()
     return row[0] if row else 0

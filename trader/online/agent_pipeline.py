@@ -593,6 +593,7 @@ async def run_pipeline(
     config: PipelineConfig | None = None,
     x_stream_service: Any = None,
     on_stage: Callable[[str, int, int], None] | None = None,
+    abort_check: Callable[[], None] | None = None,
 ) -> PipelineResult:
     """Run the multi-agent sequential pipeline.
 
@@ -661,6 +662,10 @@ async def run_pipeline(
 
             if on_stage is not None:
                 on_stage(spec.name, i + 1, len(config.agents))
+
+            # Cooperative abort check — raises JobAborted if flagged
+            if abort_check is not None:
+                abort_check()
 
             start_time = time.time()
 

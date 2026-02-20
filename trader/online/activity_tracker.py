@@ -12,6 +12,10 @@ from datetime import datetime, timezone
 from typing import Any
 
 
+class JobAborted(Exception):
+    """Raised when a running job is aborted via the dashboard."""
+
+
 @dataclass
 class Activity:
     """A single in-flight operation."""
@@ -33,6 +37,7 @@ class ActivityTracker:
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._activities: dict[str, Activity] = {}
+        self._aborted: set[str] = set()
 
     def start(self, activity: Activity) -> None:
         """Register a new in-flight activity."""
@@ -53,6 +58,17 @@ class ActivityTracker:
         """Remove an activity (operation complete)."""
         with self._lock:
             self._activities.pop(id, None)
+            self._aborted.discard(id)
+
+    def request_abort(self, id: str) -> None:
+        """Flag a job for cancellation. The job will stop at its next checkpoint."""
+        with self._lock:
+            self._aborted.add(id)
+
+    def is_aborted(self, id: str) -> bool:
+        """Check whether a job has been flagged for abort."""
+        with self._lock:
+            return id in self._aborted
 
     def get_all(self) -> list[Activity]:
         """Return a snapshot of all active operations."""

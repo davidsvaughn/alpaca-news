@@ -16,6 +16,9 @@
     <span class="badge bg-secondary">{{ a.progress }}</span>
     <span class="text-muted">{{ a.label[:50] }}{% if a.label|length > 50 %}...{% endif %}</span>
     {% if a.cost_usd > 0 %}<span class="text-warning">${{ "%.4f"|format(a.cost_usd) }}</span>{% endif %}
+    <button class="btn btn-outline-danger btn-sm ms-auto py-0 px-1" style="font-size: 0.65rem; line-height: 1.2;"
+            hx-post="/api/activity/{{ a.id }}/abort" hx-swap="none"
+            hx-confirm="Abort this backfill?">&#x2715;</button>
   </div>
   {% endfor %}
 </div>
@@ -36,6 +39,9 @@
     {% if a.stage_started_at %}<span class="stage-timer text-muted" style="font-size: 0.75rem;"></span>{% endif %}
     <span class="elapsed-timer badge bg-light text-dark border" style="font-size: 0.72rem;"></span>
     {% if a.cost_usd > 0 %}<span class="text-warning">${{ "%.4f"|format(a.cost_usd) }}</span>{% endif %}
+    <button class="btn btn-outline-danger btn-sm ms-auto py-0 px-1" style="font-size: 0.65rem; line-height: 1.2;"
+            hx-post="/api/activity/{{ a.id }}/abort" hx-swap="none"
+            hx-confirm="Abort this exploration?">&#x2715;</button>
   </div>
   {% endfor %}
 </div>
@@ -51,6 +57,9 @@
     {% for s in a.symbols %}<span class="badge bg-primary">{{ s }}</span>{% endfor %}
     <span class="text-muted">{{ a.progress }}</span>
     <span class="elapsed-timer badge bg-light text-dark border" style="font-size: 0.72rem;"></span>
+    <button class="btn btn-outline-danger btn-sm ms-auto py-0 px-1" style="font-size: 0.65rem; line-height: 1.2;"
+            hx-post="/api/activity/{{ a.id }}/abort" hx-swap="none"
+            hx-confirm="Abort this collection?">&#x2715;</button>
   </div>
   {% endfor %}
 </div>

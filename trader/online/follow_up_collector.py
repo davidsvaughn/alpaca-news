@@ -157,9 +157,22 @@ class FollowUpCollector:
                 detail={"follow_up_id": builder.follow_up_id, "snapshot_id": snapshot_id},
             ))
 
+        def _aborted() -> bool:
+            return self.tracker is not None and self.tracker.is_aborted(_act_id)
+
+        if _aborted():
+            if self.tracker is not None:
+                self.tracker.finish(_act_id)
+            return
+
         # Phase 1: LLM query planner
         query_plan = self._plan_queries(builder, offset_label)
         query_plan_dict = query_plan.model_dump()
+
+        if _aborted():
+            if self.tracker is not None:
+                self.tracker.finish(_act_id)
+            return
 
         # Phase 2: Mechanical data gathering
 
@@ -183,6 +196,8 @@ class FollowUpCollector:
         web_results: list[dict[str, Any]] = []
         if budget_remaining > 0.01:
             for query in query_plan.web_queries[: settings.follow_up_web_searches]:
+                if _aborted():
+                    break
                 result = _run_web_search(query)
                 result["quality"] = _rate_quality(result)
                 web_results.append(result)
@@ -192,10 +207,18 @@ class FollowUpCollector:
         x_results: list[dict[str, Any]] = []
         if budget_remaining - cost_this > 0.01:
             for query in query_plan.x_queries[: settings.follow_up_x_searches]:
+                if _aborted():
+                    break
                 result = _run_x_search(query)
                 result["quality"] = _rate_quality(result)
                 x_results.append(result)
                 cost_this += result.get("cost_usd", 0.005)
+
+        # If aborted after searches, clean up without saving
+        if _aborted():
+            if self.tracker is not None:
+                self.tracker.finish(_act_id)
+            return
 
         # Build collection and add to builder
         collection = FollowUpCollection(

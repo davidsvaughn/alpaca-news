@@ -48,6 +48,7 @@ from trader.online.agent_pipeline import (
     _extract_model_for_pricing,
 )
 from trader.online.triage import run_triage
+from trader.online.activity_tracker import JobAborted
 from trader.online.event_bus import EventBus, PipelineEvent
 from trader.online.x_stream_service import QualityVerdict, XStreamService, build_rules_for_symbols
 
@@ -342,6 +343,23 @@ def process_news_file(
             tracker.update(_act_id, progress="exploring", cost_usd=cost_tracker.item_spent,
                            stage_started_at=_now)
 
+    # Abort check closure — raises JobAborted if the dashboard user clicked abort
+    def _check_abort() -> None:
+        if tracker is not None and tracker.is_aborted(_act_id):
+            raise JobAborted(f"Job {_act_id} aborted by user")
+
+    # Check after triage, before pipeline
+    try:
+        _check_abort()
+    except JobAborted:
+        bus.publish(PipelineEvent(
+            type="exploration_aborted",
+            payload={"snapshot_id": snap_id, "symbols": trigger.symbols, "headline": trigger.headline},
+        ))
+        if tracker is not None:
+            tracker.finish(_act_id)
+        return
+
     # --- Stage 2: Exploration (if investigate) ---
     signal = None  # set inside investigate block, used for watch creation
     symbols: list[str] = []  # initialized here for the guard below
@@ -464,7 +482,20 @@ def process_news_file(
                 config=pipeline_config,
                 x_stream_service=xstream,
                 on_stage=_on_stage if tracker is not None else None,
+                abort_check=_check_abort,
             ))
+        except JobAborted:
+            bus.publish(PipelineEvent(
+                type="exploration_aborted",
+                payload={
+                    "snapshot_id": snap_id,
+                    "symbols": symbols,
+                    "headline": trigger.headline,
+                },
+            ))
+            if tracker is not None:
+                tracker.finish(_act_id)
+            return
         except Exception as e:
             # Pipeline crashed entirely — save what we have
             bus.publish(PipelineEvent(
@@ -771,6 +802,8 @@ def _worker_loop(
                 xstream=xstream,
                 tracker=tracker,
             )
+        except JobAborted:
+            print(f"ABORTED: {path.name}")
         except Exception as e:
             if DEBUG:
                 raise

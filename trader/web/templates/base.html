@@ -138,7 +138,7 @@
     });
 
     // Trigger HTMX refreshes on relevant SSE events
-    var _refreshEvents = ['snapshot_sealed','watch_created','watch_exited','watch_checkin','watch_sealed','watch_retrospective_started','manual_explore_complete','backfill_started','backfill_progress','backfill_complete','follow_up_collection','follow_up_complete','observer_mode_changed'];
+    var _refreshEvents = ['snapshot_sealed','watch_created','watch_exited','watch_checkin','watch_sealed','watch_retrospective_started','manual_explore_complete','backfill_started','backfill_progress','backfill_complete','follow_up_collection','follow_up_complete','observer_mode_changed','job_aborted','exploration_aborted'];
     _refreshEvents.forEach(function(name) {
       document.body.addEventListener('sse:' + name, function() {
         document.body.dispatchEvent(new CustomEvent('sse-refresh', {bubbles: true}));

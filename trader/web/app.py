@@ -154,12 +154,14 @@ def create_app(
         )
 
     @app.get("/snapshots", response_class=HTMLResponse)
-    async def snapshots_page(request: Request, symbol: str | None = None):
-        total = count_snapshots(db, symbol=symbol)
+    async def snapshots_page(request: Request, symbol: str | None = None, explored: str | None = None):
+        explored_only = explored == "1"
+        total = count_snapshots(db, symbol=symbol, explored_only=explored_only)
         return templates.TemplateResponse(
             request=request,
             name="snapshots.html",
-            context={"active_page": "snapshots", "symbol_filter": symbol, "total": total},
+            context={"active_page": "snapshots", "symbol_filter": symbol,
+                     "explored_only": explored_only, "total": total},
         )
 
     @app.get("/snapshots/{snapshot_id}", response_class=HTMLResponse)
@@ -309,12 +311,15 @@ def create_app(
     async def api_snapshots(
         request: Request,
         symbol: str | None = None,
+        explored: str | None = None,
         page: int = 1,
         per_page: int = 50,
     ):
+        explored_only = explored == "1"
         offset = (max(page, 1) - 1) * per_page
-        total = count_snapshots(db, symbol=symbol)
-        snaps = get_all_snapshots(db, symbol=symbol, limit=per_page, offset=offset)
+        total = count_snapshots(db, symbol=symbol, explored_only=explored_only)
+        snaps = get_all_snapshots(db, symbol=symbol, explored_only=explored_only,
+                                  limit=per_page, offset=offset)
         total_pages = max(1, (total + per_page - 1) // per_page)
         return templates.TemplateResponse(
             request=request,
@@ -326,6 +331,7 @@ def create_app(
                 "total": total,
                 "total_pages": total_pages,
                 "symbol_filter": symbol or "",
+                "explored_only": explored_only,
             },
         )
 
@@ -368,6 +374,17 @@ def create_app(
                 "follow_ups": fu_summaries,
             },
         )
+
+    @app.post("/api/activity/{activity_id}/abort", response_class=HTMLResponse)
+    async def api_abort_activity(activity_id: str):
+        if tracker is None:
+            return HTMLResponse("<span class='text-muted small'>Tracker not available</span>", status_code=503)
+        tracker.request_abort(activity_id)
+        bus.publish(PipelineEvent(
+            type="job_aborted",
+            payload={"activity_id": activity_id},
+        ))
+        return HTMLResponse("<span class='text-warning small'>Abort requested</span>")
 
     # ------------------------------------------------------------------
     # Control actions (POST)
