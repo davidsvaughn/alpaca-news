@@ -1,0 +1,178 @@
+"""Symbol-level filtering: blacklist + positive US equity/ETF validation.
+
+Maintains a persistent JSON file (``data/knowledge/symbol_lists.json``) with:
+- **blacklist**: manually curated symbols that should never be traded (e.g. SPY, VIX)
+- **verified**: auto-populated symbols confirmed as tradeable US equities/ETFs
+- **crypto**: auto-populated cryptocurrency tickers
+- **rejected**: auto-populated non-tradeable symbols (indices, futures, forex, etc.)
+
+Unknown symbols are checked eagerly via ``yfinance.Ticker(sym).info``.
+Results are cached so subsequent encounters are instant (no yfinance call).
+
+Positive filter: ``quoteType in ("EQUITY", "ETF") and market == "us_market"``
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import threading
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any
+
+_file_lock = threading.Lock()
+
+DEBUG = os.getenv("DEBUG", "false").lower() in ("true", "1")
+
+# Seed blacklist — symbols that should never be considered for buying.
+_DEFAULT_BLACKLIST = ["SPY", "VIX"]
+
+# Positive filter: only these quoteTypes on us_market are tradeable.
+_ALLOWED_QUOTE_TYPES = {"EQUITY", "ETF"}
+_ALLOWED_MARKET = "us_market"
+
+_SYMBOL_LISTS_FILENAME = "symbol_lists.json"
+
+
+def _utc_now_iso() -> str:
+    return datetime.now(tz=timezone.utc).isoformat()
+
+
+def _lists_path(data_dir: str | Path) -> Path:
+    return Path(data_dir) / "knowledge" / _SYMBOL_LISTS_FILENAME
+
+
+def load_symbol_lists(data_dir: str | Path) -> dict[str, Any]:
+    """Load symbol lists from disk, creating defaults if missing."""
+    path = _lists_path(data_dir)
+    if path.exists():
+        return json.loads(path.read_text(encoding="utf-8"))
+    # Create defaults
+    data: dict[str, Any] = {
+        "blacklist": list(_DEFAULT_BLACKLIST),
+        "verified": [],
+        "crypto": [],
+        "rejected": [],
+        "last_updated": _utc_now_iso(),
+    }
+    _save_symbol_lists(data_dir, data)
+    return data
+
+
+def _save_symbol_lists(data_dir: str | Path, data: dict[str, Any]) -> None:
+    path = _lists_path(data_dir)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    data["last_updated"] = _utc_now_iso()
+    path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+
+def _add_to_list(data_dir: str | Path, list_name: str, symbol: str) -> None:
+    """Thread-safe append of a symbol to a named list."""
+    with _file_lock:
+        data = load_symbol_lists(data_dir)
+        lst = data.get(list_name, [])
+        sym = symbol.upper()
+        if sym not in lst:
+            lst.append(sym)
+            data[list_name] = lst
+            _save_symbol_lists(data_dir, data)
+
+
+def _classify_symbol(symbol: str, data_dir: str | Path) -> str:
+    """Query yfinance to classify a symbol. Returns a reason string.
+
+    Returns:
+        "verified" if tradeable US equity/ETF,
+        "crypto" if cryptocurrency,
+        "not_us_tradeable" for anything else (index, futures, forex, foreign, etc.),
+        "lookup_failed" if yfinance call fails.
+    """
+    sym = symbol.upper()
+    try:
+        import yfinance as yf
+
+        ticker = yf.Ticker(sym)
+        info = ticker.info or {}
+        quote_type = info.get("quoteType", "")
+        market = info.get("market", "")
+
+        if quote_type == "CRYPTOCURRENCY":
+            _add_to_list(data_dir, "crypto", sym)
+            return "crypto"
+
+        if quote_type in _ALLOWED_QUOTE_TYPES and market == _ALLOWED_MARKET:
+            _add_to_list(data_dir, "verified", sym)
+            return "verified"
+
+        # Not tradeable — cache it so we don't re-check
+        _add_to_list(data_dir, "rejected", sym)
+        return "not_us_tradeable"
+
+    except Exception:
+        if DEBUG:
+            raise
+        # yfinance failure → allow through (conservative: don't block unknowns)
+        return "lookup_failed"
+
+
+def filter_symbols(
+    symbols: list[str],
+    data_dir: str | Path,
+) -> tuple[list[str], list[dict[str, str]]]:
+    """Filter symbols to only tradeable US equities/ETFs.
+
+    Checks in order: blacklist → verified cache → crypto cache → rejected cache
+    → yfinance lookup (result cached for next time).
+
+    Returns:
+        (kept_symbols, filtered_reasons) where filtered_reasons is a list of
+        ``{"symbol": ..., "reason": ...}`` dicts for each removed symbol.
+    """
+    data = load_symbol_lists(data_dir)
+    blacklist = set(s.upper() for s in data.get("blacklist", []))
+    verified = set(s.upper() for s in data.get("verified", []))
+    crypto_set = set(s.upper() for s in data.get("crypto", []))
+    rejected = set(s.upper() for s in data.get("rejected", []))
+
+    kept: list[str] = []
+    filtered: list[dict[str, str]] = []
+
+    for sym in symbols:
+        s = sym.upper()
+
+        # 1. Blacklist (manual, highest priority)
+        if s in blacklist:
+            filtered.append({"symbol": s, "reason": "blacklisted"})
+            continue
+
+        # 2. Already verified as tradeable
+        if s in verified:
+            kept.append(sym)
+            continue
+
+        # 3. Already known crypto
+        if s in crypto_set:
+            filtered.append({"symbol": s, "reason": "crypto"})
+            continue
+
+        # 4. Already known non-tradeable
+        if s in rejected:
+            filtered.append({"symbol": s, "reason": "not_us_tradeable"})
+            continue
+
+        # 5. Unknown — classify via yfinance
+        result = _classify_symbol(s, data_dir)
+        if result == "verified":
+            kept.append(sym)
+        elif result == "lookup_failed":
+            # Conservative: allow through if we can't check
+            kept.append(sym)
+        else:
+            filtered.append({"symbol": s, "reason": result})
+
+    if filtered and DEBUG:
+        reasons = ", ".join(f"{f['symbol']}({f['reason']})" for f in filtered)
+        print(f"SYMBOL FILTER: removed {reasons}")
+
+    return kept, filtered

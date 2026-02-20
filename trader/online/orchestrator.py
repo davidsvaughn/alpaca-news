@@ -343,10 +343,31 @@ def process_news_file(
 
     # --- Stage 2: Exploration (if investigate) ---
     signal = None  # set inside investigate block, used for watch creation
+    symbols: list[str] = []  # initialized here for the guard below
+
     if triage.action == "investigate":
         # Use triage-refined symbols (falls back to trigger symbols)
         symbols = triage.symbols if triage.symbols else trigger.symbols
 
+        # Symbol-level filtering (blacklist + crypto detection)
+        from trader.online.symbol_filter import filter_symbols
+        symbols, filtered = filter_symbols(symbols, settings.data_dir)
+        if filtered:
+            bus.publish(PipelineEvent(type="symbols_filtered", payload={
+                "snapshot_id": snap_id,
+                "filtered": filtered,
+            }))
+        if not symbols:
+            bus.publish(PipelineEvent(type="symbols_all_filtered", payload={
+                "snapshot_id": snap_id,
+                "headline": trigger.headline,
+                "filtered": filtered,
+            }))
+            if tracker is not None:
+                tracker.finish(_act_id)
+            return  # Nothing to investigate — skip snapshot entirely
+
+    if triage.action == "investigate" and symbols:
         # Optional: start a conservative X stream burst (runs in background).
         # Only for fresh news — stale/backfill items should use x_search instead.
         if (
