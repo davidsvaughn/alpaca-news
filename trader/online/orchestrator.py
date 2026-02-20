@@ -305,14 +305,15 @@ def process_news_file(
         knowledge=knowledge,
         news=news,
     )
+    _was_pre_filter = triage.reasoning.startswith("Pre-filter:")
     builder.set_triage({
         "action": triage.action,
         "confidence": triage.confidence,
         "reasoning": triage.reasoning,
         "symbols": triage.symbols,
         "skip_patterns_learned": triage.skip_patterns_learned,
-        "provider": settings.triage_provider,
-        "model": settings.triage_model,
+        "provider": "pre-filter" if _was_pre_filter else settings.triage_provider,
+        "model": "keyword" if _was_pre_filter else settings.triage_model,
     })
 
     bus.publish(
