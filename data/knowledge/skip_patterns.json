@@ -99,11 +99,13 @@
     "goes long bitcoin contrarian",
     "initiates coverage",
     "Buy Rating",
-    "Price Target of $10"
+    "Price Target of $10",
+    "Reasons to Buy",
+    "Good Reasons to Buy"
   ],
   "sources_to_skip": [],
   "symbol_contexts": {},
-  "last_updated": "2026-02-20T20:48:01.316528+00:00",
-  "auto_learned": 100,
+  "last_updated": "2026-02-20T20:54:26.378816+00:00",
+  "auto_learned": 102,
   "human_edited": 0
 }
