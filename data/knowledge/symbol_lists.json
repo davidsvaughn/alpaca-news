@@ -21,9 +21,23 @@
     "RNG",
     "KOS",
     "BLCV",
-    "ISMD"
+    "ISMD",
+    "CRWV",
+    "AU",
+    "COP",
+    "SNY",
+    "E",
+    "TEVA",
+    "GLD",
+    "GS",
+    "AIXC",
+    "MWG",
+    "BHAT",
+    "V",
+    "CPS",
+    "MGRX"
   ],
   "crypto": [],
   "rejected": [],
-  "last_updated": "2026-02-20T16:17:12.965747+00:00"
+  "last_updated": "2026-02-20T20:40:48.238263+00:00"
 }
