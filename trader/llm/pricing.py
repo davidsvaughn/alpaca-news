@@ -64,7 +64,7 @@ GEMINI_PRICING: dict[str, dict[str, float]] = {
     "gemini-3-flash-preview-lite": {"input_low": 0.10, "input_high": 0.10, "output": 0.40},
     "gemini-2.0-flash": {"input_low": 0.10, "input_high": 0.10, "output": 0.40},
     # Placeholder (pricing may not actually be per-call; confirm via Google pricing pages)
-    "GoogleSearch": {"per_call": 0.01},
+    "web_search": {"per_call": 0.01},
 }
 
 

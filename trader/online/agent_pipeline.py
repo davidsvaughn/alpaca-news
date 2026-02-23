@@ -719,11 +719,13 @@ async def run_pipeline(
                 _tr["agent"] = spec.name
             all_tool_traces.extend(agent_result.tool_traces)
 
-            # Estimate per-agent cost
+            # Estimate per-agent cost (tokens + server-side tool fees)
             agent_cost = _estimate_agent_cost(
                 spec.name, model_name,
                 input_tokens=agent_result.usage.get("input_tokens", 0),
                 output_tokens=agent_result.usage.get("output_tokens", 0),
+                web_search_calls=agent_result.usage.get("web_search_calls", 0),
+                x_search_calls=agent_result.usage.get("x_search_calls", 0),
             )
             cumulative_cost += agent_cost
 
@@ -848,34 +850,48 @@ def _estimate_agent_cost(
     *,
     input_tokens: int,
     output_tokens: int,
+    web_search_calls: int = 0,
+    x_search_calls: int = 0,
 ) -> float:
     """Estimate USD cost for a single agent's run. Returns 0.0 on error."""
     from trader.llm.pricing import (
         estimate_token_cost_grok,
         estimate_token_cost_openai,
         estimate_token_cost_gemini,
+        estimate_tool_cost,
     )
 
-    if not (input_tokens or output_tokens):
-        return 0.0
-
     provider, raw_model = _extract_model_for_pricing(agent_name, model_string)
-    try:
-        if provider == "openai":
-            return estimate_token_cost_openai(
-                raw_model, input_tokens=input_tokens, output_tokens=output_tokens,
-            ).total_cost_usd
-        elif provider == "grok":
-            return estimate_token_cost_grok(
-                raw_model, input_tokens=input_tokens, output_tokens=output_tokens,
-            ).total_cost_usd
-        elif provider == "gemini":
-            return estimate_token_cost_gemini(
-                raw_model, input_tokens=input_tokens, output_tokens=output_tokens,
-            ).total_cost_usd
-    except (KeyError, ValueError):
-        pass
-    return 0.0
+
+    # Token costs
+    token_cost = 0.0
+    if input_tokens or output_tokens:
+        try:
+            if provider == "openai":
+                token_cost = estimate_token_cost_openai(
+                    raw_model, input_tokens=input_tokens, output_tokens=output_tokens,
+                ).total_cost_usd
+            elif provider == "grok":
+                token_cost = estimate_token_cost_grok(
+                    raw_model, input_tokens=input_tokens, output_tokens=output_tokens,
+                ).total_cost_usd
+            elif provider == "gemini":
+                token_cost = estimate_token_cost_gemini(
+                    raw_model, input_tokens=input_tokens, output_tokens=output_tokens,
+                ).total_cost_usd
+        except (KeyError, ValueError):
+            pass
+
+    # Server-side tool fees
+    tool_cost = 0.0
+    for tool_name, calls in [("web_search", web_search_calls), ("x_search", x_search_calls)]:
+        if calls > 0:
+            try:
+                tool_cost += estimate_tool_cost(provider=provider, tool_name=tool_name, calls=calls)
+            except KeyError:
+                pass  # Provider doesn't have this tool (e.g. OpenAI has no x_search)
+
+    return token_cost + tool_cost
 
 
 def _extract_model_for_pricing(spec_name: str, model_string: str) -> tuple[str, str]:

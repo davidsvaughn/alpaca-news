@@ -529,12 +529,18 @@ def process_news_file(
                 usage = rnd.get("usage", {})
                 provider, raw_model = _extract_model_for_pricing(agent_name, model_string)
 
+                # Build tools_used list from per-type counters set by runners
+                tools_used: list[str] = (
+                    ["web_search"] * int(usage.get("web_search_calls", 0))
+                    + ["x_search"] * int(usage.get("x_search_calls", 0))
+                )
+
                 try:
                     cost_tracker.log_llm_call(
                         provider=provider,  # type: ignore[arg-type]
                         model=raw_model,
                         usage=usage,
-                        tools_used=[],
+                        tools_used=tools_used,
                         stage="explore",
                         purpose=f"agent_{agent_name}",
                     )

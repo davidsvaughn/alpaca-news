@@ -24,6 +24,9 @@ DEBUG = os.getenv("DEBUG", "false").lower() in ("true", "1")
 # Maximum tool-calling loop iterations (safety net)
 _DEFAULT_MAX_TURNS = 15
 
+# Per-call fee for server-side web_search on OpenAI ($10/1k = $0.01 each)
+_OPENAI_WEB_SEARCH_FEE = 0.01
+
 
 def _build_openai_tools(
     excluded: frozenset[str],
@@ -124,6 +127,7 @@ async def run_openai(
     total_usage = {
         "input_tokens": 0, "output_tokens": 0, "total_tokens": 0,
         "requests": 0, "tool_calls": 0, "reasoning_tokens": 0,
+        "web_search_calls": 0,
     }
 
     def _accumulate_usage(resp: Any) -> None:
@@ -166,10 +170,13 @@ async def run_openai(
                     start=time.time(),
                     end=time.time(),
                     hop_index=hop_index,
+                    cost_usd=_OPENAI_WEB_SEARCH_FEE,
                     builtin=True,
                 )
                 tool_traces.append(trace)
                 hop_index += 1
+                total_usage["tool_calls"] += 1
+                total_usage["web_search_calls"] += 1
 
     _extract_builtin_traces(response)
 

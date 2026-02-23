@@ -18,6 +18,9 @@ from google.genai import types
 
 from trader.online.agent_common import AgentRunResult, TradingSignal, build_trace_dict
 
+# Per-call fee for Google Search grounding (placeholder — confirm via Google pricing)
+_GEMINI_SEARCH_FEE = 0.01
+
 DEBUG = os.getenv("DEBUG", "false").lower() in ("true", "1")
 
 
@@ -61,6 +64,7 @@ async def run_gemini(
     total_usage: dict[str, int] = {
         "input_tokens": 0, "output_tokens": 0, "total_tokens": 0,
         "requests": 0, "tool_calls": 0, "reasoning_tokens": 0,
+        "web_search_calls": 0,
     }
     tool_traces: list[dict[str, Any]] = []
     hop_index = 0
@@ -97,11 +101,13 @@ async def run_gemini(
                     start=time.time(),
                     end=time.time(),
                     hop_index=hop_index,
+                    cost_usd=_GEMINI_SEARCH_FEE,
                     builtin=True,
                 )
                 tool_traces.append(trace)
                 hop_index += 1
                 total_usage["tool_calls"] += 1
+                total_usage["web_search_calls"] += 1
 
     # Extract final text
     output_text = getattr(response, "text", "") or ""

@@ -126,6 +126,7 @@ async def run_grok(
     total_usage = {
         "input_tokens": 0, "output_tokens": 0, "total_tokens": 0,
         "requests": 0, "tool_calls": 0, "reasoning_tokens": 0,
+        "web_search_calls": 0, "x_search_calls": 0,
     }
 
     def _accumulate_usage(resp: Any) -> None:
@@ -199,6 +200,10 @@ async def run_grok(
             tool_traces.append(trace)
             hop_index += 1
             total_usage["tool_calls"] += 1
+            if tool_name == "web_search":
+                total_usage["web_search_calls"] += 1
+            elif tool_name == "x_search":
+                total_usage["x_search_calls"] += 1
 
     _extract_builtin_traces(response)
 

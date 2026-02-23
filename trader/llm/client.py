@@ -150,7 +150,7 @@ class LLMClient:
             provider="gemini",
             model=model,
             usage=usage,
-            tools_used=["GoogleSearch"] if google_search else [],
+            tools_used=["web_search"] if google_search else [],
             stage=stage,
             purpose=purpose,
         )
