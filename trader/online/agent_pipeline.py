@@ -27,11 +27,56 @@ from dataclasses import dataclass, field
 from typing import Any, Callable
 
 from trader.market.data_service import MarketDataService
+from trader.online.activity_tracker import JobAborted
 from trader.online.agent_common import AgentRunResult, TradingSignal
 from trader.online.explorer_agent import ExploreResult
 from trader.online.prompt_builder import build_user_message as _build_user_message
 
 DEBUG = os.getenv("DEBUG", "false").lower() in ("true", "1")
+
+_ABORT_POLL_INTERVAL = 2.0  # seconds between abort checks during agent calls
+
+
+async def _run_with_abort_poll(
+    coro: Any,
+    abort_check: Callable[[], None] | None,
+    timeout: float = 0,
+) -> Any:
+    """Run a coroutine while polling abort_check every few seconds.
+
+    If abort_check raises JobAborted, the task is cancelled and JobAborted
+    propagates.  The underlying HTTP call may finish in the background but
+    we stop waiting immediately — the cost saving comes from not starting
+    the *next* agent.
+    """
+    if abort_check is None:
+        if timeout > 0:
+            return await asyncio.wait_for(coro, timeout=timeout)
+        return await coro
+
+    task = asyncio.ensure_future(coro)
+    deadline = (asyncio.get_event_loop().time() + timeout) if timeout > 0 else None
+
+    while not task.done():
+        wait_time = _ABORT_POLL_INTERVAL
+        if deadline is not None:
+            remaining = deadline - asyncio.get_event_loop().time()
+            if remaining <= 0:
+                task.cancel()
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
+                raise TimeoutError(f"Agent timed out after {timeout}s")
+            wait_time = min(wait_time, remaining)
+
+        try:
+            return await asyncio.wait_for(asyncio.shield(task), timeout=wait_time)
+        except asyncio.TimeoutError:
+            # Task still running — check abort
+            abort_check()  # raises JobAborted if flagged
+
+    return task.result()
 
 
 # ---------------------------------------------------------------------------
@@ -678,10 +723,12 @@ async def run_pipeline(
                     x_stream_service=x_stream_service,
                     config=config,
                 )
-                if config.agent_timeout_s > 0:
-                    agent_result = await asyncio.wait_for(_coro, timeout=config.agent_timeout_s)
-                else:
-                    agent_result = await _coro
+                agent_result = await _run_with_abort_poll(
+                    _coro, abort_check, timeout=config.agent_timeout_s,
+                )
+
+            except JobAborted:
+                raise  # propagate abort immediately — don't treat as degradation
 
             except (TimeoutError, Exception) as e:
                 # Graceful degradation

@@ -287,6 +287,12 @@ def process_news_file(
             detail={"snapshot_id": snap_id},
         ))
 
+    # Abort check closure — raises JobAborted if the dashboard user clicked abort.
+    # Defined early so it can be used throughout the function.
+    def _check_abort() -> None:
+        if tracker is not None and tracker.is_aborted(_act_id):
+            raise JobAborted(f"Job {_act_id} aborted by user")
+
     cost_tracker = CostTracker(
         max_daily_cost=settings.max_daily_cost,
         max_cost_per_item=settings.max_cost_per_news_item,
@@ -299,13 +305,34 @@ def process_news_file(
         llm = LLMClient(cost_tracker=cost_tracker)
 
     # --- Stage 1: Triage ---
-    triage = run_triage(
+    # Run triage in a sub-thread so we can poll for abort every 2s.
+    import concurrent.futures
+    _triage_pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+    _triage_future = _triage_pool.submit(
+        run_triage,
         llm=llm,  # type: ignore[arg-type]
         provider=settings.triage_provider,
         model=settings.triage_model,
         knowledge=knowledge,
         news=news,
     )
+    try:
+        while True:
+            try:
+                triage = _triage_future.result(timeout=2.0)
+                break
+            except concurrent.futures.TimeoutError:
+                _check_abort()  # raises JobAborted if flagged
+    except JobAborted:
+        _triage_pool.shutdown(wait=False)
+        bus.publish(PipelineEvent(
+            type="exploration_aborted",
+            payload={"snapshot_id": snap_id, "symbols": trigger.symbols, "headline": trigger.headline},
+        ))
+        if tracker is not None:
+            tracker.finish(_act_id)
+        raise
+    _triage_pool.shutdown(wait=False)
     _was_pre_filter = triage.reasoning.startswith("Pre-filter:")
     builder.set_triage({
         "action": triage.action,
@@ -333,22 +360,7 @@ def process_news_file(
     if triage.skip_patterns_learned:
         knowledge.append_skip_keywords(triage.skip_patterns_learned)
 
-    # Update activity after triage
-    if tracker is not None:
-        _now = datetime.now(tz=timezone.utc).isoformat()
-        if triage.action != "investigate":
-            tracker.update(_act_id, progress="skip", cost_usd=cost_tracker.item_spent,
-                           stage_started_at=_now)
-        else:
-            tracker.update(_act_id, progress="exploring", cost_usd=cost_tracker.item_spent,
-                           stage_started_at=_now)
-
-    # Abort check closure — raises JobAborted if the dashboard user clicked abort
-    def _check_abort() -> None:
-        if tracker is not None and tracker.is_aborted(_act_id):
-            raise JobAborted(f"Job {_act_id} aborted by user")
-
-    # Check after triage, before pipeline
+    # Check abort after triage returns (catches abort clicked during triage)
     try:
         _check_abort()
     except JobAborted:
@@ -359,6 +371,16 @@ def process_news_file(
         if tracker is not None:
             tracker.finish(_act_id)
         return
+
+    # Update activity after triage
+    if tracker is not None:
+        _now = datetime.now(tz=timezone.utc).isoformat()
+        if triage.action != "investigate":
+            tracker.update(_act_id, progress="skip", cost_usd=cost_tracker.item_spent,
+                           stage_started_at=_now)
+        else:
+            tracker.update(_act_id, progress="exploring", cost_usd=cost_tracker.item_spent,
+                           stage_started_at=_now)
 
     # --- Stage 2: Exploration (if investigate) ---
     signal = None  # set inside investigate block, used for watch creation
