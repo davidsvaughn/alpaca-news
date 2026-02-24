@@ -119,4 +119,15 @@ class MockLLMClient:
                 "evidence": [],
                 "takeaways": ["MOCK_LLM: run with real keys to gather evidence"],
             }
-        return MockLLMResult(text=json.dumps(payload), usage={"input_tokens": 0, "output_tokens": 0}, cost_usd=0.0, raw=payload)
+        return MockLLMResult(
+            text=json.dumps(payload),
+            usage={
+                "input_tokens": 0,
+                "output_tokens": 0,
+                "total_tokens": 0,
+                "reasoning_tokens": 0,
+                "tool_calls": 0,
+            },
+            cost_usd=0.0,
+            raw=payload,
+        )

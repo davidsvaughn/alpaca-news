@@ -378,14 +378,35 @@ def process_news_file(
                 tracker.finish(_act_id)
             raise
     _was_pre_filter = triage.reasoning.startswith("Pre-filter:")
+    triage_provider = (
+        triage.provider
+        if getattr(triage, "provider", None)
+        else ("pre-filter" if _was_pre_filter else settings.triage_provider)
+    )
+    triage_model = (
+        triage.model
+        if getattr(triage, "model", None)
+        else ("keyword" if _was_pre_filter else settings.triage_model)
+    )
+    triage_usage = getattr(triage, "usage", {}) or {}
     builder.set_triage({
         "action": triage.action,
         "confidence": triage.confidence,
         "reasoning": triage.reasoning,
         "symbols": triage.symbols,
         "skip_patterns_learned": triage.skip_patterns_learned,
-        "provider": "pre-filter" if _was_pre_filter else settings.triage_provider,
-        "model": "keyword" if _was_pre_filter else settings.triage_model,
+        "provider": triage_provider,
+        "model": triage_model,
+        "usage": {
+            "input_tokens": int(triage_usage.get("input_tokens", 0) or 0),
+            "output_tokens": int(triage_usage.get("output_tokens", 0) or 0),
+            "total_tokens": int(triage_usage.get("total_tokens", 0) or 0),
+            "reasoning_tokens": int(triage_usage.get("reasoning_tokens", 0) or 0),
+            "tool_calls": int(triage_usage.get("tool_calls", 0) or 0),
+        },
+        "cost_usd": float(getattr(triage, "cost_usd", 0.0) or 0.0),
+        "elapsed_s": float(getattr(triage, "elapsed_s", 0.0) or 0.0),
+        "requests": int(getattr(triage, "requests", 0) or 0),
     })
 
     bus.publish(

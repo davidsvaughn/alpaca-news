@@ -64,6 +64,9 @@ class LLMClient:
         usage = {
             "input_tokens": getattr(resp.usage, "input_tokens", None),
             "output_tokens": getattr(resp.usage, "output_tokens", None),
+            "total_tokens": getattr(resp.usage, "total_tokens", None),
+            "reasoning_tokens": getattr(resp.usage, "reasoning_tokens", None),
+            "tool_calls": 0,
         }
         text = resp.output_text
         cost_usd = self.cost_tracker.log_llm_call(
@@ -101,6 +104,9 @@ class LLMClient:
         usage = {
             "input_tokens": getattr(resp.usage, "input_tokens", None),
             "output_tokens": getattr(resp.usage, "output_tokens", None),
+            "total_tokens": getattr(resp.usage, "total_tokens", None),
+            "reasoning_tokens": getattr(resp.usage, "reasoning_tokens", None),
+            "tool_calls": len(tools),
         }
         text = resp.output_text
         tool_names = [t["type"] for t in tools]
@@ -144,6 +150,9 @@ class LLMClient:
         usage = {
             "input_tokens": getattr(getattr(resp, "usage_metadata", None), "prompt_token_count", None),
             "output_tokens": getattr(getattr(resp, "usage_metadata", None), "candidates_token_count", None),
+            "total_tokens": getattr(getattr(resp, "usage_metadata", None), "total_token_count", None),
+            "reasoning_tokens": getattr(getattr(resp, "usage_metadata", None), "thoughts_token_count", None),
+            "tool_calls": 1 if google_search else 0,
         }
         text = getattr(resp, "text", None) or ""
         cost_usd = self.cost_tracker.log_llm_call(

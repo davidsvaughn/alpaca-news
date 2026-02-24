@@ -8,7 +8,8 @@ from __future__ import annotations
 
 import json
 import os
-from dataclasses import dataclass
+import time
+from dataclasses import dataclass, field
 from typing import Any
 
 from trader.knowledge.store import KnowledgeStore
@@ -25,6 +26,18 @@ class TriageDecision:
     reasoning: str
     symbols: list[str]
     skip_patterns_learned: list[str]
+    provider: str = "pre-filter"
+    model: str = "keyword"
+    usage: dict[str, Any] = field(default_factory=lambda: {
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "total_tokens": 0,
+        "reasoning_tokens": 0,
+        "tool_calls": 0,
+    })
+    cost_usd: float = 0.0
+    elapsed_s: float = 0.0
+    requests: int = 0
 
 
 TRIAGE_PROMPT = """You are a financial news triage agent.
@@ -134,6 +147,7 @@ def run_triage(
 
     # --- LLM triage ---
     prompt = TRIAGE_PROMPT.format(skip_keywords=json.dumps(skip_keywords), news_json=json.dumps(news))
+    started = time.time()
 
     if provider == "openai":
         res = llm.query_openai(model=model, input_text=prompt, stage="triage", purpose="triage")
@@ -152,6 +166,18 @@ def run_triage(
         reasoning=str(data.get("reasoning", "")),
         symbols=[str(x) for x in (data.get("symbols") or [])],
         skip_patterns_learned=[str(x) for x in (data.get("skip_patterns_learned") or [])],
+        provider=provider,
+        model=model,
+        usage={
+            "input_tokens": int((res.usage or {}).get("input_tokens") or 0),
+            "output_tokens": int((res.usage or {}).get("output_tokens") or 0),
+            "total_tokens": int((res.usage or {}).get("total_tokens") or 0),
+            "reasoning_tokens": int((res.usage or {}).get("reasoning_tokens") or 0),
+            "tool_calls": int((res.usage or {}).get("tool_calls") or 0),
+        },
+        cost_usd=float(getattr(res, "cost_usd", 0.0) or 0.0),
+        elapsed_s=round(time.time() - started, 3),
+        requests=1,
     )
     if decision.action not in ("investigate", "skip"):
         raise RuntimeError(f"Invalid triage action: {decision.action}")

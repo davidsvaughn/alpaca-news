@@ -80,7 +80,26 @@
     {% set triage_provider = triage.get('provider', '?') %}
     {% set triage_model = triage.get('model', '?') %}
     {% set triage_is_prefilter = triage_provider == 'pre-filter' or triage_model == 'keyword' %}
-    {% set triage_reqs = 0 if triage_is_prefilter else 1 %}
+    {% set triage_usage = triage.get('usage', {}) or {} %}
+    {% set triage_input = triage_usage.get('input_tokens', 0)|int %}
+    {% set triage_output = triage_usage.get('output_tokens', 0)|int %}
+    {% set triage_total = triage_usage.get('total_tokens', (triage_input + triage_output))|int %}
+    {% set triage_reasoning = triage_usage.get('reasoning_tokens', 0)|int %}
+    {% set triage_tools = triage_usage.get('tool_calls', 0)|int %}
+    {% set triage_reqs = triage.get('requests', 0 if triage_is_prefilter else 1)|int %}
+    {% set round_cost_ns = namespace(sum=0.0) %}
+    {% for r in s.rounds or [] %}
+      {% set round_cost_ns.sum = round_cost_ns.sum + (r.get('cost_usd', 0)|float) %}
+    {% endfor %}
+    {% set triage_cost_saved = triage.get('cost_usd', 0)|float %}
+    {% set triage_cost = triage_cost_saved %}
+    {% if triage_cost_saved <= 0 and triage_reqs > 0 and s.cost_summary and s.cost_summary.total_usd is defined %}
+      {% set triage_cost_fallback = (s.cost_summary.total_usd|float) - round_cost_ns.sum %}
+      {% if triage_cost_fallback > 0 %}
+        {% set triage_cost = triage_cost_fallback %}
+      {% endif %}
+    {% endif %}
+    {% set triage_time = triage.get('elapsed_s', 0)|float %}
     <div class="table-responsive">
       <table class="table table-sm table-bordered mb-0">
         <thead class="table-light">
@@ -96,7 +115,7 @@
           </tr>
         </thead>
         <tbody>
-          {% set ns = namespace(total_tools=0, total_tokens=0, total_reasoning=0, total_time=0.0, total_cost=0.0, total_reqs=triage_reqs) %}
+          {% set ns = namespace(total_tools=triage_tools, total_tokens=triage_total, total_reasoning=triage_reasoning, total_time=triage_time, total_cost=triage_cost, total_reqs=triage_reqs) %}
           {% if triage %}
           <tr class="table-info">
             <td>T</td>
@@ -110,11 +129,14 @@
               {% endif %}
             </td>
             <td><code class="small">{{ triage_provider }} / {{ triage_model }}</code></td>
-            <td>0</td>
-            <td class="text-muted">n/a</td>
+            <td>{{ triage_tools }}</td>
+            <td>
+              {{ "{:,}".format(triage_input) }} / {{ "{:,}".format(triage_output) }}
+              {% if triage_reasoning %}<span class="text-warning" title="reasoning tokens">({{ "{:,}".format(triage_reasoning) }} reasoning)</span>{% endif %}
+            </td>
             <td>{{ triage_reqs }}</td>
-            <td class="text-muted">{{ 'none' if triage_is_prefilter else 'included' }}</td>
-            <td class="text-muted">n/a</td>
+            <td>${{ "%.4f"|format(triage_cost) }}</td>
+            <td>{{ "%.1f"|format(triage_time) }}s</td>
           </tr>
           {% endif %}
           {% for round in s.rounds %}
@@ -160,9 +182,6 @@
           </tr>
         </tbody>
       </table>
-    </div>
-    <div class="small text-muted mt-2">
-      Triage is a separate stage. Token/time details for triage are not currently persisted in snapshot rows.
     </div>
     {% endif %}
   </div>
@@ -235,6 +254,7 @@
     <div class="accordion" id="pipeline-details-accordion">
       {% if s.triage %}
       {% set triage = s.triage or {} %}
+      {% set triage_usage = triage.get('usage', {}) or {} %}
       <div class="accordion-item">
         <h2 class="accordion-header">
           <button class="accordion-button py-2" type="button" data-bs-toggle="collapse" data-bs-target="#stage-triage">
@@ -253,6 +273,21 @@
               <dd class="col-sm-10">{{ triage.get('provider', '?') }}</dd>
               <dt class="col-sm-2">model</dt>
               <dd class="col-sm-10">{{ triage.get('model', '?') }}</dd>
+              <dt class="col-sm-2">requests</dt>
+              <dd class="col-sm-10">{{ triage.get('requests', 0) }}</dd>
+              <dt class="col-sm-2">tokens</dt>
+              <dd class="col-sm-10">
+                {{ "{:,}".format((triage_usage.get('input_tokens', 0)|int)) }}
+                /
+                {{ "{:,}".format((triage_usage.get('output_tokens', 0)|int)) }}
+                {% if triage_usage.get('reasoning_tokens', 0)|int %}
+                <span class="text-warning">({{ "{:,}".format((triage_usage.get('reasoning_tokens', 0)|int)) }} reasoning)</span>
+                {% endif %}
+              </dd>
+              <dt class="col-sm-2">cost</dt>
+              <dd class="col-sm-10">${{ "%.4f"|format(triage.get('cost_usd', 0)|float) }}</dd>
+              <dt class="col-sm-2">elapsed</dt>
+              <dd class="col-sm-10">{{ "%.3f"|format(triage.get('elapsed_s', 0)|float) }}s</dd>
               <dt class="col-sm-2">symbols</dt>
               <dd class="col-sm-10">{{ (triage.get('symbols', []) or []) | join(', ') }}</dd>
               {% if triage.get('skip_patterns_learned') %}
@@ -302,8 +337,33 @@
             </div>
 
             {% if round.get('signal') %}
+            {% set signal = round.get('signal') or {} %}
             <h6 class="mb-1">Agent Prediction</h6>
-            <pre class="trace-output p-2 bg-light rounded border mb-3">{{ round.get('signal')|to_json(indent=2) }}</pre>
+            <div class="p-2 bg-light rounded border mb-3">
+              <dl class="row mb-0">
+                {% for key in ['direction', 'confidence', 'horizon', 'magnitude_estimate', 'key_catalyst', 'bull_case', 'bear_case', 'risk_factors'] %}
+                {% set val = signal.get(key) %}
+                {% if val is not none and val != '' and val != 'a' %}
+                <dt class="col-sm-3">{{ key.replace('_', ' ')|title }}</dt>
+                <dd class="col-sm-9">
+                  {% if key == 'confidence' %}
+                    {{ "%.0f"|format((val|float) * 100) }}% ({{ val }})
+                  {% elif key == 'risk_factors' and val is sequence and val is not string %}
+                    <ul class="mb-0">
+                      {% for risk in val if risk != 'a' %}
+                      <li>{{ risk }}</li>
+                      {% endfor %}
+                    </ul>
+                  {% elif val is mapping %}
+                    <code>{{ val|to_json }}</code>
+                  {% else %}
+                    {{ val }}
+                  {% endif %}
+                </dd>
+                {% endif %}
+                {% endfor %}
+              </dl>
+            </div>
             {% elif round.findings %}
             <h6 class="mb-1">Agent Findings</h6>
             <div class="findings-text p-2 bg-light rounded border findings-md mb-3">{{ round.findings }}</div>
