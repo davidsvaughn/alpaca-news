@@ -29,6 +29,7 @@ from trader.db.database import (
     get_all_watches,
     get_daily_cost_history,
     get_daily_cost_today,
+    get_daily_cost_today_by_provider,
     get_follow_ups_by_snapshot,
     get_recent_events,
     get_snapshot,
@@ -154,14 +155,27 @@ def create_app(
         )
 
     @app.get("/snapshots", response_class=HTMLResponse)
-    async def snapshots_page(request: Request, symbol: str | None = None, explored: str | None = None):
+    async def snapshots_page(
+        request: Request,
+        symbol: str | None = None,
+        explored: str | None = None,
+        created_after: str | None = None,
+        created_before: str | None = None,
+    ):
         explored_only = explored == "1"
-        total = count_snapshots(db, symbol=symbol, explored_only=explored_only)
+        total = count_snapshots(
+            db,
+            symbol=symbol,
+            explored_only=explored_only,
+            created_after=created_after,
+            created_before=created_before,
+        )
         return templates.TemplateResponse(
             request=request,
             name="snapshots.html",
             context={"active_page": "snapshots", "symbol_filter": symbol,
-                     "explored_only": explored_only, "total": total},
+                     "explored_only": explored_only, "total": total,
+                     "created_after": created_after or "", "created_before": created_before or ""},
         )
 
     @app.get("/snapshots/{snapshot_id}", response_class=HTMLResponse)
@@ -258,6 +272,7 @@ def create_app(
         counts = count_watches_by_status(db)
         inflight = tracker.get_inflight_cost() if tracker else 0.0
         sealed_cost = get_daily_cost_today(db)
+        daily_cost_by_provider = get_daily_cost_today_by_provider(db)
         return templates.TemplateResponse(
             request=request,
             name="partials/_stats_cards.html",
@@ -268,6 +283,7 @@ def create_app(
                 "snapshots_today": count_snapshots_today(db),
                 "daily_cost": sealed_cost + inflight,
                 "inflight_cost": inflight,
+                "daily_cost_by_provider": daily_cost_by_provider,
                 "max_daily_cost": app.state.settings.max_daily_cost,
             },
         )
@@ -312,14 +328,29 @@ def create_app(
         request: Request,
         symbol: str | None = None,
         explored: str | None = None,
+        created_after: str | None = None,
+        created_before: str | None = None,
         page: int = 1,
         per_page: int = 50,
     ):
         explored_only = explored == "1"
         offset = (max(page, 1) - 1) * per_page
-        total = count_snapshots(db, symbol=symbol, explored_only=explored_only)
-        snaps = get_all_snapshots(db, symbol=symbol, explored_only=explored_only,
-                                  limit=per_page, offset=offset)
+        total = count_snapshots(
+            db,
+            symbol=symbol,
+            explored_only=explored_only,
+            created_after=created_after,
+            created_before=created_before,
+        )
+        snaps = get_all_snapshots(
+            db,
+            symbol=symbol,
+            explored_only=explored_only,
+            created_after=created_after,
+            created_before=created_before,
+            limit=per_page,
+            offset=offset,
+        )
         total_pages = max(1, (total + per_page - 1) // per_page)
         return templates.TemplateResponse(
             request=request,
@@ -332,6 +363,8 @@ def create_app(
                 "total_pages": total_pages,
                 "symbol_filter": symbol or "",
                 "explored_only": explored_only,
+                "created_after": created_after or "",
+                "created_before": created_before or "",
             },
         )
 

@@ -455,6 +455,26 @@ def get_daily_cost_today(db: Database) -> float:
     return total
 
 
+def get_daily_cost_today_by_provider(db: Database) -> dict[str, float]:
+    """Sum today's snapshot round costs by provider (openai, grok, gemini)."""
+    totals: dict[str, float] = {"openai": 0.0, "grok": 0.0, "gemini": 0.0}
+
+    with db.engine.connect() as conn:
+        rows = conn.execute(
+            text("SELECT snapshot_json FROM snapshots WHERE date(created_at) = date('now')"),
+        ).fetchall()
+
+    for row in rows:
+        snap = json.loads(row[0]) if isinstance(row[0], str) else row[0]
+        for rnd in snap.get("rounds", []) or []:
+            provider = str(rnd.get("agent") or "").strip().lower()
+            cost = float(rnd.get("cost_usd", 0.0) or 0.0)
+            if provider in totals:
+                totals[provider] += cost
+
+    return {k: round(v, 6) for k, v in totals.items()}
+
+
 def get_daily_cost_history(db: Database, *, days: int = 30) -> list[dict[str, Any]]:
     """Return daily cost summary for the last N days.
 
@@ -579,6 +599,7 @@ def count_all_watches(db: Database, *, status: str | None = None) -> int:
 
 def get_all_snapshots(
     db: Database, *, symbol: str | None = None, explored_only: bool = False,
+    created_after: str | None = None, created_before: str | None = None,
     limit: int = 50, offset: int = 0,
 ) -> list[dict[str, Any]]:
     """Fetch snapshots ordered by created_at DESC, with optional filters."""
@@ -589,6 +610,12 @@ def get_all_snapshots(
         params["sym"] = f"%{symbol}%"
     if explored_only:
         clauses.append("json_extract(snapshot_json, '$.triage.action') = 'investigate'")
+    if created_after:
+        clauses.append("date(created_at) >= date(:created_after)")
+        params["created_after"] = created_after
+    if created_before:
+        clauses.append("date(created_at) <= date(:created_before)")
+        params["created_before"] = created_before
     where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
     sql = f"SELECT snapshot_json FROM snapshots{where} ORDER BY created_at DESC LIMIT :lim OFFSET :off"
     with db.engine.connect() as conn:
@@ -596,7 +623,14 @@ def get_all_snapshots(
     return _parse_rows(rows)
 
 
-def count_snapshots(db: Database, *, symbol: str | None = None, explored_only: bool = False) -> int:
+def count_snapshots(
+    db: Database,
+    *,
+    symbol: str | None = None,
+    explored_only: bool = False,
+    created_after: str | None = None,
+    created_before: str | None = None,
+) -> int:
     """Count snapshots, optionally filtered by symbol and/or explored-only."""
     clauses: list[str] = []
     params: dict[str, Any] = {}
@@ -605,6 +639,12 @@ def count_snapshots(db: Database, *, symbol: str | None = None, explored_only: b
         params["sym"] = f"%{symbol}%"
     if explored_only:
         clauses.append("json_extract(snapshot_json, '$.triage.action') = 'investigate'")
+    if created_after:
+        clauses.append("date(created_at) >= date(:created_after)")
+        params["created_after"] = created_after
+    if created_before:
+        clauses.append("date(created_at) <= date(:created_before)")
+        params["created_before"] = created_before
     where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
     sql = f"SELECT COUNT(*) FROM snapshots{where}"
     with db.engine.connect() as conn:

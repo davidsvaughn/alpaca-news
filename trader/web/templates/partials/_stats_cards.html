@@ -36,6 +36,13 @@
         {% else %}
         <div class="small text-muted mt-1">${{ "%.2f"|format(max_daily_cost) }} budget</div>
         {% endif %}
+        {% if daily_cost_by_provider is defined %}
+        <div class="small mt-2">
+          <span class="badge bg-light text-dark border">grok: ${{ "%.4f"|format(daily_cost_by_provider.get("grok", 0.0)) }}</span>
+          <span class="badge bg-light text-dark border">gemini: ${{ "%.4f"|format(daily_cost_by_provider.get("gemini", 0.0)) }}</span>
+          <span class="badge bg-light text-dark border">openai: ${{ "%.4f"|format(daily_cost_by_provider.get("openai", 0.0)) }}</span>
+        </div>
+        {% endif %}
       </div>
     </div>
   </div>

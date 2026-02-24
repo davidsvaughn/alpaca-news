@@ -8,27 +8,35 @@
   <span class="text-muted" id="snap-total">{{ total }} total</span>
 </div>
 
-<!-- Symbol filter + explored toggle + delete controls -->
+<!-- Filters + delete controls -->
 <div class="d-flex align-items-center gap-3 mb-3 flex-wrap">
-  <form id="snap-filter-form" class="d-flex gap-2 align-items-center" style="max-width: 500px;"
-        hx-get="/api/snapshots"
-        hx-target="#snapshots-table"
-        hx-swap="innerHTML"
-        hx-trigger="submit">
-    <input type="text" name="symbol" class="form-control form-control-sm"
-           placeholder="Filter by symbol..." value="{{ symbol_filter or '' }}">
-    <input type="hidden" name="explored" id="explored-input" value="{{ '1' if explored_only else '' }}">
-    <button type="submit" class="btn btn-sm btn-outline-primary">Filter</button>
-    {% if symbol_filter %}
-    <a href="/snapshots{{ '?explored=1' if explored_only else '' }}" class="btn btn-sm btn-outline-secondary">Clear</a>
-    {% endif %}
-  </form>
-  <div class="form-check form-switch">
+  <div class="form-check form-switch me-1">
     <input class="form-check-input" type="checkbox" id="explored-toggle"
            {% if explored_only %}checked{% endif %}
            onchange="toggleExplored(this.checked)">
     <label class="form-check-label small" for="explored-toggle">Explored only</label>
   </div>
+  <form id="snap-filter-form" class="d-flex gap-2 align-items-center flex-wrap"
+        hx-get="/api/snapshots"
+        hx-target="#snapshots-table"
+        hx-swap="innerHTML"
+        hx-trigger="submit">
+    <input type="text" name="symbol" class="form-control form-control-sm"
+           style="width: 120px;"
+           maxlength="12"
+           placeholder="Symbol" value="{{ symbol_filter or '' }}">
+    <label class="small text-muted ms-1" for="created-after-input">Created</label>
+    <input type="date" id="created-after-input" name="created_after"
+           class="form-control form-control-sm" style="width: 150px;" value="{{ created_after or '' }}">
+    <span class="small text-muted">to</span>
+    <input type="date" name="created_before"
+           class="form-control form-control-sm" style="width: 150px;" value="{{ created_before or '' }}">
+    <input type="hidden" name="explored" id="explored-input" value="{{ '1' if explored_only else '' }}">
+    <button type="submit" class="btn btn-sm btn-outline-primary">Filter</button>
+    {% if symbol_filter or created_after or created_before %}
+    <a href="/snapshots{{ '?explored=1' if explored_only else '' }}" class="btn btn-sm btn-outline-secondary">Clear</a>
+    {% endif %}
+  </form>
   <button id="delete-selected-btn" class="btn btn-sm btn-outline-danger d-none"
           onclick="deleteSelectedSnapshots()">
     Delete selected (<span id="sel-count">0</span>)
@@ -47,12 +55,33 @@
 <script>
 function _snapshotsUrl(explored) {
   var sym = document.querySelector('[name=symbol]').value || '';
-  return '/api/snapshots?symbol=' + encodeURIComponent(sym) + '&explored=' + (explored ? '1' : '');
+  var createdAfter = document.querySelector('[name=created_after]').value || '';
+  var createdBefore = document.querySelector('[name=created_before]').value || '';
+  return '/api/snapshots?symbol=' + encodeURIComponent(sym)
+    + '&created_after=' + encodeURIComponent(createdAfter)
+    + '&created_before=' + encodeURIComponent(createdBefore)
+    + '&explored=' + (explored ? '1' : '');
+}
+
+function loadFilterState() {
+  var sym = localStorage.getItem('snapshots_symbol_filter');
+  var after = localStorage.getItem('snapshots_created_after');
+  var before = localStorage.getItem('snapshots_created_before');
+  if (sym !== null) document.querySelector('[name=symbol]').value = sym;
+  if (after !== null) document.querySelector('[name=created_after]').value = after;
+  if (before !== null) document.querySelector('[name=created_before]').value = before;
+}
+
+function saveFilterState() {
+  localStorage.setItem('snapshots_symbol_filter', document.querySelector('[name=symbol]').value || '');
+  localStorage.setItem('snapshots_created_after', document.querySelector('[name=created_after]').value || '');
+  localStorage.setItem('snapshots_created_before', document.querySelector('[name=created_before]').value || '');
 }
 
 function toggleExplored(checked) {
   localStorage.setItem('snapshots_explored_only', checked ? '1' : '');
   document.getElementById('explored-input').value = checked ? '1' : '';
+  saveFilterState();
   htmx.ajax('GET', _snapshotsUrl(checked), {target: '#snapshots-table', swap: 'innerHTML'});
 }
 
@@ -94,8 +123,17 @@ document.addEventListener('htmx:afterSwap', function(e) {
   }
 });
 
+document.getElementById('snap-filter-form').addEventListener('submit', function() {
+  saveFilterState();
+});
+
+document.querySelector('[name=symbol]').addEventListener('change', saveFilterState);
+document.querySelector('[name=created_after]').addEventListener('change', saveFilterState);
+document.querySelector('[name=created_before]').addEventListener('change', saveFilterState);
+
 // Restore toggle from localStorage, then do the initial load (htmx is available here)
 (function() {
+  loadFilterState();
   var explored = localStorage.getItem('snapshots_explored_only') === '1';
   var toggle = document.getElementById('explored-toggle');
   var input = document.getElementById('explored-input');
