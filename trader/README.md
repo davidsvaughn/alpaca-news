@@ -285,3 +285,4 @@ Key env vars (see `.env.example`):
 - `MAX_PHASE2_BRANCHES` (default 2)
 - `MAX_TOTAL_HOPS` (default 3)
 - `MAX_COST_PER_NEWS_ITEM`
+- `TRIAGE_SYMBOL_COOLDOWN_MINUTES` (default 60)

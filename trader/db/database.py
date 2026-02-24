@@ -393,6 +393,46 @@ def count_snapshots_today(db: Database) -> int:
     return row[0] if row else 0
 
 
+def get_recently_explored_symbols(
+    db: Database,
+    *,
+    lookback_minutes: int,
+) -> dict[str, str]:
+    """Return symbols explored in the last N minutes mapped to most-recent timestamp.
+
+    Exploration is defined as snapshots with triage action "investigate" and
+    at least one agent round recorded.
+    """
+    if lookback_minutes <= 0:
+        return {}
+
+    recent: dict[str, str] = {}
+    with db.engine.connect() as conn:
+        rows = conn.execute(
+            text(
+                "SELECT created_at, snapshot_json FROM snapshots "
+                "WHERE created_at >= datetime('now', :offset) "
+                "ORDER BY created_at DESC"
+            ),
+            {"offset": f"-{lookback_minutes} minutes"},
+        ).fetchall()
+
+    for row in rows:
+        created_at = str(row[0]) if row[0] else ""
+        snap = json.loads(row[1]) if isinstance(row[1], str) else row[1]
+        triage = snap.get("triage") or {}
+        if triage.get("action") != "investigate":
+            continue
+        if not (snap.get("rounds") or []):
+            continue
+        explored_symbols = triage.get("symbols") or (snap.get("trigger") or {}).get("symbols") or []
+        for sym in explored_symbols:
+            key = str(sym).strip().upper()
+            if key and key not in recent:
+                recent[key] = created_at
+    return recent
+
+
 def _sum_watch_checkin_costs(watch_rows: list, date_filter: str | None = None) -> float:
     """Sum cost_usd from watch checkin_history entries, optionally filtering by date."""
     total = 0.0

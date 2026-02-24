@@ -31,7 +31,16 @@ from watchdog.events import FileSystemEventHandler
 from watchdog.observers import Observer
 
 from trader.config import Settings
-from trader.db.database import Database, insert_snapshot, insert_watch, count_holding_watches, snapshot_exists, is_mock_snapshot, delete_snapshot
+from trader.db.database import (
+    Database,
+    count_holding_watches,
+    delete_snapshot,
+    get_recently_explored_symbols,
+    insert_snapshot,
+    insert_watch,
+    is_mock_snapshot,
+    snapshot_exists,
+)
 from trader.knowledge.store import KnowledgeStore
 from trader.llm.client import LLMClient
 from trader.llm.cost_tracker import CostTracker
@@ -47,7 +56,7 @@ from trader.online.agent_pipeline import (
     estimate_pipeline_cost,
     _extract_model_for_pricing,
 )
-from trader.online.triage import run_triage
+from trader.online.triage import TriageDecision, run_triage
 from trader.online.activity_tracker import JobAborted
 from trader.online.event_bus import EventBus, PipelineEvent
 from trader.online.x_stream_service import QualityVerdict, XStreamService, build_rules_for_symbols
@@ -305,34 +314,69 @@ def process_news_file(
         llm = LLMClient(cost_tracker=cost_tracker)
 
     # --- Stage 1: Triage ---
-    # Run triage in a sub-thread so we can poll for abort every 2s.
-    import concurrent.futures
-    _triage_pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
-    _triage_future = _triage_pool.submit(
-        run_triage,
-        llm=llm,  # type: ignore[arg-type]
-        provider=settings.triage_provider,
-        model=settings.triage_model,
-        knowledge=knowledge,
-        news=news,
-    )
-    try:
-        while True:
+    def _run_triage_with_abort_poll() -> TriageDecision:
+        """Run triage in a sub-thread and poll abort every 2s."""
+        import concurrent.futures
+
+        _triage_pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+        _triage_future = _triage_pool.submit(
+            run_triage,
+            llm=llm,  # type: ignore[arg-type]
+            provider=settings.triage_provider,
+            model=settings.triage_model,
+            knowledge=knowledge,
+            news=news,
+        )
+        try:
+            while True:
+                try:
+                    return _triage_future.result(timeout=2.0)
+                except concurrent.futures.TimeoutError:
+                    _check_abort()  # raises JobAborted if flagged
+        finally:
+            _triage_pool.shutdown(wait=False)
+
+    triage: TriageDecision
+    incoming_symbols = [str(s).strip().upper() for s in (news.get("symbols") or []) if str(s).strip()]
+    cooldown_minutes = max(0, int(settings.triage_symbol_cooldown_minutes))
+    manual_explore_source = str(news.get("source") or "").strip().lower() == "dashboard_manual"
+    if cooldown_minutes > 0 and incoming_symbols and not manual_explore_source:
+        recent = get_recently_explored_symbols(db, lookback_minutes=cooldown_minutes)
+        blocked = [s for s in incoming_symbols if s in recent]
+        if blocked:
+            blocked_unique = sorted(set(blocked))
+            triage = TriageDecision(
+                action="skip",
+                confidence=0.99,
+                reasoning=(
+                    f"Pre-filter: symbol cooldown ({cooldown_minutes}m) hit for "
+                    f"{', '.join(blocked_unique)}"
+                ),
+                symbols=trigger.symbols,
+                skip_patterns_learned=[],
+            )
+        else:
             try:
-                triage = _triage_future.result(timeout=2.0)
-                break
-            except concurrent.futures.TimeoutError:
-                _check_abort()  # raises JobAborted if flagged
-    except JobAborted:
-        _triage_pool.shutdown(wait=False)
-        bus.publish(PipelineEvent(
-            type="exploration_aborted",
-            payload={"snapshot_id": snap_id, "symbols": trigger.symbols, "headline": trigger.headline},
-        ))
-        if tracker is not None:
-            tracker.finish(_act_id)
-        raise
-    _triage_pool.shutdown(wait=False)
+                triage = _run_triage_with_abort_poll()
+            except JobAborted:
+                bus.publish(PipelineEvent(
+                    type="exploration_aborted",
+                    payload={"snapshot_id": snap_id, "symbols": trigger.symbols, "headline": trigger.headline},
+                ))
+                if tracker is not None:
+                    tracker.finish(_act_id)
+                raise
+    else:
+        try:
+            triage = _run_triage_with_abort_poll()
+        except JobAborted:
+            bus.publish(PipelineEvent(
+                type="exploration_aborted",
+                payload={"snapshot_id": snap_id, "symbols": trigger.symbols, "headline": trigger.headline},
+            ))
+            if tracker is not None:
+                tracker.finish(_act_id)
+            raise
     _was_pre_filter = triage.reasoning.startswith("Pre-filter:")
     builder.set_triage({
         "action": triage.action,

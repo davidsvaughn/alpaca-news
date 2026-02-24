@@ -83,6 +83,7 @@ class Settings:
     max_total_hops: int
     max_web_searches_per_item: int
     max_x_searches_per_item: int
+    triage_symbol_cooldown_minutes: int
 
     # Explorer v1 (Phase 2)
     max_phase1_actions: int
@@ -203,6 +204,7 @@ def load_settings(*, dotenv_path: str | None = None, override: bool = False) -> 
     max_total_hops = _env_int("MAX_TOTAL_HOPS", 3)
     max_web_searches_per_item = _env_int("MAX_WEB_SEARCHES_PER_ITEM", 3)
     max_x_searches_per_item = _env_int("MAX_X_SEARCHES_PER_ITEM", 2)
+    triage_symbol_cooldown_minutes = _env_int("TRIAGE_SYMBOL_COOLDOWN_MINUTES", 60)
 
     # Phase 2 explorer controls
     max_phase1_actions = _env_int("MAX_PHASE1_ACTIONS", 4)
@@ -292,6 +294,7 @@ def load_settings(*, dotenv_path: str | None = None, override: bool = False) -> 
         max_total_hops=max_total_hops,
         max_web_searches_per_item=max_web_searches_per_item,
         max_x_searches_per_item=max_x_searches_per_item,
+        triage_symbol_cooldown_minutes=triage_symbol_cooldown_minutes,
         max_phase1_actions=max_phase1_actions,
         max_phase2_branches=max_phase2_branches,
         sse_ping_interval_s=sse_ping_interval_s,

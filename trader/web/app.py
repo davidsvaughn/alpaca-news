@@ -960,6 +960,7 @@ def _settings_groups(s: Settings) -> list[tuple[str, list[tuple[str, Any]]]]:
             [
                 "max_daily_cost", "max_cost_per_news_item",
                 "max_total_hops", "max_web_searches_per_item", "max_x_searches_per_item",
+                "triage_symbol_cooldown_minutes",
                 "max_phase1_actions", "max_phase2_branches",
             ],
         ),
