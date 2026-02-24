@@ -974,6 +974,19 @@ def run_watch_loop(
         fu_thread.start()
         bus.publish(PipelineEvent(type="follow_up_collector_started", payload={}))
 
+    # Pattern reviewer thread
+    if settings.pattern_review_enabled:
+        from trader.online.pattern_reviewer import PatternReviewer, reviewer_loop
+
+        reviewer = PatternReviewer(settings=settings, db=db, knowledge=knowledge, bus=bus)
+        reviewer_thread = threading.Thread(
+            target=reviewer_loop,
+            args=(reviewer, settings.pattern_review_interval_s),
+            daemon=True,
+        )
+        reviewer_thread.start()
+        bus.publish(PipelineEvent(type="pattern_reviewer_started", payload={}))
+
     try:
         while True:
             time.sleep(1)

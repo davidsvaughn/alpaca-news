@@ -155,6 +155,13 @@ class Settings:
     openai_reasoning_effort: str   # 'low', 'medium', 'high'
     gemini_thinking_level: str     # 'off', 'low', 'medium', 'high', 'dynamic'
 
+    # Pattern review (periodic skip-pattern proposals)
+    pattern_review_enabled: bool
+    pattern_review_interval_s: int
+    pattern_review_provider: ProviderName
+    pattern_review_model: str
+    pattern_review_lookback_hours: int
+
     # Reflection / Evaluation
     reflection_model: str
 
@@ -270,6 +277,15 @@ def load_settings(*, dotenv_path: str | None = None, override: bool = False) -> 
     openai_reasoning_effort = _env_str("OPENAI_REASONING_EFFORT", "medium") or "medium"
     gemini_thinking_level = _env_str("GEMINI_THINKING_LEVEL", "dynamic") or "dynamic"
 
+    # Pattern review
+    pattern_review_enabled = _env_bool("PATTERN_REVIEW_ENABLED", False)
+    pattern_review_interval_s = _env_int("PATTERN_REVIEW_INTERVAL_S", 10800)
+    pattern_review_provider = (os.getenv("PATTERN_REVIEW_PROVIDER") or "openai").strip().lower()  # type: ignore[assignment]
+    if pattern_review_provider not in ("openai", "grok", "gemini"):
+        raise ValueError(f"Unknown PATTERN_REVIEW_PROVIDER: {pattern_review_provider}")
+    pattern_review_model = _env_str("PATTERN_REVIEW_MODEL", "gpt-5.2") or "gpt-5.2"
+    pattern_review_lookback_hours = _env_int("PATTERN_REVIEW_LOOKBACK_HOURS", 6)
+
     reflection_model = _env_str("REFLECTION_MODEL", "gemini-3-flash-preview") or "gemini-3-flash-preview"
 
     return Settings(
@@ -346,6 +362,12 @@ def load_settings(*, dotenv_path: str | None = None, override: bool = False) -> 
 
         openai_reasoning_effort=openai_reasoning_effort,
         gemini_thinking_level=gemini_thinking_level,
+
+        pattern_review_enabled=pattern_review_enabled,
+        pattern_review_interval_s=pattern_review_interval_s,
+        pattern_review_provider=pattern_review_provider,  # type: ignore[arg-type]
+        pattern_review_model=pattern_review_model,
+        pattern_review_lookback_hours=pattern_review_lookback_hours,
 
         reflection_model=reflection_model,
     )
