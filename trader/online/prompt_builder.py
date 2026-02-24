@@ -30,18 +30,22 @@ def build_user_message(
             so agents don't waste tool calls on rote data gathering.
     """
     parts = ["## The news event"]
+    event_lines: list[str] = []
     if news.get("headline"):
-        parts.append(f"**Headline:** {news['headline']}")
+        event_lines.append(f"**Headline:** {news['headline']}")
     if news.get("summary"):
-        parts.append(f"**Summary:** {news['summary']}")
+        event_lines.append(f"**Summary:** {news['summary']}")
     if symbols:
-        parts.append(f"**Symbols:** {', '.join(symbols)}")
+        event_lines.append(f"**Symbols:** {', '.join(symbols)}")
     if news.get("source"):
-        parts.append(f"**Source:** {news['source']}")
+        event_lines.append(f"**Source:** {news['source']}")
     if news.get("created_at"):
-        parts.append(f"**Timestamp:** {news['created_at']}")
+        event_lines.append(f"**Timestamp:** {news['created_at']}")
     if news.get("url"):
-        parts.append(f"**URL:** {news['url']}")
+        event_lines.append(f"**URL:** {news['url']}")
+    if event_lines:
+        # Force hard markdown line breaks so each field is shown on its own line.
+        parts.append("  \n".join(event_lines))
     # Include full article content if available (stripped of HTML tags)
     content = news.get("content")
     if content and isinstance(content, str):
