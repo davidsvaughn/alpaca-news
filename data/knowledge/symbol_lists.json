@@ -156,11 +156,12 @@
     "AMT",
     "CTAAU",
     "EDSA",
-    "U"
+    "U",
+    "FLYYQ"
   ],
   "crypto": [],
   "rejected": [
     "BTCUSD"
   ],
-  "last_updated": "2026-02-24T16:13:04.438613+00:00"
+  "last_updated": "2026-02-24T16:48:59.718630+00:00"
 }

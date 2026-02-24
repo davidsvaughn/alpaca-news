@@ -417,9 +417,13 @@ def _build_pipeline_user_message(
     symbols: list[str],
     prior_rounds: list[dict[str, Any]],
     market: "MarketDataService | None" = None,
+    prefetched_market_data: str = "",
 ) -> str:
     """Build the user message with news + accumulated findings + tool ledger."""
     parts = [_build_user_message(news, symbols, market=market)]
+
+    if prefetched_market_data:
+        parts.append(prefetched_market_data)
 
     if prior_rounds:
         parts.append("\n\n---\n\n## Prior agent findings\n")
@@ -670,7 +674,9 @@ async def run_pipeline(
     signal: TradingSignal | None = None
     cumulative_cost: float = 0.0
 
-    # Pre-compute market data text (used in first agent's prompt, stored for export)
+    # Pre-compute market data text once and include it in every agent prompt.
+    # This avoids refetching and ensures downstream agents (e.g., Gemini)
+    # get the same primary-symbol context as the first agent.
     from trader.online.prompt_builder import prefetch_market_data
     prefetch_text = prefetch_market_data(symbols, market) if market else ""
 
@@ -689,9 +695,12 @@ async def run_pipeline(
             )
 
             # Build prompt with accumulated context + pre-fetched market data
-            msg_market = market if (round_num == 0 and i == 0) else None
             user_message = _build_pipeline_user_message(
-                news, symbols, all_rounds, market=msg_market,
+                news,
+                symbols,
+                all_rounds,
+                market=None,
+                prefetched_market_data=prefetch_text,
             )
 
             # Determine model name for logging
