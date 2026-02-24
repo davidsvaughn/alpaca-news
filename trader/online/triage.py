@@ -50,9 +50,14 @@ TRIAGE_PROMPT = """You are a financial news triage agent.
 Evaluate whether this news item could signal imminent stock price movement (within minutes to hours).
 
 REJECT if: retrospective/hypothetical articles, generic market commentary, old re-hashed news,
-press releases with no clear price catalyst, clickbait, listicles.
+press releases with no clear price catalyst, clickbait, listicles, recap/roundup articles,
+prediction market speculation, portfolio recommendation lists, pure technical chart analysis,
+celebrity/pundit opinion pieces about crypto, analyst rating reiteration with no new info.
 
-Known skip patterns:
+ALWAYS INVESTIGATE (never reject):
+{investigate_keywords}
+
+Known skip patterns (headlines matching these are auto-skipped before the LLM is called):
 {skip_keywords}
 
 Return STRICT JSON with keys:
@@ -60,65 +65,112 @@ Return STRICT JSON with keys:
   confidence: number between 0 and 1
   reasoning: short string
   symbols: array of tickers (strings)
-  skip_patterns_learned: array of new skip keyword/phrases
+  skip_patterns_learned: array of new generic skip phrases (see rules below)
+
+RULES FOR skip_patterns_learned:
+These patterns will be used as case-insensitive REGEX for matching future headlines.
+- Only suggest patterns for RECURRING low-value content categories, not one-off articles.
+- Keep patterns SHORT: 2-6 words that capture the category.  Use regex to generalize.
+- NEVER include: specific ticker symbols, specific dollar amounts, dates, person names, day of week.
+- NEVER suggest patterns that could match price-moving news (earnings, M&A, FDA, CEO, guidance, buybacks).
+- When in doubt, return an empty array [].
+- GOOD: "weekly market recap", "thought experiment", "prediction market odds"
+- BAD: "ASTS Stock Pressured", "Maintains \\$425 Price Target", "shares trading higher Tuesday"
 
 News JSON:
 {news_json}
 """
 
 
+def _compile_patterns(raw: list[str]) -> list[tuple[str, re.Pattern[str]]]:
+    """Compile a list of regex pattern strings, skipping invalid ones."""
+    compiled: list[tuple[str, re.Pattern[str]]] = []
+    for p in raw:
+        try:
+            compiled.append((p, re.compile(p, re.IGNORECASE)))
+        except re.error:
+            if DEBUG:
+                print(f"PRE-FILTER: invalid regex, skipping: {p!r}")
+    return compiled
+
+
+# Hard-coded obvious fluff patterns (always active)
+_BUILTIN_SKIP = _compile_patterns([
+    "if you had invested",
+    "years ago would be worth",
+    "invested in this stock",
+    "would be worth this much",
+    "this much today",
+    "top stocks to buy",
+    "stocks to watch this week",
+    "dividend aristocrat",
+    "best stocks for",
+    "stock picks for",
+])
+
+_SKIP_AUTHORS = ["benzinga insights"]  # auto-generated retrospective pieces
+
+
 def _pre_filter(
     news: dict[str, Any],
     skip_keywords: list[str],
+    investigate_keywords: list[str] | None = None,
 ) -> TriageDecision | None:
-    """Cheap local keyword check.  Returns a skip decision if matched, else None."""
+    """Cheap local regex check.  Returns a decision if matched, else None.
 
-    headline = str(news.get("headline") or "").lower()
-    summary = str(news.get("summary") or "").lower()
+    Investigate patterns are checked FIRST and take priority — if a headline
+    matches an investigate pattern it will never be skipped by a skip pattern.
+    """
+
+    headline = str(news.get("headline") or "")
+    summary = str(news.get("summary") or "")
     text = f"{headline} {summary}"
+    symbols = [str(s) for s in (news.get("symbols") or [])]
 
-    # Check learned skip keywords
-    for kw in skip_keywords:
-        if kw.lower() in text:
+    # ── 1. Investigate patterns (force investigate, highest priority) ──
+    if investigate_keywords:
+        inv_compiled = _compile_patterns(investigate_keywords)
+        for raw, rxp in inv_compiled:
+            if rxp.search(text):
+                if DEBUG:
+                    print(f"PRE-FILTER investigate: matched pattern {raw!r}")
+                return TriageDecision(
+                    action="investigate",
+                    confidence=0.99,
+                    reasoning=f"Pre-filter: matched investigate pattern '{raw}'",
+                    symbols=symbols,
+                    skip_patterns_learned=[],
+                )
+
+    # ── 2. Learned skip patterns (regex) ──
+    skip_compiled = _compile_patterns(skip_keywords)
+    for raw, rxp in skip_compiled:
+        if rxp.search(text):
             if DEBUG:
-                print(f"PRE-FILTER skip: matched keyword {kw!r} in headline/summary")
+                print(f"PRE-FILTER skip: matched pattern {raw!r} in headline/summary")
             return TriageDecision(
                 action="skip",
                 confidence=0.95,
-                reasoning=f"Pre-filter: matched skip keyword '{kw}'",
-                symbols=[str(s) for s in (news.get("symbols") or [])],
+                reasoning=f"Pre-filter: matched skip pattern '{raw}'",
+                symbols=symbols,
                 skip_patterns_learned=[],
             )
 
-    # Hard-coded obvious fluff patterns (always active)
-    _BUILTIN_SKIP = [
-        "if you had invested",
-        "years ago would be worth",
-        "invested in this stock",
-        "would be worth this much",
-        "this much today",
-        "top stocks to buy",
-        "stocks to watch this week",
-        "dividend aristocrat",
-        "best stocks for",
-        "stock picks for",
-    ]
-    for pattern in _BUILTIN_SKIP:
-        if pattern in text:
+    # ── 3. Built-in skip patterns ──
+    for raw, rxp in _BUILTIN_SKIP:
+        if rxp.search(text):
             if DEBUG:
-                print(f"PRE-FILTER skip: matched built-in pattern {pattern!r}")
+                print(f"PRE-FILTER skip: matched built-in pattern {raw!r}")
             return TriageDecision(
                 action="skip",
                 confidence=0.99,
-                reasoning=f"Pre-filter: matched built-in skip pattern '{pattern}'",
-                symbols=[str(s) for s in (news.get("symbols") or [])],
+                reasoning=f"Pre-filter: matched built-in skip pattern '{raw}'",
+                symbols=symbols,
                 skip_patterns_learned=[],
             )
 
-    # Check known skip sources
-    source = str(news.get("source") or "").lower()
+    # ── 4. Skip authors ──
     author = str(news.get("author") or "").lower()
-    _SKIP_AUTHORS = ["benzinga insights"]  # auto-generated retrospective pieces
     for a in _SKIP_AUTHORS:
         if a in author:
             if DEBUG:
@@ -127,7 +179,7 @@ def _pre_filter(
                 action="skip",
                 confidence=0.95,
                 reasoning=f"Pre-filter: matched skip author '{a}'",
-                symbols=[str(s) for s in (news.get("symbols") or [])],
+                symbols=symbols,
                 skip_patterns_learned=[],
             )
 
@@ -145,13 +197,20 @@ def run_triage(
     skip = knowledge.load_skip_patterns()
     skip_keywords: list[str] = skip.get("headline_keywords", [])
 
+    inv = knowledge.load_investigate_patterns()
+    investigate_keywords: list[str] = inv.get("headline_keywords", [])
+
     # --- Cheap pre-filter (no LLM call) ---
-    pre = _pre_filter(news, skip_keywords)
+    pre = _pre_filter(news, skip_keywords, investigate_keywords)
     if pre is not None:
         return pre
 
     # --- LLM triage ---
-    prompt = TRIAGE_PROMPT.format(skip_keywords=json.dumps(skip_keywords), news_json=json.dumps(news))
+    prompt = TRIAGE_PROMPT.format(
+        investigate_keywords=json.dumps(investigate_keywords),
+        skip_keywords=json.dumps(skip_keywords),
+        news_json=json.dumps(news),
+    )
     started = time.time()
 
     if provider == "openai":

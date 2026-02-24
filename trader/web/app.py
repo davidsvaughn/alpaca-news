@@ -622,6 +622,7 @@ def create_app(
 
     _KNOWLEDGE_WHITELIST = {
         "skip_patterns.json",
+        "investigate_patterns.json",
         "reliable_sources.json",
         "search_strategies.json",
         "x_search_strategies.json",

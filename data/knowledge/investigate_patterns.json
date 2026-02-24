@@ -1,0 +1,19 @@
+{
+  "headline_keywords": [
+    "earnings (beat|miss|surprise)",
+    "(acquir|merger|takeover|buyout)",
+    "(fda|ema|mhra) (approv|reject|clear)",
+    "(ceo|cfo|cto) (resign|fired|ousted|stepping down|appointed|named)",
+    "guidance (raise|cut|lower|boost)",
+    "stock (buyback|repurchase)",
+    "(activist investor|proxy fight)",
+    "(sec investigation|doj|indictment|fraud charge)",
+    "(bankruptcy|chapter 11|default)",
+    "(trading halt|halted)",
+    "dividend (cut|increase|special|suspend)",
+    "(stock split|reverse split)",
+    "(contract win|contract award)"
+  ],
+  "last_updated": "2026-02-24T00:00:00+00:00",
+  "human_edited": 13
+}

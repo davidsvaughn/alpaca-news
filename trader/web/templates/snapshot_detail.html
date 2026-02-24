@@ -863,10 +863,32 @@
 {% block scripts %}
 <script src="https://cdn.jsdelivr.net/npm/marked@15.0.0/marked.min.js"></script>
 <script>
+  function normalizeNewsEventMd(text) {
+    const marker = "## The news event";
+    const idx = text.indexOf(marker);
+    if (idx === -1) return text;
+
+    const head = text.slice(0, idx + marker.length);
+    let tail = text.slice(idx + marker.length);
+    const fields = [
+      "**Headline:**",
+      "**Summary:**",
+      "**Symbols:**",
+      "**Source:**",
+      "**Timestamp:**",
+      "**URL:**",
+    ];
+    for (const f of fields) {
+      tail = tail.split(f).join("\n" + f);
+    }
+    return head + tail;
+  }
+
   // Render markdown in all .findings-md elements (lazy: only once, on first visibility)
   function renderMd(el) {
     if (el.dataset.mdRendered) return;
-    el.innerHTML = marked.parse(el.textContent);
+    const normalized = normalizeNewsEventMd(el.textContent || "");
+    el.innerHTML = marked.parse(normalized);
     el.dataset.mdRendered = '1';
   }
   // Render immediately-visible elements
