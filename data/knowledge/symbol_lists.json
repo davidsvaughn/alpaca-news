@@ -157,11 +157,13 @@
     "CTAAU",
     "EDSA",
     "U",
-    "FLYYQ"
+    "FLYYQ",
+    "WDC",
+    "SSNLF"
   ],
   "crypto": [],
   "rejected": [
     "BTCUSD"
   ],
-  "last_updated": "2026-02-24T16:48:59.718630+00:00"
+  "last_updated": "2026-02-24T17:06:53.749744+00:00"
 }

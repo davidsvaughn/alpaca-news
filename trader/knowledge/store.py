@@ -10,6 +10,8 @@ Phase 1:
 from __future__ import annotations
 
 import json
+import logging
+import re
 import threading
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -18,6 +20,69 @@ from typing import Any
 
 # Protects read-modify-write operations on knowledge JSON files.
 _file_lock = threading.Lock()
+
+_log = logging.getLogger(__name__)
+
+# ── Skip-pattern quality gate ──────────────────────────────────────────
+
+# Patterns containing any of these (case-insensitive) are rejected because
+# they could suppress genuinely price-moving news.
+PROTECTED_KEYWORDS: frozenset[str] = frozenset({
+    # Earnings / financials
+    "earnings", "revenue", "eps", "profit", "loss",
+    "beat", "miss", "surprise", "exceeded", "fell short",
+    "guidance", "outlook",
+    # M&A
+    "acquisition", "acquire", "merger", "takeover", "buyout",
+    # Regulatory
+    "fda", "ema", "mhra", "approval", "approved", "approves",
+    # Leadership
+    "ceo", "cfo", "cto", "coo", "c-suite",
+    "resign", "fired", "ousted", "stepping down",
+    # Capital actions
+    "buyback", "repurchase",
+    "dividend cut", "dividend increase", "special dividend",
+    "stock split", "reverse split",
+    # Legal / risk
+    "sec investigation", "doj", "indictment", "fraud",
+    "bankruptcy", "chapter 11", "default",
+    "trading halt", "halted",
+    # Activist
+    "activist", "proxy fight",
+    # Contracts
+    "contract win", "contract award",
+})
+
+_MIN_PATTERN_LEN = 6
+_MAX_PATTERN_LEN = 80
+
+
+def validate_skip_pattern(pattern: str) -> tuple[bool, str]:
+    """Check whether a candidate skip pattern meets quality criteria.
+
+    Returns ``(is_valid, reason)``.  Rejected patterns should not be persisted.
+    """
+    p = pattern.strip()
+    if not p:
+        return False, "empty"
+    if len(p) < _MIN_PATTERN_LEN:
+        return False, f"too short ({len(p)} chars)"
+    if len(p) > _MAX_PATTERN_LEN:
+        return False, f"too long ({len(p)} chars)"
+
+    # Must be valid regex
+    try:
+        re.compile(p)
+    except re.error as exc:
+        return False, f"invalid regex: {exc}"
+
+    p_lower = p.lower()
+
+    for kw in PROTECTED_KEYWORDS:
+        if kw in p_lower:
+            return False, f"protected keyword '{kw}'"
+
+    return True, "ok"
 
 
 def _utc_now_iso() -> str:
@@ -61,6 +126,11 @@ class KnowledgeStore:
             "signal_patterns.json": {"patterns": [], "last_updated": _utc_now_iso()},
             "anti_patterns.json": {"patterns": [], "last_updated": _utc_now_iso()},
             "model_notes.json": {"notes": [], "last_updated": _utc_now_iso()},
+            "investigate_patterns.json": {
+                "headline_keywords": [],
+                "last_updated": _utc_now_iso(),
+                "human_edited": 0,
+            },
         }
 
         for fname, content in defaults.items():
@@ -71,6 +141,10 @@ class KnowledgeStore:
     def load_skip_patterns(self) -> dict[str, Any]:
         self.ensure_defaults()
         return _read_json(self.knowledge_dir / "skip_patterns.json")
+
+    def load_investigate_patterns(self) -> dict[str, Any]:
+        self.ensure_defaults()
+        return _read_json(self.knowledge_dir / "investigate_patterns.json")
 
     def append_to_list(
         self, filename: str, key: str, item: Any
@@ -87,23 +161,30 @@ class KnowledgeStore:
                 data["last_updated"] = _utc_now_iso()
                 _write_json(path, data)
 
-    def append_skip_keywords(self, keywords: list[str]) -> None:
+    def append_skip_keywords(self, keywords: list[str]) -> int:
+        """Append validated skip keywords.  Returns count actually added."""
         if not keywords:
-            return
+            return 0
         with _file_lock:
             data = self.load_skip_patterns()
             existing = set(str(x).lower() for x in data.get("headline_keywords", []))
             added = 0
             for kw in keywords:
                 k = kw.strip()
-                if not k:
+                if not k or k.lower() in existing:
                     continue
-                if k.lower() in existing:
+
+                valid, reason = validate_skip_pattern(k)
+                if not valid:
+                    _log.debug("Skip pattern rejected: %r (%s)", k, reason)
                     continue
+
                 data.setdefault("headline_keywords", []).append(k)
                 existing.add(k.lower())
                 added += 1
+
             if added:
                 data["auto_learned"] = int(data.get("auto_learned", 0)) + added
                 data["last_updated"] = _utc_now_iso()
                 _write_json(self.knowledge_dir / "skip_patterns.json", data)
+        return added

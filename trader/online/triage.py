@@ -2,12 +2,17 @@
 
 Includes a cheap keyword pre-filter that skips obvious fluff *before* calling
 the LLM, saving API cost on headlines like "if you had invested 5 years ago…".
+
+Patterns in both skip_patterns.json and investigate_patterns.json are treated
+as **regex** (case-insensitive).  Investigate patterns are checked first and
+take priority over skip patterns.
 """
 
 from __future__ import annotations
 
 import json
 import os
+import re
 import time
 from dataclasses import dataclass, field
 from typing import Any
