@@ -422,13 +422,6 @@ def process_news_file(
         )
     )
 
-    if triage.skip_patterns_learned:
-        n = knowledge.append_skip_keywords(triage.skip_patterns_learned)
-        if DEBUG:
-            print(
-                f"Skip patterns: {len(triage.skip_patterns_learned)} proposed, {n} accepted"
-            )
-
     # Check abort after triage returns (catches abort clicked during triage)
     try:
         _check_abort()

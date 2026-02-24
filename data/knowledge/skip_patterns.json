@@ -75,12 +75,27 @@
     "What Investors Need To Know",
     "What's Driving The Action",
     "Russell 1000.*(Gainers|Losers)",
-    "office relocation",
-    "new (office space|distribution center)"
+    "shares are trading higher after",
+    "shares are trading lower after",
+    "shares are up after",
+    "shares are down after",
+    "lowers the price target from",
+    "midway through trading",
+    "Nasdaq Gains Over .*%;",
+    "investment philosophy",
+    "What They're Buying Now",
+    "Under the Radar:",
+    "Best Stock Spotlight",
+    "Hosts Segment Titled",
+    "What's Going On With .* Stock",
+    "Analysts Revise Their Forecasts",
+    "analysts (revise|change) (forecasts|price targets) after",
+    "Benzinga Edge (scorecard|signal|rankings)",
+    "Technical Momentum Signals"
   ],
   "sources_to_skip": [],
   "symbol_contexts": {},
-  "last_updated": "2026-02-24T00:00:00+00:00",
+  "last_updated": "2026-02-24T18:45:00+00:00",
   "auto_learned": 0,
-  "human_edited": 77
+  "human_edited": 95
 }

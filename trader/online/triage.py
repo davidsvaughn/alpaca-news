@@ -65,17 +65,6 @@ Return STRICT JSON with keys:
   confidence: number between 0 and 1
   reasoning: short string
   symbols: array of tickers (strings)
-  skip_patterns_learned: array of new generic skip phrases (see rules below)
-
-RULES FOR skip_patterns_learned:
-These patterns will be used as case-insensitive REGEX for matching future headlines.
-- Only suggest patterns for RECURRING low-value content categories, not one-off articles.
-- Keep patterns SHORT: 2-6 words that capture the category.  Use regex to generalize.
-- NEVER include: specific ticker symbols, specific dollar amounts, dates, person names, day of week.
-- NEVER suggest patterns that could match price-moving news (earnings, M&A, FDA, CEO, guidance, buybacks).
-- When in doubt, return an empty array [].
-- GOOD: "weekly market recap", "thought experiment", "prediction market odds"
-- BAD: "ASTS Stock Pressured", "Maintains \\$425 Price Target", "shares trading higher Tuesday"
 
 News JSON:
 {news_json}

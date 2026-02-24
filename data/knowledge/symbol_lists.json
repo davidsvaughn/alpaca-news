@@ -161,11 +161,22 @@
     "WDC",
     "SSNLF",
     "TIMB",
-    "EWI"
+    "EWI",
+    "DDS",
+    "AES",
+    "LIN",
+    "HIMS",
+    "EXPD",
+    "CARG",
+    "PRGS",
+    "BBBY",
+    "GME",
+    "REGN",
+    "MBOT"
   ],
   "crypto": [],
   "rejected": [
     "BTCUSD"
   ],
-  "last_updated": "2026-02-24T17:22:33.441131+00:00"
+  "last_updated": "2026-02-24T18:49:09.163739+00:00"
 }
