@@ -667,7 +667,7 @@ def create_app(
         return get_recent_events(db, limit=min(limit, 500))
 
     # ------------------------------------------------------------------
-    # Snapshot export (JSON + Markdown downloads)
+    # Snapshot export (Markdown download)
     # ------------------------------------------------------------------
 
     def _export_data(snapshot_id: str) -> tuple[dict[str, Any] | None, dict[str, Any] | None, list]:
@@ -686,25 +686,6 @@ def create_app(
         ticker = symbols[0] if symbols else "UNK"
         short_id = snap.get("snapshot_id", "unknown")[:8]
         return f"snapshot_{ticker}_{short_id}.{ext}"
-
-    @app.get("/api/snapshots/{snapshot_id}/export")
-    async def api_snapshot_export(snapshot_id: str):
-        """Export snapshot + watch + follow-ups as a downloadable JSON file."""
-        snap, watch, follow_ups = _export_data(snapshot_id)
-        if snap is None:
-            return {"error": f"Snapshot {snapshot_id} not found"}
-        blob: dict[str, Any] = {
-            "snapshot": snap,
-            "watch": watch,
-            "follow_ups": follow_ups,
-        }
-        content = json.dumps(blob, indent=2, default=str, ensure_ascii=False)
-        fname = _export_filename(snap, "json")
-        return Response(
-            content=content,
-            media_type="application/json",
-            headers={"Content-Disposition": f'attachment; filename="{fname}"'},
-        )
 
     @app.get("/api/snapshots/{snapshot_id}/export/md")
     async def api_snapshot_export_md(snapshot_id: str):
