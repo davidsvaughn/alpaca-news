@@ -247,39 +247,6 @@
     <h6 class="mb-2">Shared Base Input (all agents)</h6>
     <div class="findings-text p-2 bg-light rounded border findings-md mb-0">{{ shared_input }}</div>
 
-    {% if s.rounds|length > 1 %}
-    <hr class="my-3">
-    <h6 class="mb-2">Additional Input for Downstream Agents</h6>
-    <div class="accordion" id="input-downstream-accordion">
-      {% for round in s.rounds[1:] %}
-      {% set downstream_msg = round.get('user_message', '') %}
-      {% set downstream_extra = '' %}
-      {% if downstream_msg and prior_marker in downstream_msg %}
-        {% set downstream_extra = '## Prior agent findings\n' ~ downstream_msg.split(prior_marker, 1)[1] %}
-      {% elif downstream_msg %}
-        {% set downstream_extra = downstream_msg %}
-      {% endif %}
-      <div class="accordion-item">
-        <h2 class="accordion-header">
-          <button class="accordion-button collapsed py-2" type="button"
-                  data-bs-toggle="collapse" data-bs-target="#input-downstream-{{ loop.index }}"
-                  style="font-size:1rem;">
-            {{ round.get('agent', 'agent_' ~ (loop.index + 1)) }} additional context
-          </button>
-        </h2>
-        <div id="input-downstream-{{ loop.index }}" class="accordion-collapse collapse" data-bs-parent="#input-downstream-accordion">
-          <div class="accordion-body py-2 px-3">
-            {% if downstream_extra %}
-            <div class="findings-text p-2 bg-light rounded border findings-md mb-0">{{ downstream_extra }}</div>
-            {% else %}
-            <div class="text-muted">No additional downstream context captured.</div>
-            {% endif %}
-          </div>
-        </div>
-      </div>
-      {% endfor %}
-    </div>
-    {% endif %}
   </div>
 </div>
 {% endif %}
