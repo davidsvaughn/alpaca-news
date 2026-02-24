@@ -74,14 +74,19 @@
     </div>
     <h5 class="mb-3">{{ s.trigger.headline }}</h5>
 
-    {# Agent pipeline visualization #}
-    {% if s.rounds %}
+    {# Stage-level pipeline visualization (includes triage + agent rounds) #}
+    {% if s.rounds or s.triage %}
+    {% set triage = s.triage or {} %}
+    {% set triage_provider = triage.get('provider', '?') %}
+    {% set triage_model = triage.get('model', '?') %}
+    {% set triage_is_prefilter = triage_provider == 'pre-filter' or triage_model == 'keyword' %}
+    {% set triage_reqs = 0 if triage_is_prefilter else 1 %}
     <div class="table-responsive">
       <table class="table table-sm table-bordered mb-0">
         <thead class="table-light">
           <tr>
             <th>#</th>
-            <th>Agent</th>
+            <th>Stage</th>
             <th>Model</th>
             <th>Tools</th>
             <th>Tokens (in/out)</th>
@@ -91,7 +96,27 @@
           </tr>
         </thead>
         <tbody>
-          {% set ns = namespace(total_tools=0, total_tokens=0, total_reasoning=0, total_time=0.0, total_cost=0.0) %}
+          {% set ns = namespace(total_tools=0, total_tokens=0, total_reasoning=0, total_time=0.0, total_cost=0.0, total_reqs=triage_reqs) %}
+          {% if triage %}
+          <tr class="table-info">
+            <td>T</td>
+            <td>
+              <strong>triage</strong>
+              {% if triage.get('action') %}
+              <span class="badge bg-{{ 'success' if triage.get('action') == 'investigate' else 'secondary' }} ms-1">{{ triage.get('action') }}</span>
+              {% endif %}
+              {% if triage.get('confidence') is defined %}
+              <span class="badge bg-light text-dark border ms-1">{{ "%.0f"|format((triage.get('confidence', 0)|float) * 100) }}%</span>
+              {% endif %}
+            </td>
+            <td><code class="small">{{ triage_provider }} / {{ triage_model }}</code></td>
+            <td>0</td>
+            <td class="text-muted">n/a</td>
+            <td>{{ triage_reqs }}</td>
+            <td class="text-muted">{{ 'none' if triage_is_prefilter else 'included' }}</td>
+            <td class="text-muted">n/a</td>
+          </tr>
+          {% endif %}
           {% for round in s.rounds %}
           {% set u = round.usage or {} %}
           {% set rcost = round.get('cost_usd', 0)|float %}
@@ -101,6 +126,7 @@
           {% set ns.total_reasoning = ns.total_reasoning + rtok %}
           {% set ns.total_time = ns.total_time + (round.get('elapsed_s', 0)|float) %}
           {% set ns.total_cost = ns.total_cost + rcost %}
+          {% set ns.total_reqs = ns.total_reqs + (u.get('requests', 0)|int) %}
           <tr>
             <td>{{ loop.index }}</td>
             <td><strong>{{ round.agent or 'agent_' ~ loop.index }}</strong></td>
@@ -122,12 +148,21 @@
               {{ "{:,}".format(ns.total_tokens) }}
               {% if ns.total_reasoning %}<span class="text-warning">({{ "{:,}".format(ns.total_reasoning) }} reasoning)</span>{% endif %}
             </td>
-            <td></td>
-            <td>${{ "%.4f"|format(ns.total_cost) }}</td>
+            <td>{{ ns.total_reqs }}</td>
+            <td>
+              {% if s.cost_summary and s.cost_summary.total_usd is defined %}
+              ${{ "%.4f"|format(s.cost_summary.total_usd|float) }}
+              {% else %}
+              ${{ "%.4f"|format(ns.total_cost) }}
+              {% endif %}
+            </td>
             <td>{{ "%.1f"|format(ns.total_time) }}s</td>
           </tr>
         </tbody>
       </table>
+    </div>
+    <div class="small text-muted mt-2">
+      Triage is a separate stage. Token/time details for triage are not currently persisted in snapshot rows.
     </div>
     {% endif %}
   </div>
@@ -178,19 +213,229 @@
 </div>
 
 {# ============================================================ #}
-{# PIPELINE TIMELINE (nested decision tree)                      #}
+{# PIPELINE STAGES (consolidated)                                 #}
 {# ============================================================ #}
-{% if timeline and timeline.nodes %}
 {% from "partials/_timeline_node.html" import render_node %}
+{% set timeline_nodes = timeline.nodes if timeline and timeline.nodes else [] %}
+{% set extra_nodes = namespace(count=0) %}
+{% for node in timeline_nodes %}
+  {% set ntype = node.get('type', '') if node is mapping else node.type if node.type is defined else '' %}
+  {% if ntype not in ('triage', 'agent_round', 'prediction') %}
+    {% set extra_nodes.count = extra_nodes.count + 1 %}
+  {% endif %}
+{% endfor %}
+{% set stage_count = (1 if s.triage else 0) + (s.rounds|length if s.rounds else 0) + extra_nodes.count %}
+{% if stage_count > 0 %}
 <div class="card mb-4 border-info">
   <div class="card-header bg-info text-white d-flex align-items-center">
-    <strong class="me-auto">Pipeline Timeline</strong>
-    <span class="badge bg-light text-dark">{{ timeline.nodes|length }} decision points</span>
+    <strong class="me-auto">Pipeline Stages</strong>
+    <span class="badge bg-light text-dark">{{ stage_count }} stages</span>
   </div>
   <div class="card-body p-2">
-    <div class="accordion" id="timeline-accordion">
-      {% for node in timeline.nodes %}
-        {{ render_node(node, 0, 'root', loop.index) }}
+    <div class="accordion" id="pipeline-details-accordion">
+      {% if s.triage %}
+      {% set triage = s.triage or {} %}
+      <div class="accordion-item">
+        <h2 class="accordion-header">
+          <button class="accordion-button py-2" type="button" data-bs-toggle="collapse" data-bs-target="#stage-triage">
+            <span class="badge bg-info me-2">triage</span>
+            {{ triage.get('action', '?') }} ({{ "%.0f"|format((triage.get('confidence', 0)|float) * 100) }}%)
+          </button>
+        </h2>
+        <div id="stage-triage" class="accordion-collapse collapse show" data-bs-parent="#pipeline-details-accordion">
+          <div class="accordion-body py-2 px-3" style="font-size: 0.84rem;">
+            <dl class="row mb-0">
+              <dt class="col-sm-2">action</dt>
+              <dd class="col-sm-10">{{ triage.get('action', '?') }}</dd>
+              <dt class="col-sm-2">confidence</dt>
+              <dd class="col-sm-10">{{ triage.get('confidence', '?') }}</dd>
+              <dt class="col-sm-2">provider</dt>
+              <dd class="col-sm-10">{{ triage.get('provider', '?') }}</dd>
+              <dt class="col-sm-2">model</dt>
+              <dd class="col-sm-10">{{ triage.get('model', '?') }}</dd>
+              <dt class="col-sm-2">symbols</dt>
+              <dd class="col-sm-10">{{ (triage.get('symbols', []) or []) | join(', ') }}</dd>
+              {% if triage.get('skip_patterns_learned') %}
+              <dt class="col-sm-2">skip_patterns_learned</dt>
+              <dd class="col-sm-10">{{ triage.get('skip_patterns_learned') | join(', ') }}</dd>
+              {% endif %}
+              <dt class="col-sm-2">reasoning</dt>
+              <dd class="col-sm-10">{{ triage.get('reasoning', '') }}</dd>
+            </dl>
+          </div>
+        </div>
+      </div>
+      {% endif %}
+
+      {% if s.rounds %}
+      {% for round in s.rounds %}
+      {% set u = round.usage or {} %}
+      {% set round_idx = loop.index %}
+      <div class="accordion-item">
+        <h2 class="accordion-header">
+          <button class="accordion-button collapsed py-2" type="button" data-bs-toggle="collapse" data-bs-target="#stage-round-{{ round_idx }}">
+            <span class="badge bg-primary me-2">agent_round</span>
+            <strong class="me-2">{{ round.agent or 'agent_' ~ round_idx }}</strong>
+            <span class="text-muted me-2">|</span>
+            {{ u.get('tool_calls', 0) }} tools
+            <span class="text-muted mx-2">|</span>
+            {{ "{:,}".format(u.get('total_tokens', 0)|int) }} tokens
+            <span class="text-muted mx-2">|</span>
+            ${{ "%.4f"|format(round.get('cost_usd', 0)|float) }}
+            <span class="text-muted mx-2">|</span>
+            {{ "%.1f"|format(round.get('elapsed_s', 0)|float) }}s
+          </button>
+        </h2>
+        <div id="stage-round-{{ round_idx }}" class="accordion-collapse collapse" data-bs-parent="#pipeline-details-accordion">
+          <div class="accordion-body py-2 px-3" style="font-size: 0.84rem;">
+            <div class="d-flex flex-wrap gap-2 mb-2">
+              <span class="badge bg-dark">{{ round.agent or 'agent_' ~ round_idx }}</span>
+              <span class="badge bg-light text-dark border"><code class="small">{{ round.model or '?' }}</code></span>
+              <span class="badge bg-light text-dark border">{{ u.get('requests', 0) }} reqs</span>
+              <span class="badge bg-light text-dark border">{{ u.get('tool_calls', 0) }} tools</span>
+              <span class="badge bg-light text-dark border">{{ "{:,}".format(u.get('input_tokens', 0)|int) }} / {{ "{:,}".format(u.get('output_tokens', 0)|int) }} in/out</span>
+              {% if u.get('reasoning_tokens', 0)|int %}
+              <span class="badge bg-warning text-dark border">{{ "{:,}".format(u.get('reasoning_tokens', 0)|int) }} reasoning</span>
+              {% endif %}
+              <span class="badge bg-light text-dark border">${{ "%.4f"|format(round.get('cost_usd', 0)|float) }}</span>
+              <span class="badge bg-light text-dark border">{{ "%.1f"|format(round.get('elapsed_s', 0)|float) }}s</span>
+            </div>
+
+            {% if round.get('signal') %}
+            <h6 class="mb-1">Agent Prediction</h6>
+            <pre class="trace-output p-2 bg-light rounded border mb-3">{{ round.get('signal')|to_json(indent=2) }}</pre>
+            {% elif round.findings %}
+            <h6 class="mb-1">Agent Findings</h6>
+            <div class="findings-text p-2 bg-light rounded border findings-md mb-3">{{ round.findings }}</div>
+            {% endif %}
+
+            {% if round.get('thinking_summary') %}
+            <h6 class="mb-1 text-warning">Reasoning Summary</h6>
+            <div class="findings-text p-2 bg-light rounded border findings-md mb-3">{{ round.thinking_summary }}</div>
+            {% endif %}
+
+            <details class="mb-3">
+              <summary class="small text-muted">Prompts and raw output</summary>
+              <div class="bg-light rounded border p-2 mt-1">
+                <div class="mb-2">
+                  <strong class="small">usage</strong>
+                  <pre class="trace-output bg-white p-2 rounded border mb-0">{{ u|to_json(indent=2) }}</pre>
+                </div>
+                {% if round.get('signal') %}
+                <div class="mb-2">
+                  <strong class="small">signal</strong>
+                  <pre class="trace-output bg-white p-2 rounded border mb-0">{{ round.get('signal')|to_json(indent=2) }}</pre>
+                </div>
+                {% endif %}
+                <div class="mb-2">
+                  <strong class="small">system_prompt</strong>
+                  <pre class="trace-output bg-white p-2 rounded border mb-0">{{ (round.get('system_prompt', '') or '')|truncate(50000, True, '... [truncated]') }}</pre>
+                </div>
+                <div class="mb-2">
+                  <strong class="small">user_message</strong>
+                  <pre class="trace-output bg-white p-2 rounded border mb-0">{{ (round.get('user_message', '') or '')|truncate(50000, True, '... [truncated]') }}</pre>
+                </div>
+                <div>
+                  <strong class="small">raw_output</strong>
+                  <pre class="trace-output bg-white p-2 rounded border mb-0">{{ (round.get('raw_output', '') or '')|truncate(50000, True, '... [truncated]') }}</pre>
+                </div>
+              </div>
+            </details>
+
+            {% if round.tool_traces %}
+            <h6 class="mt-1 mb-2">Tool Calls ({{ round.tool_traces|length }})</h6>
+            <div class="table-responsive">
+              <table class="table table-sm table-hover mb-0" style="font-size: 0.82rem;">
+                <thead class="table-light">
+                  <tr>
+                    <th style="width:40px">Hop</th>
+                    <th>Tool</th>
+                    <th>Arguments</th>
+                    <th>Duration</th>
+                    <th>Cost</th>
+                    <th>Modality</th>
+                    <th>Status</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {% for t in round.tool_traces %}
+                  {% set ta = t.get('action', {}) %}
+                  {% set te = t.get('execution', {}) %}
+                  <tr class="tool-trace-row" data-bs-toggle="collapse" data-bs-target="#ptool-{{ round_idx }}-{{ loop.index }}">
+                    <td class="text-muted">{{ t.get('hop_index', loop.index0) }}</td>
+                    <td>
+                      <strong>{{ ta.get('tool', '?') }}</strong>
+                      {% if t.get('builtin') %}
+                      <span class="badge bg-secondary ms-1" style="font-size: 0.65rem;">builtin</span>
+                      {% endif %}
+                    </td>
+                    <td class="text-truncate" style="max-width: 330px;">
+                      {% set args = ta.get('args', {}) %}
+                      {% for k, v in args.items() %}
+                      <span class="text-muted">{{ k }}=</span>{{ v }}{{ ', ' if not loop.last else '' }}
+                      {% endfor %}
+                    </td>
+                    <td>{{ "%.3f"|format(te.get('duration_s', 0)|float) }}s</td>
+                    <td>${{ "%.4f"|format(te.get('cost_usd', 0)|float) }}</td>
+                    <td>
+                      {% if t.get('modality') %}
+                      <span class="badge modality-{{ t.modality }}" style="font-size: 0.7rem;">{{ t.modality }}</span>
+                      {% endif %}
+                    </td>
+                    <td>
+                      {% if t.get('error') %}
+                      <span class="badge bg-danger">error</span>
+                      {% else %}
+                      <span class="badge bg-success">ok</span>
+                      {% endif %}
+                    </td>
+                  </tr>
+                  <tr class="collapse" id="ptool-{{ round_idx }}-{{ loop.index }}">
+                    <td colspan="7" class="p-0">
+                      <div class="p-2 bg-light">
+                        {% if t.get('error') %}
+                        <div class="alert alert-danger py-1 px-2 mb-2 small">{{ t.error }}</div>
+                        {% endif %}
+                        <div class="row">
+                          <div class="col-md-5">
+                            <strong class="small">Input Args:</strong>
+                            <pre class="trace-output bg-white p-2 rounded border mb-0">{{ ta.get('args', {})|to_json(indent=2) }}</pre>
+                          </div>
+                          <div class="col-md-7">
+                            <strong class="small">Output:</strong>
+                            {% set output = t.get('raw_tool_output') %}
+                            {% if output is string %}
+                            <pre class="trace-output bg-white p-2 rounded border mb-0">{{ output|truncate(50000, True, '... [truncated]') }}</pre>
+                            {% else %}
+                            <pre class="trace-output bg-white p-2 rounded border mb-0">{{ output|to_json(indent=2) }}</pre>
+                            {% endif %}
+                          </div>
+                        </div>
+                        <div class="small text-muted mt-1">
+                          {{ te.get('start_time', '')[:19] }} &rarr; {{ te.get('end_time', '')[:19] }}
+                          | trace_id: {{ t.get('trace_id', '-') }}
+                        </div>
+                      </div>
+                    </td>
+                  </tr>
+                  {% endfor %}
+                </tbody>
+              </table>
+            </div>
+            {% else %}
+            <div class="small text-muted">No tool calls recorded for this round.</div>
+            {% endif %}
+          </div>
+        </div>
+      </div>
+      {% endfor %}
+      {% endif %}
+
+      {% for node in timeline_nodes %}
+      {% set ntype = node.get('type', '') if node is mapping else node.type if node.type is defined else '' %}
+      {% if ntype not in ('triage', 'agent_round', 'prediction') %}
+        {{ render_node(node, 0, 'stage-extra', loop.index) }}
+      {% endif %}
       {% endfor %}
     </div>
   </div>
@@ -355,229 +600,6 @@
       <dd class="col-sm-10">{{ s.prediction.horizon }}</dd>
       {% endif %}
     </dl>
-  </div>
-</div>
-{% endif %}
-
-{# ============================================================ #}
-{# AGENT ROUNDS — each agent's findings + per-agent tool list    #}
-{# ============================================================ #}
-{% if s.rounds %}
-<div class="card mb-4">
-  <div class="card-header">Agent Rounds ({{ s.rounds|length }} agents, {{ s.tool_traces|length if s.tool_traces else 0 }} total tool calls)</div>
-  <div class="card-body p-0">
-    <div class="accordion" id="rounds-accordion">
-      {% for round in s.rounds %}
-      {% set u = round.usage or {} %}
-      {% set round_idx = loop.index %}
-      <div class="accordion-item">
-        <h2 class="accordion-header">
-          <button class="accordion-button {{ '' if loop.first else 'collapsed' }}" type="button"
-                  data-bs-toggle="collapse" data-bs-target="#round-{{ round_idx }}">
-            <span class="badge bg-dark me-2">{{ round_idx }}</span>
-            <strong class="me-2">{{ round.agent or 'agent_' ~ loop.index }}</strong>
-            <code class="text-muted small me-2">{{ round.model or '?' }}</code>
-            <span class="badge bg-light text-dark border me-1" title="tool calls">{{ u.get('tool_calls', 0) }} tools</span>
-            <span class="badge bg-light text-dark border me-1" title="tokens">{{ "{:,}".format(u.get('total_tokens', 0)|int) }} tok</span>
-            {% if u.get('reasoning_tokens', 0)|int %}
-            <span class="badge bg-warning text-dark border me-1" title="reasoning tokens">{{ "{:,}".format(u.get('reasoning_tokens', 0)|int) }} reasoning</span>
-            {% endif %}
-            <span class="badge bg-light text-dark border me-1" title="elapsed">{{ "%.1f"|format(round.get('elapsed_s', 0)|float) }}s</span>
-          </button>
-        </h2>
-        <div id="round-{{ round_idx }}" class="accordion-collapse collapse {{ 'show' if loop.first else '' }}" data-bs-parent="#rounds-accordion">
-          <div class="accordion-body">
-            {# Per-agent tool calls summary table #}
-            {% if round.tool_traces %}
-            <h6 class="mt-1 mb-2">Tool Calls ({{ round.tool_traces|length }})</h6>
-            <div class="table-responsive mb-3">
-              <table class="table table-sm table-hover mb-0" style="font-size: 0.82rem;">
-                <thead class="table-light">
-                  <tr>
-                    <th style="width:30px">#</th>
-                    <th>Tool</th>
-                    <th>Arguments</th>
-                    <th>Duration</th>
-                    <th>Modality</th>
-                    <th>Status</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {% for t in round.tool_traces %}
-                  {% set ta = t.get('action', {}) %}
-                  {% set te = t.get('execution', {}) %}
-                  <tr class="tool-trace-row" data-bs-toggle="collapse" data-bs-target="#rtrace-{{ round_idx }}-{{ loop.index }}">
-                    <td class="text-muted">{{ t.get('hop_index', loop.index0) }}</td>
-                    <td><strong>{{ ta.get('tool', '?') }}</strong></td>
-                    <td class="text-truncate" style="max-width: 250px;">
-                      {% set args = ta.get('args', {}) %}
-                      {% if args %}
-                        {% for k, v in args.items() %}
-                        <span class="text-muted">{{ k }}=</span>{{ v }}{{ ', ' if not loop.last else '' }}
-                        {% endfor %}
-                      {% endif %}
-                    </td>
-                    <td>{{ "%.3f"|format(te.get('duration_s', 0)|float) }}s</td>
-                    <td>
-                      {% if t.get('modality') %}
-                      <span class="badge modality-{{ t.modality }}" style="font-size: 0.7rem;">{{ t.modality }}</span>
-                      {% endif %}
-                    </td>
-                    <td>
-                      {% if t.get('error') %}
-                        <span class="badge bg-danger">error</span>
-                      {% else %}
-                        <span class="badge bg-success">ok</span>
-                      {% endif %}
-                    </td>
-                  </tr>
-                  <tr class="collapse" id="rtrace-{{ round_idx }}-{{ loop.index }}">
-                    <td colspan="6" class="p-0">
-                      <div class="p-2 bg-light">
-                        {% if t.get('error') %}
-                        <div class="alert alert-danger py-1 px-2 mb-2 small">{{ t.error }}</div>
-                        {% endif %}
-                        <div class="row">
-                          <div class="col-md-6">
-                            <strong class="small">Input Args:</strong>
-                            <pre class="trace-output bg-white p-2 rounded border mb-0">{{ ta.get('args', {})|to_json(indent=2) }}</pre>
-                          </div>
-                          <div class="col-md-6">
-                            <strong class="small">Output:</strong>
-                            {% set output = t.get('raw_tool_output') %}
-                            {% if output is string %}
-                            <pre class="trace-output bg-white p-2 rounded border mb-0">{{ output[:2000] }}</pre>
-                            {% else %}
-                            <pre class="trace-output bg-white p-2 rounded border mb-0">{{ output|to_json(indent=2) }}</pre>
-                            {% endif %}
-                          </div>
-                        </div>
-                        <div class="small text-muted mt-1">
-                          {{ te.get('start_time', '')[:19] }} &rarr; {{ te.get('end_time', '')[:19] }}
-                          | cost: ${{ "%.4f"|format(te.get('cost_usd', 0)|float) }}
-                        </div>
-                      </div>
-                    </td>
-                  </tr>
-                  {% endfor %}
-                </tbody>
-              </table>
-            </div>
-            {% endif %}
-
-            {# Reasoning/thinking summary (from model) #}
-            {% if round.get('thinking_summary') %}
-            <details class="mb-3">
-              <summary class="fw-bold small text-warning">Reasoning Summary (click to expand)</summary>
-              <div class="findings-text p-2 bg-light rounded border mt-1 mb-0 findings-md">{{ round.thinking_summary }}</div>
-            </details>
-            {% endif %}
-
-            {# Agent findings text (rendered as markdown) #}
-            {% if round.findings %}
-            <h6>Agent Findings</h6>
-            <div class="findings-text p-2 bg-light rounded border findings-md">{{ round.findings }}</div>
-            {% endif %}
-          </div>
-        </div>
-      </div>
-      {% endfor %}
-    </div>
-  </div>
-</div>
-{% endif %}
-
-{# ============================================================ #}
-{# ALL TOOL TRACES — flat timeline view                          #}
-{# ============================================================ #}
-{% if s.tool_traces %}
-<div class="card mb-4">
-  <div class="card-header d-flex align-items-center">
-    <span>All Tool Traces ({{ s.tool_traces|length }})</span>
-    <button class="btn btn-sm btn-outline-secondary ms-auto" type="button"
-            data-bs-toggle="collapse" data-bs-target=".trace-collapse" aria-expanded="false">
-      Toggle All
-    </button>
-  </div>
-  <div class="card-body p-0">
-    <div class="table-responsive">
-      <table class="table table-sm table-hover mb-0" style="font-size: 0.82rem;">
-        <thead class="table-light">
-          <tr>
-            <th style="width:30px">#</th>
-            <th>Agent</th>
-            <th>Tool</th>
-            <th>Key Args</th>
-            <th>Duration</th>
-            <th>Modality</th>
-            <th>Status</th>
-          </tr>
-        </thead>
-        <tbody>
-          {% for trace in s.tool_traces %}
-          {% set ta = trace.get('action', {}) %}
-          {% set te = trace.get('execution', {}) %}
-          <tr class="tool-trace-row" data-bs-toggle="collapse" data-bs-target="#gtrace-{{ loop.index }}">
-            <td class="text-muted">{{ trace.get('hop_index', loop.index0) }}</td>
-            <td>
-              {% set agent = trace.get('agent', '') %}
-              {% if agent %}
-              <span class="badge bg-{{ 'danger' if agent == 'grok' else 'success' if agent == 'openai' else 'info' if agent == 'gemini' else 'secondary' }}" style="font-size: 0.68rem;">{{ agent }}</span>
-              {% endif %}
-            </td>
-            <td><strong>{{ ta.get('tool', '?') }}</strong></td>
-            <td class="text-truncate" style="max-width: 300px;">
-              {% set args = ta.get('args', {}) %}
-              {% for k, v in args.items() %}
-              <span class="text-muted">{{ k }}=</span>{{ v }}{{ ', ' if not loop.last else '' }}
-              {% endfor %}
-            </td>
-            <td>{{ "%.3f"|format(te.get('duration_s', 0)|float) }}s</td>
-            <td>
-              {% if trace.get('modality') %}
-              <span class="badge modality-{{ trace.modality }}" style="font-size: 0.7rem;">{{ trace.modality }}</span>
-              {% endif %}
-            </td>
-            <td>
-              {% if trace.get('error') %}
-                <span class="badge bg-danger">error</span>
-              {% else %}
-                <span class="badge bg-success">ok</span>
-              {% endif %}
-            </td>
-          </tr>
-          <tr class="collapse trace-collapse" id="gtrace-{{ loop.index }}">
-            <td colspan="7" class="p-0">
-              <div class="p-2 bg-light">
-                {% if trace.get('error') %}
-                <div class="alert alert-danger py-1 px-2 mb-2 small">{{ trace.error }}</div>
-                {% endif %}
-                <div class="row">
-                  <div class="col-md-5">
-                    <strong class="small">Input:</strong>
-                    <pre class="trace-output bg-white p-2 rounded border mb-0">{{ ta.get('args', {})|to_json(indent=2) }}</pre>
-                  </div>
-                  <div class="col-md-7">
-                    <strong class="small">Output:</strong>
-                    {% set output = trace.get('raw_tool_output') %}
-                    {% if output is string %}
-                    <pre class="trace-output bg-white p-2 rounded border mb-0">{{ output[:2000] }}</pre>
-                    {% else %}
-                    <pre class="trace-output bg-white p-2 rounded border mb-0">{{ output|to_json(indent=2) }}</pre>
-                    {% endif %}
-                  </div>
-                </div>
-                <div class="small text-muted mt-1">
-                  {{ te.get('start_time', '')[:19] }} &rarr; {{ te.get('end_time', '')[:19] }}
-                  | cost: ${{ "%.4f"|format(te.get('cost_usd', 0)|float) }}
-                </div>
-              </div>
-            </td>
-          </tr>
-          {% endfor %}
-        </tbody>
-      </table>
-    </div>
   </div>
 </div>
 {% endif %}
