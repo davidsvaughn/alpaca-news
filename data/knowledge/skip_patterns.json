@@ -365,11 +365,15 @@
     "underperforming in the Consumer Discretionary sector",
     "shares are trading higher after the company announced a buyback",
     "MHRA Approves",
-    "UK's MHRA Approves"
+    "UK's MHRA Approves",
+    "abstracts have been accepted for presentation",
+    "AACR Annual Meeting",
+    "shares are trading higher after the company announced that two abstracts",
+    "shares are trading lower. The company reported Q4 financial results."
   ],
   "sources_to_skip": [],
   "symbol_contexts": {},
-  "last_updated": "2026-02-24T16:28:00.673182+00:00",
-  "auto_learned": 366,
+  "last_updated": "2026-02-24T16:37:14.044828+00:00",
+  "auto_learned": 370,
   "human_edited": 0
 }
