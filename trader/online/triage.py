@@ -60,6 +60,12 @@ ALWAYS INVESTIGATE (never reject):
 Known skip patterns (headlines matching these are auto-skipped before the LLM is called):
 {skip_keywords}
 
+TICKER VALIDATION: The `symbols` array comes from a third-party feed and may be wrong.
+Before returning, verify each ticker is actually a company central to this news story.
+Remove any ticker that is only tangentially related — e.g. an investor, partner, or sector
+proxy for a privately-held company named in the headline. If no relevant public tickers
+remain after pruning, set action to "skip".
+
 Return STRICT JSON with keys:
   action: "investigate"|"skip"
   confidence: number between 0 and 1
@@ -190,7 +196,9 @@ def run_triage(
     investigate_keywords: list[str] = inv.get("headline_keywords", [])
 
     # --- Cheap pre-filter (no LLM call) ---
-    pre = _pre_filter(news, skip_keywords, investigate_keywords)
+    # Note: investigate_keywords are intentionally NOT passed here — investigate
+    # pattern hits must go through the LLM so ticker symbols can be validated.
+    pre = _pre_filter(news, skip_keywords)
     if pre is not None:
         return pre
 
