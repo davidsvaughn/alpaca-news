@@ -1,6 +1,21 @@
 {% if snapshots %}
 <div class="table-responsive">
   <table id="snapshots-tbl" class="table table-sm table-hover align-middle" style="table-layout: fixed;">
+    <colgroup>
+      <col data-col="check" style="width:2%">
+      <col data-col="created" style="width:9%">
+      <col data-col="headline" style="width:20%">
+      <col data-col="symbols" style="width:6%">
+      <col data-col="signal" style="width:8%">
+      <col data-col="price_10" style="width:6%">
+      <col data-col="price" style="width:6%">
+      <col data-col="avg_vol" style="width:6%">
+      <col data-col="mkt_cap" style="width:6%">
+      <col data-col="pe" style="width:6%">
+      <col data-col="tools" style="width:4%">
+      <col data-col="cost" style="width:4%">
+      <col data-col="action" style="width:4%">
+    </colgroup>
     <thead class="table-light">
       <!-- Filter row -->
       <tr class="filter-row">
@@ -30,19 +45,19 @@
       </tr>
       <!-- Column headers -->
       <tr>
-        <th data-col="check" style="width:30px;"><input type="checkbox" onchange="toggleAllSnaps(this)"></th>
-        <th data-col="created" data-sort="date" class="resizable-th sortable-th" style="width:120px;"><span class="col-label">Created</span><span class="sort-arrow"></span><div class="resize-handle"></div></th>
-        <th data-col="headline" data-sort="text" class="resizable-th sortable-th" style="width:200px;"><span class="col-label">Headline</span><span class="sort-arrow"></span><div class="resize-handle"></div></th>
-        <th data-col="symbols" data-sort="text" class="resizable-th sortable-th" style="width:80px;"><span class="col-label">Symbols</span><span class="sort-arrow"></span><div class="resize-handle"></div></th>
-        <th data-col="signal" data-sort="text" class="resizable-th sortable-th" style="width:100px;"><span class="col-label">Signal</span><span class="sort-arrow"></span><div class="resize-handle"></div></th>
-        <th data-col="price_10" data-sort="num" class="resizable-th sortable-th" style="width:80px;"><span class="col-label">Price@10</span><span class="sort-arrow"></span><div class="resize-handle"></div></th>
-        <th data-col="price" data-sort="num" class="resizable-th sortable-th" style="width:75px;"><span class="col-label">Price</span><span class="sort-arrow"></span><div class="resize-handle"></div></th>
-        <th data-col="avg_vol" data-sort="num" class="resizable-th sortable-th" style="width:75px;"><span class="col-label">AvgVol</span><span class="sort-arrow"></span><div class="resize-handle"></div></th>
-        <th data-col="mkt_cap" data-sort="num" class="resizable-th sortable-th" style="width:80px;"><span class="col-label">MktCap</span><span class="sort-arrow"></span><div class="resize-handle"></div></th>
-        <th data-col="pe" data-sort="num" class="resizable-th sortable-th" style="width:55px;"><span class="col-label">P/E</span><span class="sort-arrow"></span><div class="resize-handle"></div></th>
-        <th data-col="tools" data-sort="num" class="resizable-th sortable-th" style="width:50px;"><span class="col-label">Tools</span><span class="sort-arrow"></span><div class="resize-handle"></div></th>
-        <th data-col="cost" data-sort="num" class="resizable-th sortable-th" style="width:60px;"><span class="col-label">Cost</span><span class="sort-arrow"></span><div class="resize-handle"></div></th>
-        <th data-col="action" style="width:60px;"></th>
+        <th data-col="check"><input type="checkbox" onchange="toggleAllSnaps(this)"></th>
+        <th data-col="created" data-sort="date" class="resizable-th sortable-th"><span class="col-label">Created</span><span class="sort-arrow"></span><div class="resize-handle"></div></th>
+        <th data-col="headline" data-sort="text" class="resizable-th sortable-th"><span class="col-label">Headline</span><span class="sort-arrow"></span><div class="resize-handle"></div></th>
+        <th data-col="symbols" data-sort="text" class="resizable-th sortable-th"><span class="col-label">Symbols</span><span class="sort-arrow"></span><div class="resize-handle"></div></th>
+        <th data-col="signal" data-sort="text" class="resizable-th sortable-th"><span class="col-label">Signal</span><span class="sort-arrow"></span><div class="resize-handle"></div></th>
+        <th data-col="price_10" data-sort="num" class="resizable-th sortable-th"><span class="col-label">Price@10</span><span class="sort-arrow"></span><div class="resize-handle"></div></th>
+        <th data-col="price" data-sort="num" class="resizable-th sortable-th"><span class="col-label">Price</span><span class="sort-arrow"></span><div class="resize-handle"></div></th>
+        <th data-col="avg_vol" data-sort="num" class="resizable-th sortable-th"><span class="col-label">AvgVol</span><span class="sort-arrow"></span><div class="resize-handle"></div></th>
+        <th data-col="mkt_cap" data-sort="num" class="resizable-th sortable-th"><span class="col-label">MktCap</span><span class="sort-arrow"></span><div class="resize-handle"></div></th>
+        <th data-col="pe" data-sort="num" class="resizable-th sortable-th"><span class="col-label">P/E</span><span class="sort-arrow"></span><div class="resize-handle"></div></th>
+        <th data-col="tools" data-sort="num" class="resizable-th sortable-th"><span class="col-label">Tools</span><span class="sort-arrow"></span><div class="resize-handle"></div></th>
+        <th data-col="cost" data-sort="num" class="resizable-th sortable-th"><span class="col-label">Cost</span><span class="sort-arrow"></span><div class="resize-handle"></div></th>
+        <th data-col="action"></th>
       </tr>
     </thead>
     <tbody>

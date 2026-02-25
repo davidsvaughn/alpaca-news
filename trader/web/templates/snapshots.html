@@ -163,13 +163,25 @@ async function deleteSelectedSnapshots() {
 // =====================================================================
 var _COL_WIDTHS_KEY = 'snapshots_col_widths';
 
+function _getCol(colName) {
+  var tbl = document.getElementById('snapshots-tbl');
+  return tbl ? tbl.querySelector('col[data-col="' + colName + '"]') : null;
+}
+
 function saveColumnWidths() {
   var tbl = document.getElementById('snapshots-tbl');
   if (!tbl) return;
   var widths = {};
-  tbl.querySelectorAll('th[data-col]').forEach(function(th) {
-    widths[th.getAttribute('data-col')] = th.offsetWidth;
+  tbl.querySelectorAll('col[data-col]').forEach(function(col) {
+    widths[col.getAttribute('data-col')] = col.offsetWidth || col.parentElement.parentElement.querySelector('th[data-col="' + col.getAttribute('data-col') + '"]')?.offsetWidth;
   });
+  // Use actual rendered th widths (cols don't have offsetWidth)
+  var headerRow = tbl.querySelector('thead tr:nth-child(2)');
+  if (headerRow) {
+    headerRow.querySelectorAll('th[data-col]').forEach(function(th) {
+      widths[th.getAttribute('data-col')] = th.offsetWidth;
+    });
+  }
   localStorage.setItem(_COL_WIDTHS_KEY, JSON.stringify(widths));
 }
 
@@ -180,10 +192,9 @@ function applyColumnWidths() {
   if (!saved) return;
   try {
     var widths = JSON.parse(saved);
-    // Apply to both header rows
-    tbl.querySelectorAll('th[data-col]').forEach(function(th) {
-      var w = widths[th.getAttribute('data-col')];
-      if (w) th.style.width = w + 'px';
+    tbl.querySelectorAll('col[data-col]').forEach(function(col) {
+      var w = widths[col.getAttribute('data-col')];
+      if (w) col.style.width = w + 'px';
     });
   } catch(e) {}
 }
@@ -195,10 +206,15 @@ function initResizeHandles() {
     handle.addEventListener('mousedown', function(e) {
       e.preventDefault(); e.stopPropagation();
       var th = handle.parentElement;
+      var colName = th.getAttribute('data-col');
+      var col = _getCol(colName);
       var startX = e.clientX;
       var startW = th.offsetWidth;
       handle.classList.add('active');
-      function onMove(ev) { th.style.width = Math.max(30, startW + (ev.clientX - startX)) + 'px'; }
+      function onMove(ev) {
+        var newW = Math.max(30, startW + (ev.clientX - startX));
+        if (col) col.style.width = newW + 'px';
+      }
       function onUp() {
         handle.classList.remove('active');
         document.removeEventListener('mousemove', onMove);
