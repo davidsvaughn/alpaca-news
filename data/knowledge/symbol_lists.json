@@ -193,12 +193,23 @@
     "SPSM",
     "CRCL",
     "RXRX",
-    "HZO"
+    "HZO",
+    "WDAY",
+    "FMBH",
+    "ODD",
+    "LGVN",
+    "TJX",
+    "MOS",
+    "DFNS",
+    "LVO",
+    "LCID",
+    "FRMI",
+    "TEM"
   ],
   "crypto": [],
   "rejected": [
     "BTCUSD",
     "VNP"
   ],
-  "last_updated": "2026-02-25T15:54:49.016229+00:00"
+  "last_updated": "2026-02-25T16:38:52.614242+00:00"
 }

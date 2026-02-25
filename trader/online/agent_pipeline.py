@@ -193,7 +193,10 @@ def build_default_pipeline() -> PipelineConfig:
                 "angles, patterns, or evidence that prior agents missed, "
                 "(2) deeply synthesize ALL accumulated evidence, and (3) think "
                 "through the implications for short-term stock price movement. "
-                "Produce a clear, actionable trading signal."
+                "The previous agent might have offered suggestions about what to focus on next — ",
+                "these are merely suggestions; YOU decide what to prioritize."
+                "When your analysis is complete, **produce a clear, actionable trading signal**."
+                "If possible, provide BOTH a short term (1 day) and a slightly longer-term (1 week) signal, and be specific about the key catalyst driving the move. "
             ),
             is_final=True,
             excluded_tools=frozenset({"x_search", "x_stream_cache"}),
@@ -368,7 +371,9 @@ def _build_system_prompt(
             "## IMPORTANT: Automated pipeline",
             "You are in an automated pipeline with no human in the loop.",
             "Do NOT ask follow-up questions, present menus of options,",
-            "or offer to do additional work. State your findings concisely and stop.",
+            "or offer to do additional work. State your findings concisely but clearly, so that a human or the next agent can understand and build on them.",
+            "If you notice any patterns developping or have any preliminary insights, share them.",
+            "If you have any thoughts about where the investigation should go next, share them.",
         ])
 
     if spec.is_final:
