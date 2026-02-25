@@ -366,7 +366,7 @@ $\alpha = \frac{2}{n+1}$
 
 Step 1: True Range
 
-$TR_t = \max \begin{cases} High_t - Low_t \\ |High_t - Close_{t-1}| \\ |Low_t - Close_{t-1}| \end{cases}$
+$TR_t = \max(High_t - Low_t,\ |High_t - Close_{t-1}|,\ |Low_t - Close_{t-1}|)$
 
 Step 2: ATR
 
