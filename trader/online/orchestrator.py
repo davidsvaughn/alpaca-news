@@ -730,6 +730,24 @@ def process_news_file(
         })
     )
 
+    # Schedule 10-min delayed price capture for the snapshots table
+    _primary_sym = trigger.symbols[0] if trigger.symbols else None
+    _snap_id = snapshot.snapshot_id
+    if _primary_sym:
+        def _capture_price_10min():
+            time.sleep(600)
+            try:
+                from trader.market.data_service import MarketDataService
+                from trader.db.database import update_snapshot_field
+                market = MarketDataService()
+                quote = market.get_quote(_primary_sym)
+                price = quote.get("last_price") if quote else None
+                if price is not None:
+                    update_snapshot_field(db, _snap_id, "price_10min", float(price))
+            except Exception:
+                pass  # best-effort — price_10min will just stay empty
+        threading.Thread(target=_capture_price_10min, daemon=True).start()
+
     # Activity complete — cost now in sealed snapshot
     if tracker is not None:
         tracker.finish(_act_id)

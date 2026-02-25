@@ -1,26 +1,31 @@
 {% if snapshots %}
 <div class="table-responsive">
-  <table class="table table-sm table-hover align-middle">
+  <table id="snapshots-tbl" class="table table-sm table-hover align-middle" style="table-layout: fixed;">
     <thead class="table-light">
       <tr>
-        <th style="width: 30px;"><input type="checkbox" onchange="toggleAllSnaps(this)"></th>
-        <th>Created</th>
-        <th>Headline</th>
-        <th>Symbols</th>
-        <th>Direction</th>
-        <th>Confidence</th>
-        <th>Agents</th>
-        <th>Tools</th>
-        <th>Cost</th>
-        <th></th>
+        <th data-col="check" style="width:30px;"><input type="checkbox" onchange="toggleAllSnaps(this)"></th>
+        <th data-col="created" class="resizable-th" style="width:120px;">Created<div class="resize-handle"></div></th>
+        <th data-col="headline" class="resizable-th" style="width:200px;">Headline<div class="resize-handle"></div></th>
+        <th data-col="symbols" class="resizable-th" style="width:80px;">Symbols<div class="resize-handle"></div></th>
+        <th data-col="signal" class="resizable-th" style="width:80px;">Signal<div class="resize-handle"></div></th>
+        <th data-col="conf" class="resizable-th" style="width:50px;">Conf<div class="resize-handle"></div></th>
+        <th data-col="tools" class="resizable-th" style="width:50px;">Tools<div class="resize-handle"></div></th>
+        <th data-col="price_10" class="resizable-th" style="width:80px;">Price@10<div class="resize-handle"></div></th>
+        <th data-col="price" class="resizable-th" style="width:75px;">Price<div class="resize-handle"></div></th>
+        <th data-col="avg_vol" class="resizable-th" style="width:75px;">AvgVol<div class="resize-handle"></div></th>
+        <th data-col="mkt_cap" class="resizable-th" style="width:80px;">MktCap<div class="resize-handle"></div></th>
+        <th data-col="pe" class="resizable-th" style="width:55px;">P/E<div class="resize-handle"></div></th>
+        <th data-col="cost" class="resizable-th" style="width:60px;">Cost<div class="resize-handle"></div></th>
+        <th data-col="action" style="width:60px;"></th>
       </tr>
     </thead>
     <tbody>
       {% for s in snapshots %}
+      {% set primary_sym = s.trigger.symbols[0] if s.trigger.symbols else '' %}
       <tr>
         <td><input type="checkbox" class="snap-check" value="{{ s.snapshot_id }}" onchange="updateDeleteBtn()"></td>
         <td class="small text-muted text-nowrap">{{ s.created_at | fmt_dt("short") }}</td>
-        <td class="text-truncate" style="max-width: 300px;">{{ s.trigger.headline }}</td>
+        <td class="text-truncate">{{ s.trigger.headline }}</td>
         <td>
           {% for sym in s.trigger.symbols %}
           <span class="badge bg-light text-dark border">{{ sym }}</span>
@@ -47,19 +52,30 @@
           {% endif %}
         </td>
         <td class="small">
-          {% if s.rounds %}
-            {{ s.rounds|length }}
-            <span class="text-muted">({{ s.rounds|map(attribute='agent')|join(', ') }})</span>
+          {% if s.tool_traces %}{{ s.tool_traces|length }}{% else %}<span class="text-muted">&mdash;</span>{% endif %}
+        </td>
+        <td class="small" data-col="price_10">
+          {% if s.price_10min is defined and s.price_10min %}
+            ${{ "%.2f"|format(s.price_10min) }}
           {% else %}
             <span class="text-muted">&mdash;</span>
           {% endif %}
         </td>
-        <td class="small">
-          {% if s.tool_traces %}{{ s.tool_traces|length }}{% else %}<span class="text-muted">&mdash;</span>{% endif %}
+        <td class="small live-price" data-symbol="{{ primary_sym }}">
+          <span class="text-muted">&mdash;</span>
+        </td>
+        <td class="small market-data" data-col="avg_vol" data-symbol="{{ primary_sym }}">
+          <span class="text-muted">&mdash;</span>
+        </td>
+        <td class="small market-data" data-col="mkt_cap" data-symbol="{{ primary_sym }}">
+          <span class="text-muted">&mdash;</span>
+        </td>
+        <td class="small market-data" data-col="pe" data-symbol="{{ primary_sym }}">
+          <span class="text-muted">&mdash;</span>
         </td>
         <td class="small">
           {% if s.cost_summary and s.cost_summary.total_usd is defined %}
-            ${{ "%.4f"|format(s.cost_summary.total_usd) }}
+            ${{ "%.2f"|format(s.cost_summary.total_usd) }}
           {% else %}
             <span class="text-muted">&mdash;</span>
           {% endif %}

@@ -172,6 +172,24 @@ def insert_snapshot(db: Database, *, snapshot: dict[str, Any]) -> bool:
     return result.rowcount > 0
 
 
+def update_snapshot_field(db: Database, snapshot_id: str, field: str, value: Any) -> bool:
+    """Update a single field inside snapshot_json. Returns True if updated."""
+    with db.engine.begin() as conn:
+        row = conn.execute(
+            text("SELECT snapshot_json FROM snapshots WHERE snapshot_id = :sid"),
+            {"sid": snapshot_id},
+        ).fetchone()
+        if row is None:
+            return False
+        snap = json.loads(row[0]) if isinstance(row[0], str) else row[0]
+        snap[field] = value
+        conn.execute(
+            text("UPDATE snapshots SET snapshot_json = :sjson WHERE snapshot_id = :sid"),
+            {"sid": snapshot_id, "sjson": json.dumps(snap, ensure_ascii=False)},
+        )
+    return True
+
+
 # ---------------------------------------------------------------------------
 # Watches
 # ---------------------------------------------------------------------------

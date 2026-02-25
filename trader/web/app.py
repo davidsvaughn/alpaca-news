@@ -60,6 +60,11 @@ def create_app(
     app.state.settings = settings  # mutable ref for hot-reload
     app.state.observer = observer
 
+    # Market data service + fundamentals cache for snapshot enrichment
+    from trader.market.data_service import MarketDataService
+    app.state.market = MarketDataService()
+    _fundamentals_cache: dict[str, tuple[float, dict]] = {}  # symbol -> (timestamp, data)
+
     templates_dir = Path(__file__).parent / "templates"
     templates = Jinja2Templates(directory=str(templates_dir))
 
@@ -381,6 +386,56 @@ def create_app(
                 f.unlink(missing_ok=True)
         deleted = delete_snapshots_bulk(db, ids)
         return {"deleted": deleted}
+
+    # ------------------------------------------------------------------
+    # Market data API (for snapshots table enrichment)
+    # ------------------------------------------------------------------
+
+    @app.get("/api/market/quotes")
+    async def api_market_quotes(symbols: str = ""):
+        """Batch current prices for the snapshots table (polled every 60s)."""
+        symbol_list = [s.strip().upper() for s in symbols.split(",") if s.strip()]
+        if not symbol_list:
+            return {}
+        market: MarketDataService = app.state.market
+        quotes = market.get_quotes(symbol_list[:20])
+        result: dict[str, Any] = {}
+        for sym, q in quotes.items():
+            result[sym] = {
+                "last_price": q.get("last_price"),
+                "net_pct_change": q.get("net_pct_change"),
+            }
+        return result
+
+    @app.get("/api/market/fundamentals")
+    async def api_market_fundamentals(symbols: str = ""):
+        """Batch fundamentals (P/E, Mkt Cap, Avg Vol) — cached 1 hour."""
+        import time as _time
+
+        symbol_list = [s.strip().upper() for s in symbols.split(",") if s.strip()]
+        if not symbol_list:
+            return {}
+        now = _time.time()
+        market: MarketDataService = app.state.market
+        result: dict[str, Any] = {}
+        for sym in symbol_list[:20]:
+            cached = _fundamentals_cache.get(sym)
+            if cached and (now - cached[0]) < 3600:
+                result[sym] = cached[1]
+                continue
+            try:
+                fund = market.get_fundamentals(sym)
+                if "error" not in fund:
+                    entry = {
+                        "pe_ratio": fund.get("pe_ratio"),
+                        "market_cap": fund.get("market_cap"),
+                        "avg_volume": fund.get("avg_10d_volume") or fund.get("avg_volume"),
+                    }
+                    _fundamentals_cache[sym] = (now, entry)
+                    result[sym] = entry
+            except Exception:
+                pass
+        return result
 
     @app.get("/api/activity-panel", response_class=HTMLResponse)
     async def api_activity_panel(request: Request):

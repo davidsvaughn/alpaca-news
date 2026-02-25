@@ -2,6 +2,17 @@
 
 {% block title %}alpaca-news | Snapshots{% endblock %}
 
+{% block extra_css %}
+.resizable-th { position: relative; user-select: none; }
+.resize-handle {
+  position: absolute; right: 0; top: 0; bottom: 0;
+  width: 5px; cursor: col-resize;
+  background: transparent;
+}
+.resize-handle:hover, .resize-handle.active { background: rgba(0,0,0,0.15); }
+#snapshots-tbl td { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+{% endblock %}
+
 {% block content %}
 <div class="d-flex align-items-center mb-3">
   <h2 class="mb-0 me-3">Snapshots</h2>
@@ -53,6 +64,9 @@
 
 {% block scripts %}
 <script>
+// =====================================================================
+// Filter state helpers (existing)
+// =====================================================================
 function _snapshotsUrl(explored) {
   var sym = document.querySelector('[name=symbol]').value || '';
   var createdAfter = document.querySelector('[name=created_after]').value || '';
@@ -117,9 +131,163 @@ async function deleteSelectedSnapshots() {
   updateDeleteBtn();
 }
 
+// =====================================================================
+// Column resize with localStorage persistence
+// =====================================================================
+var _COL_WIDTHS_KEY = 'snapshots_col_widths';
+
+function saveColumnWidths() {
+  var tbl = document.getElementById('snapshots-tbl');
+  if (!tbl) return;
+  var widths = {};
+  tbl.querySelectorAll('th[data-col]').forEach(function(th) {
+    widths[th.getAttribute('data-col')] = th.offsetWidth;
+  });
+  localStorage.setItem(_COL_WIDTHS_KEY, JSON.stringify(widths));
+}
+
+function applyColumnWidths() {
+  var tbl = document.getElementById('snapshots-tbl');
+  if (!tbl) return;
+  var saved = localStorage.getItem(_COL_WIDTHS_KEY);
+  if (!saved) return;
+  try {
+    var widths = JSON.parse(saved);
+    tbl.querySelectorAll('th[data-col]').forEach(function(th) {
+      var w = widths[th.getAttribute('data-col')];
+      if (w) th.style.width = w + 'px';
+    });
+  } catch(e) {}
+}
+
+function initResizeHandles() {
+  var tbl = document.getElementById('snapshots-tbl');
+  if (!tbl) return;
+  tbl.querySelectorAll('.resize-handle').forEach(function(handle) {
+    handle.addEventListener('mousedown', function(e) {
+      e.preventDefault();
+      var th = handle.parentElement;
+      var startX = e.clientX;
+      var startW = th.offsetWidth;
+      handle.classList.add('active');
+
+      function onMove(ev) {
+        var newW = Math.max(30, startW + (ev.clientX - startX));
+        th.style.width = newW + 'px';
+      }
+      function onUp() {
+        handle.classList.remove('active');
+        document.removeEventListener('mousemove', onMove);
+        document.removeEventListener('mouseup', onUp);
+        saveColumnWidths();
+      }
+      document.addEventListener('mousemove', onMove);
+      document.addEventListener('mouseup', onUp);
+    });
+  });
+}
+
+// =====================================================================
+// Number formatting helpers
+// =====================================================================
+function fmtVolume(v) {
+  if (v == null) return '\u2014';
+  if (v >= 1e9) return (v / 1e9).toFixed(1) + 'B';
+  if (v >= 1e6) return (v / 1e6).toFixed(1) + 'M';
+  if (v >= 1e3) return (v / 1e3).toFixed(0) + 'K';
+  return String(Math.round(v));
+}
+
+function fmtMktCap(v) {
+  if (v == null) return '\u2014';
+  if (v >= 1e12) return '$' + (v / 1e12).toFixed(2) + 'T';
+  if (v >= 1e9) return '$' + (v / 1e9).toFixed(1) + 'B';
+  if (v >= 1e6) return '$' + (v / 1e6).toFixed(0) + 'M';
+  return '$' + Math.round(v).toLocaleString();
+}
+
+function fmtPE(v) {
+  if (v == null) return '\u2014';
+  return v.toFixed(1);
+}
+
+function fmtPrice(v) {
+  if (v == null) return '\u2014';
+  return '$' + Number(v).toFixed(2);
+}
+
+// =====================================================================
+// Live price polling (every 60s)
+// =====================================================================
+function getVisibleSymbols() {
+  var syms = new Set();
+  document.querySelectorAll('[data-symbol]').forEach(function(el) {
+    var s = el.getAttribute('data-symbol');
+    if (s) syms.add(s);
+  });
+  return Array.from(syms);
+}
+
+function fetchPrices() {
+  var syms = getVisibleSymbols();
+  if (!syms.length) return;
+  fetch('/api/market/quotes?symbols=' + encodeURIComponent(syms.join(',')))
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+      document.querySelectorAll('.live-price').forEach(function(td) {
+        var sym = td.getAttribute('data-symbol');
+        if (sym && data[sym] && data[sym].last_price != null) {
+          td.textContent = fmtPrice(data[sym].last_price);
+        }
+      });
+    })
+    .catch(function() {});
+}
+
+var _priceInterval = null;
+function startPricePolling() {
+  fetchPrices();
+  if (_priceInterval) clearInterval(_priceInterval);
+  _priceInterval = setInterval(fetchPrices, 60000);
+}
+
+// =====================================================================
+// Fundamentals fetch (once per page load / swap)
+// =====================================================================
+var _lastFundSyms = '';
+
+function fetchFundamentals() {
+  var syms = getVisibleSymbols();
+  var key = syms.sort().join(',');
+  if (key === _lastFundSyms) return;  // already fetched for these symbols
+  _lastFundSyms = key;
+  if (!syms.length) return;
+  fetch('/api/market/fundamentals?symbols=' + encodeURIComponent(syms.join(',')))
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+      document.querySelectorAll('.market-data').forEach(function(td) {
+        var sym = td.getAttribute('data-symbol');
+        var col = td.getAttribute('data-col');
+        if (!sym || !data[sym]) return;
+        var d = data[sym];
+        if (col === 'avg_vol') td.textContent = fmtVolume(d.avg_volume);
+        else if (col === 'mkt_cap') td.textContent = fmtMktCap(d.market_cap);
+        else if (col === 'pe') td.textContent = fmtPE(d.pe_ratio);
+      });
+    })
+    .catch(function() {});
+}
+
+// =====================================================================
+// Post-swap hook: reapply widths, re-init resize, refresh data
+// =====================================================================
 document.addEventListener('htmx:afterSwap', function(e) {
   if (e.detail.target.id === 'snapshots-table') {
     updateDeleteBtn();
+    applyColumnWidths();
+    initResizeHandles();
+    startPricePolling();
+    fetchFundamentals();
   }
 });
 
