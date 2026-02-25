@@ -19,17 +19,15 @@ This structure is suitable for both discretionary use and automation.
 
 **Exit Condition**
 
-$$
-P_t \le P_{entry}(1 - s)
-$$
+$P_t \le P_{entry}(1 - s)$
 
 **Market Data Inputs**
 
-* Current price (P_t)
+* Current price ($P_t$)
 
 **State Variables**
 
-* Entry price (P_{entry})
+* Entry price ($P_{entry}$)
 
 **User Parameters**
 
@@ -39,17 +37,15 @@ $$
 
 ## 2. Fixed % Take Profit
 
-$$
-P_t \ge P_{entry}(1 + r)
-$$
+$P_t \ge P_{entry}(1 + r)$
 
 **Market Data**
 
-* (P_t)
+* ($P_t$)
 
 **State**
 
-* (P_{entry})
+* ($P_{entry}$)
 
 **User**
 
@@ -59,13 +55,11 @@ $$
 
 ## 3. Risk/Reward Target
 
-$$
-Target = P_{entry} + k \cdot (P_{entry} - P_{stop})
-$$
+$Target = P_{entry} + k \cdot (P_{entry} - P_{stop})$
 
 **Market Data**
 
-* (P_t)
+* ($P_t$)
 
 **State**
 
@@ -84,38 +78,34 @@ $$
 
 ## 4. Percent Trailing Stop
 
-$$
-P_t \le P_{max}(1 - \tau)
-$$
+$P_t \le P_{max}(1 - \tau)$
 
 **Market Data**
 
-* (P_t)
+* ($P_t$)
 
 **State**
 
-* Highest price since entry (P_{max})
+* Highest price since entry ($P_{max}$)
 
 **User**
 
-* Trail percent (\tau)
+* Trail percent ($\tau$)
 
 ---
 
 ## 5. ATR Trailing Stop
 
-$$
-P_t \le P_{max} - k \cdot ATR_n
-$$
+$P_t \le P_{max} - k \cdot ATR_n$
 
 **Market Data**
 
-* (P_t)
+* ($P_t$)
 * ATR value
 
 **State**
 
-* (P_{max})
+* ($P_{max}$)
 
 **User**
 
@@ -130,18 +120,16 @@ $$
 
 ## 6. ATR Fixed Stop
 
-$$
-P_t \le P_{entry} - k \cdot ATR_n
-$$
+$P_t \le P_{entry} - k \cdot ATR_n$
 
 **Market Data**
 
-* (P_t)
+* ($P_t$)
 * ATR
 
 **State**
 
-* (P_{entry})
+* ($P_{entry}$)
 
 **User**
 
@@ -156,9 +144,7 @@ $$
 
 ## 7. Close Below Moving Average
 
-$$
-P_t < MA_n
-$$
+$P_t < MA_n$
 
 **Market Data**
 
@@ -166,7 +152,7 @@ $$
 
 **Derived Market Data**
 
-* Moving average (MA_n)
+* Moving average ($MA_n$)
 
 **User**
 
@@ -176,9 +162,7 @@ $$
 
 ## 8. Moving Average Cross Exit
 
-$$
-MA_{short} < MA_{long}
-$$
+$MA_{short} < MA_{long}$
 
 **Market Data**
 
@@ -202,9 +186,7 @@ $$
 
 ## 9. RSI Overbought Exit
 
-$$
-RSI_t \ge \theta
-$$
+$RSI_t \ge \theta$
 
 **Market Data**
 
@@ -217,16 +199,14 @@ $$
 **User**
 
 * RSI period
-* Threshold (\theta) (e.g., 70)
+* Threshold ($\theta$) (e.g., 70)
 
 ---
 
 ## 10. MACD Bearish Cross
 
 Exit if:
-$$
-MACD_t < Signal_t
-$$
+$MACD_t < Signal_t$
 
 **Market Data**
 
@@ -252,9 +232,7 @@ $$
 
 ## 11. VWAP Breakdown
 
-$$
-P_t < VWAP_t
-$$
+$P_t < VWAP_t$
 
 **Market Data**
 
@@ -274,9 +252,7 @@ $$
 ## 12. Volume Fade Exit
 
 Exit if:
-$$
-Volume_t < \alpha \cdot AvgVolume
-$$
+$Volume_t < \alpha \cdot AvgVolume$
 
 **Market Data**
 
@@ -289,7 +265,7 @@ $$
 **User**
 
 * Volume lookback
-* Multiplier (\alpha)
+* Multiplier ($\alpha$)
 
 ---
 
@@ -299,13 +275,11 @@ $$
 
 ## 13. Expected Return Threshold Exit
 
-$$
-E[R_{future} | X_t] < \theta
-$$
+$E[R_{future} | X_t] < \theta$
 
 **Market Data**
 
-* Feature vector (X_t)
+* Feature vector ($X_t$)
 
 **Derived**
 
@@ -313,7 +287,7 @@ $$
 
 **User**
 
-* Threshold (\theta)
+* Threshold ($\theta$)
 * Forecast horizon
 
 ---
@@ -324,9 +298,7 @@ $$
 
 ## 14. Max Holding Period
 
-$$
-t - t_{entry} \ge T
-$$
+$t - t_{entry} \ge T$
 
 **Market Data**
 
@@ -349,9 +321,7 @@ $$
 ## 15. Max Daily Loss
 
 Exit and halt if:
-$$
-DailyPnL \le -D
-$$
+$DailyPnL \le -D$
 
 **Market Data**
 
@@ -375,9 +345,7 @@ Below are formulas for the derived inputs referenced above.
 
 ## A1. Moving Average (SMA)
 
-$$
-MA_n = \frac{1}{n} \sum_{i=0}^{n-1} P_{t-i}
-$$
+$MA_n = \frac{1}{n} \sum_{i=0}^{n-1} P_{t-i}$
 
 **Inputs**
 
@@ -388,13 +356,9 @@ $$
 
 ## A2. Exponential Moving Average (EMA)
 
-$$
-EMA_t = \alpha P_t + (1-\alpha) EMA_{t-1}
-$$
+$EMA_t = \alpha P_t + (1-\alpha) EMA_{t-1}$
 
-$$
-\alpha = \frac{2}{n+1}
-$$
+$\alpha = \frac{2}{n+1}$
 
 ---
 
@@ -402,20 +366,11 @@ $$
 
 Step 1: True Range
 
-$$
-TR_t = \max
-\begin{cases}
-High_t - Low_t \\
-|High_t - Close_{t-1}| \\
-|Low_t - Close_{t-1}|
-\end{cases}
-$$
+$TR_t = \max \begin{cases} High_t - Low_t \\ |High_t - Close_{t-1}| \\ |Low_t - Close_{t-1}| \end{cases}$
 
 Step 2: ATR
 
-$$
-ATR_n = \text{EMA of } TR_t
-$$
+$ATR_n = \text{EMA of } TR_t$
 
 **Inputs**
 
@@ -432,37 +387,27 @@ $$
 3. Compute average gain and loss
 4. Compute RS:
 
-$$
-RS = \frac{AvgGain}{AvgLoss}
-$$
+$RS = \frac{AvgGain}{AvgLoss}$
 
 5. RSI:
 
-$$
-RSI = 100 - \frac{100}{1 + RS}
-$$
+$RSI = 100 - \frac{100}{1 + RS}$
 
 ---
 
 ## A5. MACD
 
-$$
-MACD = EMA_{fast} - EMA_{slow}
-$$
+$MACD = EMA_{fast} - EMA_{slow}$
 
 Signal line:
 
-$$
-Signal = EMA_{signal}(MACD)
-$$
+$Signal = EMA_{signal}(MACD)$
 
 ---
 
 ## A6. VWAP
 
-$$
-VWAP_t = \frac{\sum_{i=1}^{t} Price_i \cdot Volume_i}{\sum_{i=1}^{t} Volume_i}
-$$
+$VWAP_t = \frac{\sum_{i=1}^{t} Price_i \cdot Volume_i}{\sum_{i=1}^{t} Volume_i}$
 
 **Inputs**
 
@@ -475,9 +420,7 @@ Reset each session.
 
 ## A7. Rate of Change (ROC)
 
-$$
-ROC = \frac{P_t - P_{t-n}}{P_{t-n}}
-$$
+$ROC = \frac{P_t - P_{t-n}}{P_{t-n}}$
 
 ---
 
@@ -497,9 +440,7 @@ $$
 
 Every exit rule can be abstracted as:
 
-$$
-Exit = f(MarketData_t, State_t, UserParams)
-$$
+$Exit = f(MarketData_t, State_t, UserParams)$
 
 This lets you modularize exit logic.
 
@@ -508,4 +449,4 @@ If building a trading agent, you should:
 * Separate signal generation from exit logic
 * Make exit modules composable
 * Log trigger reason for post-trade analysis
-* Store state variables explicitly (P_max, ATR_at_entry, etc.)
+* Store state variables explicitly ($P_max, ATR_at_entry, etc.$)
