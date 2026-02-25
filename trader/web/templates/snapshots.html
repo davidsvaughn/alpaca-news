@@ -7,10 +7,23 @@
 .resize-handle {
   position: absolute; right: 0; top: 0; bottom: 0;
   width: 5px; cursor: col-resize;
-  background: transparent;
+  background: transparent; z-index: 2;
 }
 .resize-handle:hover, .resize-handle.active { background: rgba(0,0,0,0.15); }
 #snapshots-tbl td { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sortable-th { cursor: pointer; }
+.sortable-th:hover .col-label { text-decoration: underline; }
+.sort-arrow { font-size: .7rem; margin-left: 2px; }
+.filter-row th { padding: 2px 4px !important; vertical-align: top; background: #f8f9fa; }
+.filter-row input, .filter-row select { padding: 1px 4px; }
+.filter-clear-wrap { position: relative; }
+.filter-clear-wrap input, .filter-clear-wrap select { padding-right: 18px; }
+.filter-x {
+  position: absolute; right: 3px; top: 50%; transform: translateY(-50%);
+  cursor: pointer; font-size: .7rem; color: #999; line-height: 1; z-index: 1;
+  display: none;
+}
+.filter-x:hover { color: #333; }
 {% endblock %}
 
 {% block content %}
@@ -19,7 +32,7 @@
   <span class="text-muted" id="snap-total">{{ total }} total</span>
 </div>
 
-<!-- Filters + delete controls -->
+<!-- Controls above table -->
 <div class="d-flex align-items-center gap-3 mb-3 flex-wrap">
   <div class="form-check form-switch me-1">
     <input class="form-check-input" type="checkbox" id="explored-toggle"
@@ -27,34 +40,15 @@
            onchange="toggleExplored(this.checked)">
     <label class="form-check-label small" for="explored-toggle">Explored only</label>
   </div>
-  <form id="snap-filter-form" class="d-flex gap-2 align-items-center flex-wrap"
-        hx-get="/api/snapshots"
-        hx-target="#snapshots-table"
-        hx-swap="innerHTML"
-        hx-trigger="submit">
-    <input type="text" name="symbol" class="form-control form-control-sm"
-           style="width: 120px;"
-           maxlength="12"
-           placeholder="Symbol" value="{{ symbol_filter or '' }}">
-    <label class="small text-muted ms-1" for="created-after-input">Created</label>
-    <input type="date" id="created-after-input" name="created_after"
-           class="form-control form-control-sm" style="width: 150px;" value="{{ created_after or '' }}">
-    <span class="small text-muted">to</span>
-    <input type="date" name="created_before"
-           class="form-control form-control-sm" style="width: 150px;" value="{{ created_before or '' }}">
-    <input type="hidden" name="explored" id="explored-input" value="{{ '1' if explored_only else '' }}">
-    <button type="submit" class="btn btn-sm btn-outline-primary">Filter</button>
-    {% if symbol_filter or created_after or created_before %}
-    <a href="/snapshots{{ '?explored=1' if explored_only else '' }}" class="btn btn-sm btn-outline-secondary">Clear</a>
-    {% endif %}
-  </form>
+  <input type="hidden" id="explored-input" value="{{ '1' if explored_only else '' }}">
+  <button id="clear-all-btn" class="btn btn-sm btn-outline-secondary d-none" onclick="clearAllFilters()">Clear All Filters</button>
   <button id="delete-selected-btn" class="btn btn-sm btn-outline-danger d-none"
           onclick="deleteSelectedSnapshots()">
     Delete selected (<span id="sel-count">0</span>)
   </button>
 </div>
 
-<!-- Snapshots table (initial load triggered by JS in scripts block, after htmx loads) -->
+<!-- Snapshots table -->
 <div id="snapshots-table"
      hx-trigger="refreshTable"
      hx-swap="innerHTML">
@@ -65,70 +59,103 @@
 {% block scripts %}
 <script>
 // =====================================================================
-// Filter state helpers (existing)
+// Server-side filter state
 // =====================================================================
-function _snapshotsUrl(explored) {
-  var sym = document.querySelector('[name=symbol]').value || '';
-  var createdAfter = document.querySelector('[name=created_after]').value || '';
-  var createdBefore = document.querySelector('[name=created_before]').value || '';
-  return '/api/snapshots?symbol=' + encodeURIComponent(sym)
-    + '&created_after=' + encodeURIComponent(createdAfter)
-    + '&created_before=' + encodeURIComponent(createdBefore)
-    + '&explored=' + (explored ? '1' : '');
+var _SRV_KEYS = ['symbol', 'created_after', 'created_before', 'headline'];
+
+function _snapshotsUrl() {
+  var explored = document.getElementById('explored-input').value;
+  var params = 'explored=' + (explored === '1' ? '1' : '');
+  _SRV_KEYS.forEach(function(key) {
+    var v = _getSrvFilter(key);
+    if (v) params += '&' + key + '=' + encodeURIComponent(v);
+  });
+  return '/api/snapshots?' + params;
+}
+
+function _getSrvFilter(key) {
+  var el = document.querySelector('.srv-filter[data-key="' + key + '"]');
+  return el ? el.value.trim() : '';
 }
 
 function loadFilterState() {
-  var sym = localStorage.getItem('snapshots_symbol_filter');
-  var after = localStorage.getItem('snapshots_created_after');
-  var before = localStorage.getItem('snapshots_created_before');
-  if (sym !== null) document.querySelector('[name=symbol]').value = sym;
-  if (after !== null) document.querySelector('[name=created_after]').value = after;
-  if (before !== null) document.querySelector('[name=created_before]').value = before;
+  _SRV_KEYS.forEach(function(key) {
+    var v = localStorage.getItem('snap_f_' + key);
+    if (v !== null) {
+      var el = document.querySelector('.srv-filter[data-key="' + key + '"]');
+      if (el) el.value = v;
+    }
+  });
+  // Client-side filters
+  var cli = localStorage.getItem('snap_cli_filters');
+  if (cli) {
+    try {
+      var obj = JSON.parse(cli);
+      Object.keys(obj).forEach(function(k) {
+        var el = document.querySelector('.cli-filter[data-col="' + k.split('|')[0] + '"]' +
+          (k.indexOf('|') >= 0 ? '[data-bound="' + k.split('|')[1] + '"]' : ':not([data-bound])'));
+        if (el) el.value = obj[k];
+      });
+    } catch(e) {}
+  }
 }
 
 function saveFilterState() {
-  localStorage.setItem('snapshots_symbol_filter', document.querySelector('[name=symbol]').value || '');
-  localStorage.setItem('snapshots_created_after', document.querySelector('[name=created_after]').value || '');
-  localStorage.setItem('snapshots_created_before', document.querySelector('[name=created_before]').value || '');
+  _SRV_KEYS.forEach(function(key) {
+    localStorage.setItem('snap_f_' + key, _getSrvFilter(key));
+  });
+  // Client-side filters
+  var cli = {};
+  document.querySelectorAll('.cli-filter').forEach(function(el) {
+    var col = el.getAttribute('data-col');
+    var bound = el.getAttribute('data-bound');
+    var k = bound ? col + '|' + bound : col;
+    if (el.value) cli[k] = el.value;
+  });
+  localStorage.setItem('snap_cli_filters', JSON.stringify(cli));
 }
 
 function toggleExplored(checked) {
   localStorage.setItem('snapshots_explored_only', checked ? '1' : '');
   document.getElementById('explored-input').value = checked ? '1' : '';
-  saveFilterState();
-  htmx.ajax('GET', _snapshotsUrl(checked), {target: '#snapshots-table', swap: 'innerHTML'});
+  reloadTable();
 }
 
+function reloadTable() {
+  saveFilterState();
+  htmx.ajax('GET', _snapshotsUrl(), {target: '#snapshots-table', swap: 'innerHTML'});
+}
+
+// =====================================================================
+// Delete
+// =====================================================================
 function updateDeleteBtn() {
-  const checked = document.querySelectorAll('.snap-check:checked');
-  const btn = document.getElementById('delete-selected-btn');
-  const cnt = document.getElementById('sel-count');
+  var checked = document.querySelectorAll('.snap-check:checked');
+  var btn = document.getElementById('delete-selected-btn');
+  var cnt = document.getElementById('sel-count');
   cnt.textContent = checked.length;
   btn.classList.toggle('d-none', checked.length === 0);
 }
 
 function toggleAllSnaps(src) {
-  document.querySelectorAll('.snap-check').forEach(cb => { cb.checked = src.checked; });
+  document.querySelectorAll('.snap-check').forEach(function(cb) { cb.checked = src.checked; });
   updateDeleteBtn();
 }
 
 async function deleteSelectedSnapshots() {
-  const checked = document.querySelectorAll('.snap-check:checked');
-  const ids = Array.from(checked).map(cb => cb.value);
+  var checked = document.querySelectorAll('.snap-check:checked');
+  var ids = Array.from(checked).map(function(cb) { return cb.value; });
   if (!ids.length) return;
-  if (!confirm(`Delete ${ids.length} snapshot(s)? This also removes linked watches and follow-ups.`)) return;
-
-  const resp = await fetch('/api/snapshots/delete', {
-    method: 'POST',
-    headers: {'Content-Type': 'application/json'},
+  if (!confirm('Delete ' + ids.length + ' snapshot(s)? This also removes linked watches and follow-ups.')) return;
+  var resp = await fetch('/api/snapshots/delete', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
     body: JSON.stringify({snapshot_ids: ids}),
   });
-  const data = await resp.json();
-  htmx.trigger('#snapshots-table', 'refreshTable');
-  const totalEl = document.getElementById('snap-total');
-  const prev = parseInt(totalEl.textContent) || 0;
+  var data = await resp.json();
+  reloadTable();
+  var totalEl = document.getElementById('snap-total');
+  var prev = parseInt(totalEl.textContent) || 0;
   totalEl.textContent = Math.max(0, prev - data.deleted) + ' total';
-  updateDeleteBtn();
 }
 
 // =====================================================================
@@ -153,6 +180,7 @@ function applyColumnWidths() {
   if (!saved) return;
   try {
     var widths = JSON.parse(saved);
+    // Apply to both header rows
     tbl.querySelectorAll('th[data-col]').forEach(function(th) {
       var w = widths[th.getAttribute('data-col')];
       if (w) th.style.width = w + 'px';
@@ -165,16 +193,12 @@ function initResizeHandles() {
   if (!tbl) return;
   tbl.querySelectorAll('.resize-handle').forEach(function(handle) {
     handle.addEventListener('mousedown', function(e) {
-      e.preventDefault();
+      e.preventDefault(); e.stopPropagation();
       var th = handle.parentElement;
       var startX = e.clientX;
       var startW = th.offsetWidth;
       handle.classList.add('active');
-
-      function onMove(ev) {
-        var newW = Math.max(30, startW + (ev.clientX - startX));
-        th.style.width = newW + 'px';
-      }
+      function onMove(ev) { th.style.width = Math.max(30, startW + (ev.clientX - startX)) + 'px'; }
       function onUp() {
         handle.classList.remove('active');
         document.removeEventListener('mousemove', onMove);
@@ -185,6 +209,217 @@ function initResizeHandles() {
       document.addEventListener('mouseup', onUp);
     });
   });
+}
+
+// =====================================================================
+// Sorting
+// =====================================================================
+var _sortCol = null, _sortDir = null;
+var _SORT_KEY = 'snapshots_sort';
+
+function parseNum(s) {
+  if (!s || s === '\u2014' || s === '—') return NaN;
+  s = String(s).replace(/[$,]/g, '');
+  // Handle suffixes: K, M, B, T
+  var m = s.match(/^([\d.\-]+)\s*([KMBT]?)$/i);
+  if (!m) return parseFloat(s);
+  var n = parseFloat(m[1]);
+  var suf = (m[2] || '').toUpperCase();
+  if (suf === 'K') return n * 1e3;
+  if (suf === 'M') return n * 1e6;
+  if (suf === 'B') return n * 1e9;
+  if (suf === 'T') return n * 1e12;
+  return n;
+}
+
+function sortTable(colIdx, sortType) {
+  var tbl = document.getElementById('snapshots-tbl');
+  if (!tbl) return;
+  var tbody = tbl.querySelector('tbody');
+  var rows = Array.from(tbody.querySelectorAll('tr'));
+
+  rows.sort(function(a, b) {
+    var aCell = a.cells[colIdx], bCell = b.cells[colIdx];
+    var aVal = aCell.getAttribute('data-sort-val');
+    var bVal = bCell.getAttribute('data-sort-val');
+    // Fall back to text content if no data-sort-val
+    if (aVal === null) aVal = aCell.textContent.trim();
+    if (bVal === null) bVal = bCell.textContent.trim();
+
+    var cmp = 0;
+    if (sortType === 'num') {
+      var an = parseNum(aVal), bn = parseNum(bVal);
+      if (isNaN(an) && isNaN(bn)) cmp = 0;
+      else if (isNaN(an)) cmp = 1;
+      else if (isNaN(bn)) cmp = -1;
+      else cmp = an - bn;
+    } else if (sortType === 'date') {
+      cmp = (aVal || '').localeCompare(bVal || '');
+    } else {
+      cmp = (aVal || '').localeCompare(bVal || '', undefined, {sensitivity: 'base'});
+    }
+    return _sortDir === 'asc' ? cmp : -cmp;
+  });
+
+  rows.forEach(function(r) { tbody.appendChild(r); });
+}
+
+function onSortClick(e) {
+  // Don't sort if clicking the resize handle
+  if (e.target.classList.contains('resize-handle')) return;
+  var th = e.currentTarget;
+  var col = th.getAttribute('data-col');
+  var sortType = th.getAttribute('data-sort');
+  if (!sortType) return;
+
+  // Determine column index (in the header row, not filter row)
+  var headerRow = th.parentElement;
+  var colIdx = Array.from(headerRow.children).indexOf(th);
+
+  // Cycle: asc -> desc -> clear
+  if (_sortCol === col && _sortDir === 'asc') {
+    _sortDir = 'desc';
+  } else if (_sortCol === col && _sortDir === 'desc') {
+    _sortCol = null; _sortDir = null;
+  } else {
+    _sortCol = col; _sortDir = 'asc';
+  }
+
+  // Update arrows
+  headerRow.querySelectorAll('.sort-arrow').forEach(function(s) { s.textContent = ''; });
+  if (_sortCol) {
+    th.querySelector('.sort-arrow').textContent = _sortDir === 'asc' ? ' \u25B2' : ' \u25BC';
+    sortTable(colIdx, sortType);
+  }
+
+  localStorage.setItem(_SORT_KEY, JSON.stringify({col: _sortCol, dir: _sortDir}));
+}
+
+function restoreSort() {
+  var saved = localStorage.getItem(_SORT_KEY);
+  if (!saved) return;
+  try {
+    var s = JSON.parse(saved);
+    if (!s.col || !s.dir) return;
+    _sortCol = s.col; _sortDir = s.dir;
+    var th = document.querySelector('.sortable-th[data-col="' + s.col + '"]');
+    if (th) {
+      var headerRow = th.parentElement;
+      var colIdx = Array.from(headerRow.children).indexOf(th);
+      th.querySelector('.sort-arrow').textContent = s.dir === 'asc' ? ' \u25B2' : ' \u25BC';
+      sortTable(colIdx, th.getAttribute('data-sort'));
+    }
+  } catch(e) {}
+}
+
+function initSortHandlers() {
+  document.querySelectorAll('.sortable-th').forEach(function(th) {
+    th.addEventListener('click', onSortClick);
+  });
+}
+
+// =====================================================================
+// Client-side filtering (show/hide rows)
+// =====================================================================
+function applyClientFilters() {
+  var tbl = document.getElementById('snapshots-tbl');
+  if (!tbl) return;
+  var tbody = tbl.querySelector('tbody');
+  if (!tbody) return;
+
+  // Collect active client filters
+  var filters = [];
+  document.querySelectorAll('.cli-filter').forEach(function(el) {
+    var v = el.value.trim();
+    if (!v) return;
+    var col = el.getAttribute('data-col');
+    var bound = el.getAttribute('data-bound');
+    filters.push({col: col, bound: bound, val: v});
+  });
+
+  // Find column indices by data-col in the header row (2nd tr in thead)
+  var headerRow = tbl.querySelector('thead tr:nth-child(2)');
+  var colMap = {};
+  Array.from(headerRow.children).forEach(function(th, i) {
+    var c = th.getAttribute('data-col');
+    if (c) colMap[c] = i;
+  });
+
+  tbody.querySelectorAll('tr').forEach(function(row) {
+    var show = true;
+    for (var i = 0; i < filters.length; i++) {
+      var f = filters[i];
+      var idx = colMap[f.col];
+      if (idx === undefined) continue;
+      var cell = row.cells[idx];
+      if (!cell) continue;
+      var cellVal = cell.getAttribute('data-sort-val');
+      if (cellVal === null) cellVal = cell.textContent.trim();
+
+      if (f.col === 'signal') {
+        // Dropdown filter — match text content
+        var txt = cell.textContent.toLowerCase();
+        if (txt.indexOf(f.val) < 0) { show = false; break; }
+      } else {
+        // Numeric min/max
+        var n = parseNum(cellVal);
+        var fv = parseFloat(f.val);
+        if (isNaN(n)) { show = false; break; }
+        if (f.bound === 'min' && n < fv) { show = false; break; }
+        if (f.bound === 'max' && n > fv) { show = false; break; }
+      }
+    }
+    row.style.display = show ? '' : 'none';
+  });
+}
+
+function initClientFilters() {
+  document.querySelectorAll('.cli-filter').forEach(function(el) {
+    el.addEventListener('input', function() {
+      saveFilterState();
+      applyClientFilters();
+      updateClearAllBtn();
+    });
+  });
+}
+
+// =====================================================================
+// Server-side filter inputs (in filter row)
+// =====================================================================
+var _srvDebounce = null;
+
+function initServerFilters() {
+  document.querySelectorAll('.srv-filter').forEach(function(el) {
+    var evtName = el.type === 'date' ? 'change' : 'input';
+    el.addEventListener(evtName, function() {
+      clearTimeout(_srvDebounce);
+      _srvDebounce = setTimeout(function() { reloadTable(); }, el.type === 'date' ? 0 : 400);
+    });
+  });
+}
+
+// =====================================================================
+// Clear All Filters button
+// =====================================================================
+function hasAnyFilter() {
+  var has = false;
+  document.querySelectorAll('.srv-filter').forEach(function(el) { if (el.value.trim()) has = true; });
+  document.querySelectorAll('.cli-filter').forEach(function(el) { if (el.value.trim()) has = true; });
+  return has;
+}
+
+function updateClearAllBtn() {
+  var btn = document.getElementById('clear-all-btn');
+  if (btn) btn.classList.toggle('d-none', !hasAnyFilter());
+}
+
+function clearAllFilters() {
+  document.querySelectorAll('.srv-filter').forEach(function(el) { el.value = ''; });
+  document.querySelectorAll('.cli-filter').forEach(function(el) { el.value = ''; });
+  _SRV_KEYS.forEach(function(k) { localStorage.removeItem('snap_f_' + k); });
+  localStorage.removeItem('snap_cli_filters');
+  updateClearAllBtn();
+  reloadTable();
 }
 
 // =====================================================================
@@ -237,7 +472,9 @@ function fetchPrices() {
       document.querySelectorAll('.live-price').forEach(function(td) {
         var sym = td.getAttribute('data-symbol');
         if (sym && data[sym] && data[sym].last_price != null) {
-          td.textContent = fmtPrice(data[sym].last_price);
+          var p = data[sym].last_price;
+          td.textContent = fmtPrice(p);
+          td.setAttribute('data-sort-val', String(p));
         }
       });
     })
@@ -259,7 +496,7 @@ var _lastFundSyms = '';
 function fetchFundamentals() {
   var syms = getVisibleSymbols();
   var key = syms.sort().join(',');
-  if (key === _lastFundSyms) return;  // already fetched for these symbols
+  if (key === _lastFundSyms) return;
   _lastFundSyms = key;
   if (!syms.length) return;
   fetch('/api/market/fundamentals?symbols=' + encodeURIComponent(syms.join(',')))
@@ -270,38 +507,43 @@ function fetchFundamentals() {
         var col = td.getAttribute('data-col');
         if (!sym || !data[sym]) return;
         var d = data[sym];
-        if (col === 'avg_vol') td.textContent = fmtVolume(d.avg_volume);
-        else if (col === 'mkt_cap') td.textContent = fmtMktCap(d.market_cap);
-        else if (col === 'pe') td.textContent = fmtPE(d.pe_ratio);
+        if (col === 'avg_vol' && d.avg_volume != null) {
+          td.textContent = fmtVolume(d.avg_volume);
+          td.setAttribute('data-sort-val', String(d.avg_volume));
+        } else if (col === 'mkt_cap' && d.market_cap != null) {
+          td.textContent = fmtMktCap(d.market_cap);
+          td.setAttribute('data-sort-val', String(d.market_cap));
+        } else if (col === 'pe' && d.pe_ratio != null) {
+          td.textContent = fmtPE(d.pe_ratio);
+          td.setAttribute('data-sort-val', String(d.pe_ratio));
+        }
       });
     })
     .catch(function() {});
 }
 
 // =====================================================================
-// Post-swap hook: reapply widths, re-init resize, refresh data
+// Post-swap hook
 // =====================================================================
 document.addEventListener('htmx:afterSwap', function(e) {
   if (e.detail.target.id === 'snapshots-table') {
     updateDeleteBtn();
     applyColumnWidths();
     initResizeHandles();
+    initSortHandlers();
+    initServerFilters();
+    initClientFilters();
+    loadFilterState();
+    restoreSort();
     startPricePolling();
     fetchFundamentals();
+    applyClientFilters();
+    updateClearAllBtn();
   }
 });
 
-document.getElementById('snap-filter-form').addEventListener('submit', function() {
-  saveFilterState();
-});
-
-document.querySelector('[name=symbol]').addEventListener('change', saveFilterState);
-document.querySelector('[name=created_after]').addEventListener('change', saveFilterState);
-document.querySelector('[name=created_before]').addEventListener('change', saveFilterState);
-
-// Restore toggle from localStorage, then do the initial load (htmx is available here)
+// Initial load
 (function() {
-  loadFilterState();
   var explored = localStorage.getItem('snapshots_explored_only') === '1';
   var toggle = document.getElementById('explored-toggle');
   var input = document.getElementById('explored-input');
@@ -309,7 +551,13 @@ document.querySelector('[name=created_before]').addEventListener('change', saveF
     toggle.checked = true;
     input.value = '1';
   }
-  htmx.ajax('GET', _snapshotsUrl(explored), {target: '#snapshots-table', swap: 'innerHTML'});
+  // Build URL with saved server-side filters
+  var params = 'explored=' + (explored ? '1' : '');
+  _SRV_KEYS.forEach(function(key) {
+    var v = localStorage.getItem('snap_f_' + key);
+    if (v) params += '&' + key + '=' + encodeURIComponent(v);
+  });
+  htmx.ajax('GET', '/api/snapshots?' + params, {target: '#snapshots-table', swap: 'innerHTML'});
 })();
 </script>
 {% endblock %}

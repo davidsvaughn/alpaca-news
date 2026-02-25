@@ -166,6 +166,7 @@ def create_app(
         explored: str | None = None,
         created_after: str | None = None,
         created_before: str | None = None,
+        headline: str | None = None,
     ):
         explored_only = explored == "1"
         total = count_snapshots(
@@ -174,11 +175,13 @@ def create_app(
             explored_only=explored_only,
             created_after=created_after,
             created_before=created_before,
+            headline=headline,
         )
         return templates.TemplateResponse(
             request=request,
             name="snapshots.html",
             context={"active_page": "snapshots", "symbol_filter": symbol,
+                     "headline_filter": headline,
                      "explored_only": explored_only, "total": total,
                      "created_after": created_after or "", "created_before": created_before or ""},
         )
@@ -335,6 +338,7 @@ def create_app(
         explored: str | None = None,
         created_after: str | None = None,
         created_before: str | None = None,
+        headline: str | None = None,
         page: int = 1,
         per_page: int = 50,
     ):
@@ -346,6 +350,7 @@ def create_app(
             explored_only=explored_only,
             created_after=created_after,
             created_before=created_before,
+            headline=headline,
         )
         snaps = get_all_snapshots(
             db,
@@ -353,6 +358,7 @@ def create_app(
             explored_only=explored_only,
             created_after=created_after,
             created_before=created_before,
+            headline=headline,
             limit=per_page,
             offset=offset,
         )
@@ -367,6 +373,7 @@ def create_app(
                 "total": total,
                 "total_pages": total_pages,
                 "symbol_filter": symbol or "",
+                "headline_filter": headline or "",
                 "explored_only": explored_only,
                 "created_after": created_after or "",
                 "created_before": created_before or "",
@@ -401,7 +408,7 @@ def create_app(
         if not symbol_list:
             return {}
         market: MarketDataService = app.state.market
-        quotes = market.get_quotes(symbol_list[:20])
+        quotes = market.get_quotes(symbol_list[:50])
         result: dict[str, Any] = {}
         for sym, q in quotes.items():
             result[sym] = {
@@ -428,7 +435,7 @@ def create_app(
         # Check cache; collect uncached symbols
         result: dict[str, Any] = {}
         uncached: list[str] = []
-        for sym in symbol_list[:20]:
+        for sym in symbol_list[:50]:
             cached = _fundamentals_cache.get(sym)
             if cached and (now - cached[0]) < 86400:  # 24 hours
                 result[sym] = cached[1]

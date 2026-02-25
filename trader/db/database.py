@@ -658,6 +658,7 @@ def count_all_watches(db: Database, *, status: str | None = None) -> int:
 def get_all_snapshots(
     db: Database, *, symbol: str | None = None, explored_only: bool = False,
     created_after: str | None = None, created_before: str | None = None,
+    headline: str | None = None,
     limit: int = 50, offset: int = 0,
 ) -> list[dict[str, Any]]:
     """Fetch snapshots ordered by created_at DESC, with optional filters."""
@@ -674,6 +675,9 @@ def get_all_snapshots(
     if created_before:
         clauses.append("date(created_at) <= date(:created_before)")
         params["created_before"] = created_before
+    if headline:
+        clauses.append("json_extract(snapshot_json, '$.trigger.headline') LIKE :headline")
+        params["headline"] = f"%{headline}%"
     where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
     sql = f"SELECT snapshot_json FROM snapshots{where} ORDER BY created_at DESC LIMIT :lim OFFSET :off"
     with db.engine.connect() as conn:
@@ -688,6 +692,7 @@ def count_snapshots(
     explored_only: bool = False,
     created_after: str | None = None,
     created_before: str | None = None,
+    headline: str | None = None,
 ) -> int:
     """Count snapshots, optionally filtered by symbol and/or explored-only."""
     clauses: list[str] = []
@@ -703,6 +708,9 @@ def count_snapshots(
     if created_before:
         clauses.append("date(created_at) <= date(:created_before)")
         params["created_before"] = created_before
+    if headline:
+        clauses.append("json_extract(snapshot_json, '$.trigger.headline') LIKE :headline")
+        params["headline"] = f"%{headline}%"
     where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
     sql = f"SELECT COUNT(*) FROM snapshots{where}"
     with db.engine.connect() as conn:

@@ -2,78 +2,97 @@
 <div class="table-responsive">
   <table id="snapshots-tbl" class="table table-sm table-hover align-middle" style="table-layout: fixed;">
     <thead class="table-light">
+      <!-- Filter row -->
+      <tr class="filter-row">
+        <th></th>
+        <th>
+          <input type="date" class="form-control form-control-sm srv-filter" data-key="created_after" placeholder="From" value="{{ created_after }}" style="font-size:.7rem;margin-bottom:2px;">
+          <input type="date" class="form-control form-control-sm srv-filter" data-key="created_before" placeholder="To" value="{{ created_before }}" style="font-size:.7rem;">
+        </th>
+        <th><input type="text" class="form-control form-control-sm srv-filter" data-key="headline" placeholder="Search..." value="{{ headline_filter }}" style="font-size:.7rem;"></th>
+        <th><input type="text" class="form-control form-control-sm srv-filter" data-key="symbol" placeholder="Symbol" value="{{ symbol_filter }}" maxlength="12" style="font-size:.7rem;"></th>
+        <th>
+          <select class="form-select form-select-sm cli-filter" data-col="signal" style="font-size:.7rem;">
+            <option value="">All</option>
+            <option value="bull">bull</option>
+            <option value="bear">bear</option>
+            <option value="neutral">neutral</option>
+          </select>
+        </th>
+        <th><input type="number" class="form-control form-control-sm cli-filter" data-col="price_10" data-bound="min" placeholder="Min" step="any" style="font-size:.7rem;margin-bottom:2px;"><input type="number" class="form-control form-control-sm cli-filter" data-col="price_10" data-bound="max" placeholder="Max" step="any" style="font-size:.7rem;"></th>
+        <th><input type="number" class="form-control form-control-sm cli-filter" data-col="price" data-bound="min" placeholder="Min" step="any" style="font-size:.7rem;margin-bottom:2px;"><input type="number" class="form-control form-control-sm cli-filter" data-col="price" data-bound="max" placeholder="Max" step="any" style="font-size:.7rem;"></th>
+        <th><input type="number" class="form-control form-control-sm cli-filter" data-col="avg_vol" data-bound="min" placeholder="Min" step="any" style="font-size:.7rem;margin-bottom:2px;"><input type="number" class="form-control form-control-sm cli-filter" data-col="avg_vol" data-bound="max" placeholder="Max" step="any" style="font-size:.7rem;"></th>
+        <th><input type="number" class="form-control form-control-sm cli-filter" data-col="mkt_cap" data-bound="min" placeholder="Min" step="any" style="font-size:.7rem;margin-bottom:2px;"><input type="number" class="form-control form-control-sm cli-filter" data-col="mkt_cap" data-bound="max" placeholder="Max" step="any" style="font-size:.7rem;"></th>
+        <th><input type="number" class="form-control form-control-sm cli-filter" data-col="pe" data-bound="min" placeholder="Min" step="any" style="font-size:.7rem;margin-bottom:2px;"><input type="number" class="form-control form-control-sm cli-filter" data-col="pe" data-bound="max" placeholder="Max" step="any" style="font-size:.7rem;"></th>
+        <th></th>
+        <th></th>
+        <th></th>
+      </tr>
+      <!-- Column headers -->
       <tr>
         <th data-col="check" style="width:30px;"><input type="checkbox" onchange="toggleAllSnaps(this)"></th>
-        <th data-col="created" class="resizable-th" style="width:120px;">Created<div class="resize-handle"></div></th>
-        <th data-col="headline" class="resizable-th" style="width:200px;">Headline<div class="resize-handle"></div></th>
-        <th data-col="symbols" class="resizable-th" style="width:80px;">Symbols<div class="resize-handle"></div></th>
-        <th data-col="signal" class="resizable-th" style="width:80px;">Signal<div class="resize-handle"></div></th>
-        <th data-col="conf" class="resizable-th" style="width:50px;">Conf<div class="resize-handle"></div></th>
-        <th data-col="tools" class="resizable-th" style="width:50px;">Tools<div class="resize-handle"></div></th>
-        <th data-col="price_10" class="resizable-th" style="width:80px;">Price@10<div class="resize-handle"></div></th>
-        <th data-col="price" class="resizable-th" style="width:75px;">Price<div class="resize-handle"></div></th>
-        <th data-col="avg_vol" class="resizable-th" style="width:75px;">AvgVol<div class="resize-handle"></div></th>
-        <th data-col="mkt_cap" class="resizable-th" style="width:80px;">MktCap<div class="resize-handle"></div></th>
-        <th data-col="pe" class="resizable-th" style="width:55px;">P/E<div class="resize-handle"></div></th>
-        <th data-col="cost" class="resizable-th" style="width:60px;">Cost<div class="resize-handle"></div></th>
+        <th data-col="created" data-sort="date" class="resizable-th sortable-th" style="width:120px;"><span class="col-label">Created</span><span class="sort-arrow"></span><div class="resize-handle"></div></th>
+        <th data-col="headline" data-sort="text" class="resizable-th sortable-th" style="width:200px;"><span class="col-label">Headline</span><span class="sort-arrow"></span><div class="resize-handle"></div></th>
+        <th data-col="symbols" data-sort="text" class="resizable-th sortable-th" style="width:80px;"><span class="col-label">Symbols</span><span class="sort-arrow"></span><div class="resize-handle"></div></th>
+        <th data-col="signal" data-sort="text" class="resizable-th sortable-th" style="width:100px;"><span class="col-label">Signal</span><span class="sort-arrow"></span><div class="resize-handle"></div></th>
+        <th data-col="price_10" data-sort="num" class="resizable-th sortable-th" style="width:80px;"><span class="col-label">Price@10</span><span class="sort-arrow"></span><div class="resize-handle"></div></th>
+        <th data-col="price" data-sort="num" class="resizable-th sortable-th" style="width:75px;"><span class="col-label">Price</span><span class="sort-arrow"></span><div class="resize-handle"></div></th>
+        <th data-col="avg_vol" data-sort="num" class="resizable-th sortable-th" style="width:75px;"><span class="col-label">AvgVol</span><span class="sort-arrow"></span><div class="resize-handle"></div></th>
+        <th data-col="mkt_cap" data-sort="num" class="resizable-th sortable-th" style="width:80px;"><span class="col-label">MktCap</span><span class="sort-arrow"></span><div class="resize-handle"></div></th>
+        <th data-col="pe" data-sort="num" class="resizable-th sortable-th" style="width:55px;"><span class="col-label">P/E</span><span class="sort-arrow"></span><div class="resize-handle"></div></th>
+        <th data-col="tools" data-sort="num" class="resizable-th sortable-th" style="width:50px;"><span class="col-label">Tools</span><span class="sort-arrow"></span><div class="resize-handle"></div></th>
+        <th data-col="cost" data-sort="num" class="resizable-th sortable-th" style="width:60px;"><span class="col-label">Cost</span><span class="sort-arrow"></span><div class="resize-handle"></div></th>
         <th data-col="action" style="width:60px;"></th>
       </tr>
     </thead>
     <tbody>
       {% for s in snapshots %}
       {% set primary_sym = s.trigger.symbols[0] if s.trigger.symbols else '' %}
+      {% set dir = s.prediction.direction if s.prediction and s.prediction.direction else '' %}
+      {% set conf = s.prediction.confidence if s.prediction and s.prediction.confidence is defined else None %}
       <tr>
         <td><input type="checkbox" class="snap-check" value="{{ s.snapshot_id }}" onchange="updateDeleteBtn()"></td>
-        <td class="small text-muted text-nowrap">{{ s.created_at | fmt_dt("short") }}</td>
+        <td class="small text-muted text-nowrap" data-sort-val="{{ s.created_at }}">{{ s.created_at | fmt_dt("short") }}</td>
         <td class="text-truncate">{{ s.trigger.headline }}</td>
         <td>
           {% for sym in s.trigger.symbols %}
           <span class="badge bg-light text-dark border">{{ sym }}</span>
           {% endfor %}
         </td>
-        <td>
-          {% if s.prediction and s.prediction.direction %}
-            {% if s.prediction.direction == 'bullish' %}
-              <span class="text-success">&#9650; bullish</span>
-            {% elif s.prediction.direction == 'bearish' %}
-              <span class="text-danger">&#9660; bearish</span>
-            {% else %}
-              <span class="text-muted">&#8212; neutral</span>
-            {% endif %}
+        <td data-sort-val="{{ dir }}">
+          {% if dir == 'bullish' %}
+            <span class="text-success">&#9650; bull{% if conf is not none %} ({{ "%.0f"|format(conf * 100) }}%){% endif %}</span>
+          {% elif dir == 'bearish' %}
+            <span class="text-danger">&#9660; bear{% if conf is not none %} ({{ "%.0f"|format(conf * 100) }}%){% endif %}</span>
+          {% elif dir == 'neutral' %}
+            <span class="text-muted">&#8212; neutral{% if conf is not none %} ({{ "%.0f"|format(conf * 100) }}%){% endif %}</span>
           {% else %}
             <span class="text-muted">&mdash;</span>
           {% endif %}
         </td>
-        <td>
-          {% if s.prediction and s.prediction.confidence is defined %}
-            {{ "%.0f"|format(s.prediction.confidence * 100) }}%
-          {% else %}
-            <span class="text-muted">&mdash;</span>
-          {% endif %}
-        </td>
-        <td class="small">
-          {% if s.tool_traces %}{{ s.tool_traces|length }}{% else %}<span class="text-muted">&mdash;</span>{% endif %}
-        </td>
-        <td class="small" data-col="price_10">
+        <td class="small" data-col="price_10" data-sort-val="{{ s.price_10min if s.price_10min is defined and s.price_10min else '' }}">
           {% if s.price_10min is defined and s.price_10min %}
             ${{ "%.2f"|format(s.price_10min) }}
           {% else %}
             <span class="text-muted">&mdash;</span>
           {% endif %}
         </td>
-        <td class="small live-price" data-symbol="{{ primary_sym }}">
+        <td class="small live-price" data-symbol="{{ primary_sym }}" data-sort-val="">
           <span class="text-muted">&mdash;</span>
         </td>
-        <td class="small market-data" data-col="avg_vol" data-symbol="{{ primary_sym }}">
+        <td class="small market-data" data-col="avg_vol" data-symbol="{{ primary_sym }}" data-sort-val="">
           <span class="text-muted">&mdash;</span>
         </td>
-        <td class="small market-data" data-col="mkt_cap" data-symbol="{{ primary_sym }}">
+        <td class="small market-data" data-col="mkt_cap" data-symbol="{{ primary_sym }}" data-sort-val="">
           <span class="text-muted">&mdash;</span>
         </td>
-        <td class="small market-data" data-col="pe" data-symbol="{{ primary_sym }}">
+        <td class="small market-data" data-col="pe" data-symbol="{{ primary_sym }}" data-sort-val="">
           <span class="text-muted">&mdash;</span>
         </td>
-        <td class="small">
+        <td class="small" data-sort-val="{{ s.tool_traces|length if s.tool_traces else 0 }}">
+          {% if s.tool_traces %}{{ s.tool_traces|length }}{% else %}<span class="text-muted">&mdash;</span>{% endif %}
+        </td>
+        <td class="small" data-sort-val="{{ s.cost_summary.total_usd if s.cost_summary and s.cost_summary.total_usd is defined else 0 }}">
           {% if s.cost_summary and s.cost_summary.total_usd is defined %}
             ${{ "%.2f"|format(s.cost_summary.total_usd) }}
           {% else %}
@@ -93,7 +112,7 @@
   <ul class="pagination pagination-sm justify-content-center">
     <li class="page-item {% if page <= 1 %}disabled{% endif %}">
       <a class="page-link" href="#"
-         hx-get="/api/snapshots?page={{ page - 1 }}&per_page={{ per_page }}&symbol={{ symbol_filter }}&created_after={{ created_after }}&created_before={{ created_before }}&explored={{ '1' if explored_only else '' }}"
+         hx-get="/api/snapshots?page={{ page - 1 }}&per_page={{ per_page }}&symbol={{ symbol_filter }}&headline={{ headline_filter }}&created_after={{ created_after }}&created_before={{ created_before }}&explored={{ '1' if explored_only else '' }}"
          hx-target="#snapshots-table" hx-swap="innerHTML">Prev</a>
     </li>
     {% set start_page = [1, page - 3] | max %}
@@ -101,7 +120,7 @@
     {% if start_page > 1 %}
     <li class="page-item">
       <a class="page-link" href="#"
-         hx-get="/api/snapshots?page=1&per_page={{ per_page }}&symbol={{ symbol_filter }}&created_after={{ created_after }}&created_before={{ created_before }}&explored={{ '1' if explored_only else '' }}"
+         hx-get="/api/snapshots?page=1&per_page={{ per_page }}&symbol={{ symbol_filter }}&headline={{ headline_filter }}&created_after={{ created_after }}&created_before={{ created_before }}&explored={{ '1' if explored_only else '' }}"
          hx-target="#snapshots-table" hx-swap="innerHTML">1</a>
     </li>
     {% if start_page > 2 %}<li class="page-item disabled"><span class="page-link">...</span></li>{% endif %}
@@ -109,7 +128,7 @@
     {% for p in range(start_page, end_page + 1) %}
     <li class="page-item {% if p == page %}active{% endif %}">
       <a class="page-link" href="#"
-         hx-get="/api/snapshots?page={{ p }}&per_page={{ per_page }}&symbol={{ symbol_filter }}&created_after={{ created_after }}&created_before={{ created_before }}&explored={{ '1' if explored_only else '' }}"
+         hx-get="/api/snapshots?page={{ p }}&per_page={{ per_page }}&symbol={{ symbol_filter }}&headline={{ headline_filter }}&created_after={{ created_after }}&created_before={{ created_before }}&explored={{ '1' if explored_only else '' }}"
          hx-target="#snapshots-table" hx-swap="innerHTML">{{ p }}</a>
     </li>
     {% endfor %}
@@ -117,13 +136,13 @@
     {% if end_page < total_pages - 1 %}<li class="page-item disabled"><span class="page-link">...</span></li>{% endif %}
     <li class="page-item">
       <a class="page-link" href="#"
-         hx-get="/api/snapshots?page={{ total_pages }}&per_page={{ per_page }}&symbol={{ symbol_filter }}&created_after={{ created_after }}&created_before={{ created_before }}&explored={{ '1' if explored_only else '' }}"
+         hx-get="/api/snapshots?page={{ total_pages }}&per_page={{ per_page }}&symbol={{ symbol_filter }}&headline={{ headline_filter }}&created_after={{ created_after }}&created_before={{ created_before }}&explored={{ '1' if explored_only else '' }}"
          hx-target="#snapshots-table" hx-swap="innerHTML">{{ total_pages }}</a>
     </li>
     {% endif %}
     <li class="page-item {% if page >= total_pages %}disabled{% endif %}">
       <a class="page-link" href="#"
-         hx-get="/api/snapshots?page={{ page + 1 }}&per_page={{ per_page }}&symbol={{ symbol_filter }}&created_after={{ created_after }}&created_before={{ created_before }}&explored={{ '1' if explored_only else '' }}"
+         hx-get="/api/snapshots?page={{ page + 1 }}&per_page={{ per_page }}&symbol={{ symbol_filter }}&headline={{ headline_filter }}&created_after={{ created_after }}&created_before={{ created_before }}&explored={{ '1' if explored_only else '' }}"
          hx-target="#snapshots-table" hx-swap="innerHTML">Next</a>
     </li>
   </ul>
