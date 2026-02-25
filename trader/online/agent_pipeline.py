@@ -29,7 +29,6 @@ from typing import Any, Callable
 from trader.market.data_service import MarketDataService
 from trader.online.activity_tracker import JobAborted
 from trader.online.agent_common import AgentRunResult, TradingSignal
-from trader.online.explorer_agent import ExploreResult
 from trader.online.prompt_builder import build_user_message as _build_user_message
 
 DEBUG = os.getenv("DEBUG", "false").lower() in ("true", "1")
@@ -418,12 +417,15 @@ def _build_pipeline_user_message(
     prior_rounds: list[dict[str, Any]],
     market: "MarketDataService | None" = None,
     prefetched_market_data: str = "",
+    base_message: str | None = None,
 ) -> str:
     """Build the user message with news + accumulated findings + tool ledger."""
-    parts = [_build_user_message(news, symbols, market=market)]
-
-    if prefetched_market_data:
-        parts.append(prefetched_market_data)
+    if base_message is not None:
+        parts = [base_message]
+    else:
+        parts = [_build_user_message(news, symbols, market=market)]
+        if prefetched_market_data:
+            parts.append(prefetched_market_data)
 
     if prior_rounds:
         parts.append("\n\n---\n\n## Prior agent findings\n")
@@ -679,6 +681,14 @@ async def run_pipeline(
     # get the same primary-symbol context as the first agent.
     from trader.online.prompt_builder import prefetch_market_data
     prefetch_text = prefetch_market_data(symbols, market) if market else ""
+    # Build shared base input once so all agents receive identical base context.
+    base_user_message = _build_pipeline_user_message(
+        news,
+        symbols,
+        [],
+        market=None,
+        prefetched_market_data=prefetch_text,
+    )
 
     for round_num in range(config.max_rounds):
         for i, spec in enumerate(config.agents):
@@ -699,8 +709,7 @@ async def run_pipeline(
                 news,
                 symbols,
                 all_rounds,
-                market=None,
-                prefetched_market_data=prefetch_text,
+                base_message=base_user_message,
             )
 
             # Determine model name for logging
@@ -872,6 +881,8 @@ async def explore(
     This is a drop-in replacement for the single-agent explore() in
     explorer_agent.py.
     """
+    from trader.online.explorer_agent import ExploreResult
+
     result = await run_pipeline(
         news=news,
         symbols=symbols,

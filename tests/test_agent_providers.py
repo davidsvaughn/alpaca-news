@@ -18,15 +18,14 @@ from __future__ import annotations
 import json
 import os
 import pytest
-import asyncio
+import time
 from unittest.mock import MagicMock
 
 from dotenv import load_dotenv
 
 load_dotenv()
 
-from trader.online.agent_common import AgentRunResult, TradingSignal
-from trader.online.explorer_agent import ExplorerDeps, TracingToolset, market_toolset
+from trader.online.agent_common import AgentRunResult, TradingSignal, build_trace_dict
 
 
 # ---------------------------------------------------------------------------
@@ -53,16 +52,6 @@ def mock_market():
     market.get_finnhub_news.return_value = {"symbol": "NVDA", "count": 0, "articles": [], "source": "finnhub"}
     market.get_analyst_ratings.return_value = {"ratings": []}
     return market
-
-
-@pytest.fixture
-def deps(mock_market):
-    return ExplorerDeps(
-        market=mock_market,
-        news={"headline": "NVDA reports record earnings", "summary": "Revenue up 200%"},
-        symbols=["NVDA"],
-        xai_api_key=os.getenv("XAI_API_KEY"),
-    )
 
 
 SYSTEM_PROMPT = (
@@ -216,9 +205,8 @@ async def test_gemini_with_function_tools(mock_market):
 
 
 @pytest.mark.asyncio
-async def test_full_pipeline_with_test_model(mock_market):
-    """Full 3-agent pipeline using TestModel (no real API calls)."""
-    from pydantic_ai.models.test import TestModel
+async def test_full_pipeline_with_mocked_dispatch(mock_market, monkeypatch):
+    """Full pipeline using mocked native runner dispatch (no API calls)."""
     from trader.online.agent_pipeline import (
         AgentSpec,
         PipelineConfig,
@@ -226,14 +214,45 @@ async def test_full_pipeline_with_test_model(mock_market):
         run_pipeline,
     )
 
+    async def _fake_dispatch_runner(*, spec, system_prompt, user_message, market, x_stream_service, config):
+        del system_prompt, user_message, market, x_stream_service, config
+        now = time.time()
+        trace = build_trace_dict(
+            tool_name="web_search",
+            args={"query": f"{spec.name} synthetic query"},
+            result={"ok": True},
+            error=None,
+            start=now,
+            end=now,
+            hop_index=0,
+            builtin=True,
+        )
+        if spec.is_final:
+            output = TradingSignal(
+                direction="bullish",
+                confidence=0.8,
+                horizon="1d",
+                magnitude_estimate="1-2%",
+                key_catalyst="Synthetic catalyst",
+                bull_case="Synthetic bull case",
+                bear_case="Synthetic bear case",
+                risk_factors=["Synthetic risk"],
+            )
+        else:
+            output = f"{spec.name} findings"
+        return AgentRunResult(
+            output=output,
+            tool_traces=[trace],
+            usage={"input_tokens": 10, "output_tokens": 5, "total_tokens": 15, "requests": 1, "tool_calls": 1, "reasoning_tokens": 0},
+        )
+
+    monkeypatch.setattr("trader.online.agent_pipeline._dispatch_runner", _fake_dispatch_runner)
+
     config = PipelineConfig(
         agents=[
-            AgentSpec(name="agent1", model=TestModel(), builtin_tools=[],
-                      role_description="First investigator."),
-            AgentSpec(name="agent2", model=TestModel(), builtin_tools=[],
-                      role_description="Second investigator."),
-            AgentSpec(name="agent3", model=TestModel(), builtin_tools=[],
-                      role_description="Final analyst.", is_final=True),
+            AgentSpec(name="agent1", model="mock-1", runner="grok", role_description="First investigator."),
+            AgentSpec(name="agent2", model="mock-2", runner="openai", role_description="Second investigator."),
+            AgentSpec(name="agent3", model="mock-3", runner="gemini", role_description="Final analyst.", is_final=True),
         ],
         max_rounds=1,
         request_limit=10,
@@ -251,6 +270,15 @@ async def test_full_pipeline_with_test_model(mock_market):
     assert isinstance(result.signal, TradingSignal)
     assert len(result.rounds) == 3
     assert result.rounds_completed == 1
+
+    # Shared base input should be identical across all agent user messages.
+    base_inputs = [
+        (r.get("user_message") or "").split("\n---", 1)[0].rstrip()
+        for r in result.rounds
+    ]
+    assert base_inputs
+    assert all(base == base_inputs[0] for base in base_inputs), \
+        "Base prompt diverged across agents"
 
     # Traces should be sequentially numbered and have modality tags
     for i, trace in enumerate(result.all_tool_traces):
@@ -270,9 +298,8 @@ async def test_full_pipeline_with_test_model(mock_market):
 
 
 @pytest.mark.asyncio
-async def test_snapshot_captures_rounds_and_modalities(mock_market):
+async def test_snapshot_captures_rounds_and_modalities(mock_market, monkeypatch):
     """Verify that Snapshot stores rounds and builds data_modalities index."""
-    from pydantic_ai.models.test import TestModel
     from trader.online.agent_pipeline import (
         AgentSpec,
         PipelineConfig,
@@ -280,12 +307,45 @@ async def test_snapshot_captures_rounds_and_modalities(mock_market):
     )
     from trader.models.snapshot import SnapshotBuilder, Trigger
 
+    async def _fake_dispatch_runner(*, spec, system_prompt, user_message, market, x_stream_service, config):
+        del system_prompt, user_message, market, x_stream_service, config
+        now = time.time()
+        tool_name = "x_search" if not spec.is_final else "web_search"
+        trace = build_trace_dict(
+            tool_name=tool_name,
+            args={"query": f"{spec.name} synthetic query"},
+            result={"ok": True},
+            error=None,
+            start=now,
+            end=now,
+            hop_index=0,
+            builtin=True,
+        )
+        if spec.is_final:
+            output = TradingSignal(
+                direction="neutral",
+                confidence=0.5,
+                horizon="60m",
+                magnitude_estimate="0-0.5%",
+                key_catalyst="Synthetic catalyst",
+                bull_case="Synthetic bull case",
+                bear_case="Synthetic bear case",
+                risk_factors=["Synthetic risk"],
+            )
+        else:
+            output = f"{spec.name} findings"
+        return AgentRunResult(
+            output=output,
+            tool_traces=[trace],
+            usage={"input_tokens": 12, "output_tokens": 6, "total_tokens": 18, "requests": 1, "tool_calls": 1, "reasoning_tokens": 0},
+        )
+
+    monkeypatch.setattr("trader.online.agent_pipeline._dispatch_runner", _fake_dispatch_runner)
+
     config = PipelineConfig(
         agents=[
-            AgentSpec(name="agent1", model=TestModel(), builtin_tools=[],
-                      role_description="First investigator."),
-            AgentSpec(name="final", model=TestModel(), builtin_tools=[],
-                      role_description="Final analyst.", is_final=True),
+            AgentSpec(name="agent1", model="mock-1", runner="grok", role_description="First investigator."),
+            AgentSpec(name="final", model="mock-2", runner="gemini", role_description="Final analyst.", is_final=True),
         ],
         max_rounds=1,
         request_limit=10,

@@ -26,6 +26,7 @@ from pydantic_ai import Agent, FunctionToolset, RunContext, UsageLimits, Wrapper
 from pydantic_ai.toolsets import ToolsetTool
 
 from trader.market.data_service import MarketDataService
+from trader.online.agent_common import TradingSignal
 
 DEBUG = os.getenv("DEBUG", "false").lower() in ("true", "1")
 
@@ -33,18 +34,6 @@ DEBUG = os.getenv("DEBUG", "false").lower() in ("true", "1")
 # ---------------------------------------------------------------------------
 # Structured output — the agent must produce this when it decides to stop
 # ---------------------------------------------------------------------------
-
-
-class TradingSignal(BaseModel):
-    """Structured trading signal produced by the explorer agent."""
-    direction: Literal["bullish", "bearish", "neutral"]
-    confidence: float = Field(ge=0.0, le=1.0, description="0.0 = no confidence, 1.0 = certain")
-    horizon: Literal["15m", "60m", "1d"]
-    magnitude_estimate: str = Field(description="Expected price move, e.g. '0.5-1.5%'")
-    key_catalyst: str = Field(description="One-sentence summary of the main catalyst")
-    bull_case: str = Field(description="Brief bull case argument")
-    bear_case: str = Field(description="Brief bear case argument")
-    risk_factors: list[str] = Field(description="Key risk factors that could invalidate the thesis")
 
 
 class CheckinDecision(BaseModel):

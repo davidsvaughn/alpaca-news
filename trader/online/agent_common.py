@@ -9,10 +9,21 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any, Callable
+from typing import Any, Callable, Literal
 
-# Re-export TradingSignal so runners can import from one place
-from trader.online.explorer_agent import TradingSignal  # noqa: F401
+from pydantic import BaseModel, Field
+
+
+class TradingSignal(BaseModel):
+    """Structured trading signal produced by the exploration pipeline."""
+    direction: Literal["bullish", "bearish", "neutral"]
+    confidence: float = Field(ge=0.0, le=1.0, description="0.0 = no confidence, 1.0 = certain")
+    horizon: Literal["15m", "60m", "1d"]
+    magnitude_estimate: str = Field(description="Expected price move, e.g. '0.5-1.5%'")
+    key_catalyst: str = Field(description="One-sentence summary of the main catalyst")
+    bull_case: str = Field(description="Brief bull case argument")
+    bear_case: str = Field(description="Brief bear case argument")
+    risk_factors: list[str] = Field(description="Key risk factors that could invalidate the thesis")
 
 # Modality classification — maps tool names to data categories.
 # Kept here (single source of truth) so runners don't depend on explorer_agent.
