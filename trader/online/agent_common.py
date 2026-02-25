@@ -18,7 +18,7 @@ class TradingSignal(BaseModel):
     """Structured trading signal produced by the exploration pipeline."""
     direction: Literal["bullish", "bearish", "neutral"]
     confidence: float = Field(ge=0.0, le=1.0, description="0.0 = no confidence, 1.0 = certain")
-    horizon: Literal["15m", "60m", "1d"]
+    horizon: Literal["1d", "1w"]
     magnitude_estimate: str = Field(description="Expected price move, e.g. '0.5-1.5%'")
     key_catalyst: str = Field(description="One-sentence summary of the main catalyst")
     bull_case: str = Field(description="Brief bull case argument")

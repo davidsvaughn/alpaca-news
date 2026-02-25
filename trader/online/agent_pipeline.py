@@ -195,8 +195,8 @@ def build_default_pipeline() -> PipelineConfig:
                 "through the implications for short-term stock price movement. "
                 "The previous agent might have offered suggestions about what to focus on next — "
                 "these are merely suggestions; YOU decide what to prioritize."
-                "When your analysis is complete, **produce a clear, actionable trading signal**."
-                "If possible, provide BOTH a short term (1 day) and a slightly longer-term (1 week) signal, and be specific about the key catalyst driving the move. "
+                "When your analysis is complete, **produce a single clear, actionable trading signal** "
+                "with a horizon of either 1 day or 1 week, and be specific about the key catalyst driving the move. "
             ),
             is_final=True,
             excluded_tools=frozenset({"x_search", "x_stream_cache"}),
@@ -402,7 +402,7 @@ def _build_system_prompt(
                 "{",
                 '  "direction": "bullish" | "bearish" | "neutral",',
                 '  "confidence": 0.0 to 1.0,',
-                '  "horizon": "15m" | "60m" | "1d",',
+                '  "horizon": "1d" | "1w",',
                 '  "magnitude_estimate": "e.g. 0.5-1.5%",',
                 '  "key_catalyst": "one-sentence summary of the main catalyst",',
                 '  "bull_case": "brief bull case argument",',

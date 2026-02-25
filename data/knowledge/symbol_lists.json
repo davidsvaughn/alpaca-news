@@ -205,12 +205,20 @@
     "LCID",
     "FRMI",
     "TEM",
-    "ACHC"
+    "ACHC",
+    "IONS",
+    "BLMN",
+    "ORCL",
+    "PEN",
+    "ATRA",
+    "FERG",
+    "NVTS",
+    "RTX"
   ],
   "crypto": [],
   "rejected": [
     "BTCUSD",
     "VNP"
   ],
-  "last_updated": "2026-02-25T16:53:28.636013+00:00"
+  "last_updated": "2026-02-25T18:25:21.698823+00:00"
 }
