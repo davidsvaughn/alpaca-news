@@ -193,7 +193,7 @@ def build_default_pipeline() -> PipelineConfig:
                 "angles, patterns, or evidence that prior agents missed, "
                 "(2) deeply synthesize ALL accumulated evidence, and (3) think "
                 "through the implications for short-term stock price movement. "
-                "The previous agent might have offered suggestions about what to focus on next — ",
+                "The previous agent might have offered suggestions about what to focus on next — "
                 "these are merely suggestions; YOU decide what to prioritize."
                 "When your analysis is complete, **produce a clear, actionable trading signal**."
                 "If possible, provide BOTH a short term (1 day) and a slightly longer-term (1 week) signal, and be specific about the key catalyst driving the move. "
