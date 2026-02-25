@@ -356,6 +356,48 @@ class SchwabMarketClient:
             raise RuntimeError(f"get_quotes({symbols}) failed: {e}") from e
         return result
 
+    def get_quotes_with_fundamentals(
+        self, symbols: list[str],
+    ) -> dict[str, dict[str, Any]]:
+        """Fetch quotes + fundamental data in a single API call.
+
+        The Schwab quotes endpoint returns both quote and fundamental sections.
+        Returns a dict keyed by symbol with quote + fundamental fields merged.
+        """
+        result: dict[str, dict[str, Any]] = {}
+        if not symbols or not self.available:
+            return result
+        try:
+            resp = self._client.quotes(symbols)
+            data = resp.json()
+            for sym in symbols:
+                sym_data = data.get(sym, {})
+                q = sym_data.get("quote", {})
+                f = sym_data.get("fundamental", {})
+                ref = sym_data.get("reference", {})
+                if not q:
+                    continue
+                result[sym] = {
+                    # Quote fields
+                    "last_price": q.get("lastPrice"),
+                    "net_pct_change": q.get("netPercentChange"),
+                    "total_volume": q.get("totalVolume"),
+                    # Fundamental fields from same response
+                    "pe_ratio": f.get("peRatio"),
+                    "eps": f.get("eps"),
+                    "div_yield": f.get("divYield"),
+                    "avg_10d_volume": f.get("avg10DaysVolume"),
+                    "avg_1y_volume": f.get("avg1YearVolume"),
+                    "shares_outstanding": f.get("sharesOutstanding"),
+                    # Reference
+                    "description": ref.get("description"),
+                    "exchange": ref.get("exchangeName"),
+                }
+        except Exception as e:
+            if DEBUG:
+                raise
+        return result
+
     # ------------------------------------------------------------------
     # Real-time streaming
     # ------------------------------------------------------------------

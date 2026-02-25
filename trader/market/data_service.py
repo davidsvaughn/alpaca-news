@@ -289,6 +289,48 @@ class MarketDataService:
                 pass
         return result
 
+    def get_quotes_with_fundamentals(
+        self, symbols: list[str],
+    ) -> dict[str, dict[str, Any]]:
+        """Batch quotes + fundamentals in one call (Schwab), yfinance fallback."""
+        if not symbols:
+            return {}
+        if self._schwab.available:
+            try:
+                result = self._schwab.get_quotes_with_fundamentals(symbols)
+                if result:
+                    # Compute market_cap from shares_outstanding * last_price
+                    for sym, d in result.items():
+                        shares = d.get("shares_outstanding")
+                        price = d.get("last_price")
+                        if shares and price:
+                            d["market_cap"] = shares * price
+                        d["source"] = "schwab"
+                    return result
+            except Exception:
+                if DEBUG:
+                    raise
+        # Fallback: yfinance per-symbol (get quote + fundamentals separately)
+        result: dict[str, dict[str, Any]] = {}
+        for sym in symbols:
+            try:
+                q = self._yfinance.get_quote(sym)
+                f = self._yfinance.get_fundamentals(sym)
+                if q and "error" not in q:
+                    entry = {
+                        "last_price": q.get("last_price"),
+                        "net_pct_change": q.get("net_pct_change"),
+                        "total_volume": q.get("total_volume"),
+                        "pe_ratio": f.get("pe_ratio"),
+                        "market_cap": f.get("market_cap"),
+                        "avg_10d_volume": f.get("avg_volume"),
+                        "source": "yfinance",
+                    }
+                    result[sym] = entry
+            except Exception:
+                pass
+        return result
+
     def check_options_activity(self, symbol: str) -> dict[str, Any]:
         """Options activity — ATM IV, put/call ratios (Schwab only)."""
         result = self._schwab.check_options_activity(symbol)

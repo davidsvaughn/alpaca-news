@@ -15,7 +15,7 @@ import sys
 from datetime import datetime, timedelta, timezone
 
 from trader.config import load_settings
-from trader.db.database import Database, update_snapshot_field
+from trader.db.database import open_sqlite, update_snapshot_field
 
 try:
     import yfinance as yf
@@ -26,7 +26,7 @@ except ImportError:
 
 def main(dry_run: bool = False) -> None:
     settings = load_settings()
-    db = Database(settings.sqlite_path)
+    db = open_sqlite(settings.sqlite_path)
 
     # Fetch all snapshots
     from sqlalchemy import text

@@ -393,7 +393,10 @@ def create_app(
 
     @app.get("/api/market/quotes")
     async def api_market_quotes(symbols: str = ""):
-        """Batch current prices for the snapshots table (polled every 60s)."""
+        """Batch current prices for the snapshots table (polled every 60s).
+
+        Uses the lightweight get_quotes() — price data only.
+        """
         symbol_list = [s.strip().upper() for s in symbols.split(",") if s.strip()]
         if not symbol_list:
             return {}
@@ -409,7 +412,11 @@ def create_app(
 
     @app.get("/api/market/fundamentals")
     async def api_market_fundamentals(symbols: str = ""):
-        """Batch fundamentals (P/E, Mkt Cap, Avg Vol) — cached 1 hour."""
+        """Batch fundamentals (P/E, Mkt Cap, Avg Vol) — cached 1 hour.
+
+        Uses the same Schwab quotes endpoint (which includes fundamental
+        data like avg10DaysVolume, peRatio, sharesOutstanding).
+        """
         import time as _time
 
         symbol_list = [s.strip().upper() for s in symbols.split(",") if s.strip()]
@@ -417,24 +424,28 @@ def create_app(
             return {}
         now = _time.time()
         market: MarketDataService = app.state.market
+
+        # Check cache; collect uncached symbols
         result: dict[str, Any] = {}
+        uncached: list[str] = []
         for sym in symbol_list[:20]:
             cached = _fundamentals_cache.get(sym)
-            if cached and (now - cached[0]) < 3600:
+            if cached and (now - cached[0]) < 86400:  # 24 hours
                 result[sym] = cached[1]
-                continue
-            try:
-                fund = market.get_fundamentals(sym)
-                if "error" not in fund:
-                    entry = {
-                        "pe_ratio": fund.get("pe_ratio"),
-                        "market_cap": fund.get("market_cap"),
-                        "avg_volume": fund.get("avg_10d_volume") or fund.get("avg_volume"),
-                    }
-                    _fundamentals_cache[sym] = (now, entry)
-                    result[sym] = entry
-            except Exception:
-                pass
+            else:
+                uncached.append(sym)
+
+        if uncached:
+            data = market.get_quotes_with_fundamentals(uncached)
+            for sym, d in data.items():
+                entry = {
+                    "pe_ratio": d.get("pe_ratio"),
+                    "market_cap": d.get("market_cap"),
+                    "avg_volume": d.get("avg_10d_volume"),
+                }
+                _fundamentals_cache[sym] = (now, entry)
+                result[sym] = entry
+
         return result
 
     @app.get("/api/activity-panel", response_class=HTMLResponse)
