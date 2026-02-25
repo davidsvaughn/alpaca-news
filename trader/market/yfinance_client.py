@@ -71,6 +71,7 @@ class Fundamentals:
     return_on_equity: float | None
     free_cash_flow: float | None
     revenue: float | None
+    avg_volume: float | None
     fetched_at: str  # ISO timestamp
 
     def to_dict(self) -> dict[str, Any]:
@@ -230,6 +231,33 @@ class YFinanceClient:
             return result
 
     # ------------------------------------------------------------------
+    # Real-time-ish quote (free, may be delayed ~15 min)
+    # ------------------------------------------------------------------
+
+    def get_quote(self, symbol: str) -> dict[str, Any]:
+        """Get a quote snapshot via yfinance (free, may be delayed)."""
+        import yfinance as yf
+
+        try:
+            ticker = yf.Ticker(symbol.upper())
+            info = ticker.info or {}
+            return {
+                "symbol": symbol.upper(),
+                "last_price": info.get("regularMarketPrice") or info.get("currentPrice"),
+                "open_price": info.get("regularMarketOpen"),
+                "high": info.get("regularMarketDayHigh"),
+                "low": info.get("regularMarketDayLow"),
+                "total_volume": info.get("regularMarketVolume"),
+                "net_pct_change": info.get("regularMarketChangePercent"),
+                "source": "yfinance",
+                "fetched_at": _now_iso(),
+            }
+        except Exception as e:
+            if DEBUG:
+                raise
+            return {"symbol": symbol.upper(), "error": str(e), "source": "yfinance"}
+
+    # ------------------------------------------------------------------
     # Fundamentals
     # ------------------------------------------------------------------
 
@@ -267,6 +295,7 @@ class YFinanceClient:
                 return_on_equity=info.get("returnOnEquity"),
                 free_cash_flow=info.get("freeCashflow"),
                 revenue=info.get("totalRevenue"),
+                avg_volume=info.get("averageVolume"),
                 fetched_at=_now_iso(),
             )
             return f.to_dict()

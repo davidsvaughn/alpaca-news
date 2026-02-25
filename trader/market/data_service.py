@@ -248,13 +248,46 @@ class MarketDataService:
     # ------------------------------------------------------------------
 
     def get_quote(self, symbol: str) -> dict[str, Any]:
-        """Real-time quote snapshot (Schwab only)."""
-        quote = self._schwab.get_quote(symbol)
-        if quote:
-            d = quote.to_dict()
-            d["source"] = "schwab"
-            return d
-        return {"symbol": symbol, "error": "no quote data", "source": "schwab"}
+        """Real-time quote snapshot. Tries Schwab, falls back to yfinance."""
+        if self._schwab.available:
+            try:
+                quote = self._schwab.get_quote(symbol)
+                if quote:
+                    d = quote.to_dict()
+                    d["source"] = "schwab"
+                    return d
+            except Exception:
+                if DEBUG:
+                    raise
+        # Fallback to yfinance
+        return self._yfinance.get_quote(symbol)
+
+    def get_quotes(self, symbols: list[str]) -> dict[str, dict[str, Any]]:
+        """Batch real-time quotes. Tries Schwab batch, falls back to yfinance."""
+        result: dict[str, dict[str, Any]] = {}
+        if not symbols:
+            return result
+        if self._schwab.available:
+            try:
+                schwab_quotes = self._schwab.get_quotes(symbols)
+                for sym, qs in schwab_quotes.items():
+                    d = qs.to_dict()
+                    d["source"] = "schwab"
+                    result[sym] = d
+                if result:
+                    return result
+            except Exception:
+                if DEBUG:
+                    raise
+        # Fallback: yfinance per-symbol
+        for sym in symbols:
+            try:
+                q = self._yfinance.get_quote(sym)
+                if q and "error" not in q:
+                    result[sym] = q
+            except Exception:
+                pass
+        return result
 
     def check_options_activity(self, symbol: str) -> dict[str, Any]:
         """Options activity — ATM IV, put/call ratios (Schwab only)."""
