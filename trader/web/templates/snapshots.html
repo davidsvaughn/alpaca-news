@@ -16,14 +16,15 @@
 .sort-arrow { font-size: .7rem; margin-left: 2px; }
 .filter-row th { padding: 2px 4px !important; vertical-align: top; background: #f8f9fa; }
 .filter-row input, .filter-row select { padding: 1px 4px; }
-.filter-clear-wrap { position: relative; }
-.filter-clear-wrap input, .filter-clear-wrap select { padding-right: 18px; }
-.filter-x {
+.fcw { position: relative; }
+.fcw input, .fcw select { padding-right: 16px; }
+.fx {
   position: absolute; right: 3px; top: 50%; transform: translateY(-50%);
-  cursor: pointer; font-size: .7rem; color: #999; line-height: 1; z-index: 1;
+  cursor: pointer; font-size: .75rem; color: #aaa; line-height: 1; z-index: 1;
   display: none;
 }
-.filter-x:hover { color: #333; }
+.fx:hover { color: #333; }
+.fcw.has-val .fx { display: block; }
 {% endblock %}
 
 {% block content %}
@@ -395,6 +396,10 @@ function initClientFilters() {
       saveFilterState();
       applyClientFilters();
       updateClearAllBtn();
+      updateFilterXButtons();
+    });
+    el.addEventListener('change', function() {
+      updateFilterXButtons();
     });
   });
 }
@@ -408,9 +413,39 @@ function initServerFilters() {
   document.querySelectorAll('.srv-filter').forEach(function(el) {
     var evtName = el.type === 'date' ? 'change' : 'input';
     el.addEventListener(evtName, function() {
+      updateFilterXButtons();
       clearTimeout(_srvDebounce);
       _srvDebounce = setTimeout(function() { reloadTable(); }, el.type === 'date' ? 0 : 400);
     });
+  });
+}
+
+// =====================================================================
+// Per-filter clear (x) buttons
+// =====================================================================
+function clearFilter(xBtn) {
+  var wrap = xBtn.parentElement;
+  var input = wrap.querySelector('input, select');
+  if (!input) return;
+  input.value = '';
+  wrap.classList.remove('has-val');
+  // Trigger appropriate refresh
+  if (input.classList.contains('srv-filter')) {
+    saveFilterState();
+    reloadTable();
+  } else {
+    saveFilterState();
+    applyClientFilters();
+  }
+  updateClearAllBtn();
+}
+
+function updateFilterXButtons() {
+  document.querySelectorAll('.fcw').forEach(function(wrap) {
+    var input = wrap.querySelector('input, select');
+    if (input) {
+      wrap.classList.toggle('has-val', !!input.value.trim());
+    }
   });
 }
 
@@ -555,6 +590,7 @@ document.addEventListener('htmx:afterSwap', function(e) {
     fetchFundamentals();
     applyClientFilters();
     updateClearAllBtn();
+    updateFilterXButtons();
   }
 });
 

@@ -21,24 +21,32 @@
       <tr class="filter-row">
         <th></th>
         <th>
-          <input type="date" class="form-control form-control-sm srv-filter" data-key="created_after" placeholder="From" value="{{ created_after }}" style="font-size:.7rem;margin-bottom:2px;">
-          <input type="date" class="form-control form-control-sm srv-filter" data-key="created_before" placeholder="To" value="{{ created_before }}" style="font-size:.7rem;">
+          <div class="fcw"><input type="date" class="form-control form-control-sm srv-filter" data-key="created_after" value="{{ created_after }}" style="font-size:.7rem;margin-bottom:2px;"><span class="fx" onclick="clearFilter(this)">&times;</span></div>
+          <div class="fcw"><input type="date" class="form-control form-control-sm srv-filter" data-key="created_before" value="{{ created_before }}" style="font-size:.7rem;"><span class="fx" onclick="clearFilter(this)">&times;</span></div>
         </th>
-        <th><input type="text" class="form-control form-control-sm srv-filter" data-key="headline" placeholder="Search..." value="{{ headline_filter }}" style="font-size:.7rem;"></th>
-        <th><input type="text" class="form-control form-control-sm srv-filter" data-key="symbol" placeholder="Symbol" value="{{ symbol_filter }}" maxlength="12" style="font-size:.7rem;"></th>
+        <th><div class="fcw"><input type="text" class="form-control form-control-sm srv-filter" data-key="headline" placeholder="Search..." value="{{ headline_filter }}" style="font-size:.7rem;"><span class="fx" onclick="clearFilter(this)">&times;</span></div></th>
+        <th><div class="fcw"><input type="text" class="form-control form-control-sm srv-filter" data-key="symbol" placeholder="Symbol" value="{{ symbol_filter }}" maxlength="12" style="font-size:.7rem;"><span class="fx" onclick="clearFilter(this)">&times;</span></div></th>
+        <th><div class="fcw"><select class="form-select form-select-sm cli-filter" data-col="signal" style="font-size:.7rem;"><option value="">All</option><option value="bull">bull</option><option value="bear">bear</option><option value="neutral">neutral</option></select><span class="fx" onclick="clearFilter(this)">&times;</span></div></th>
         <th>
-          <select class="form-select form-select-sm cli-filter" data-col="signal" style="font-size:.7rem;">
-            <option value="">All</option>
-            <option value="bull">bull</option>
-            <option value="bear">bear</option>
-            <option value="neutral">neutral</option>
-          </select>
+          <div class="fcw"><input type="number" class="form-control form-control-sm cli-filter" data-col="price_10" data-bound="min" placeholder="Min" step="any" style="font-size:.7rem;"><span class="fx" onclick="clearFilter(this)">&times;</span></div>
+          <div class="fcw" style="margin-top:2px"><input type="number" class="form-control form-control-sm cli-filter" data-col="price_10" data-bound="max" placeholder="Max" step="any" style="font-size:.7rem;"><span class="fx" onclick="clearFilter(this)">&times;</span></div>
         </th>
-        <th><input type="number" class="form-control form-control-sm cli-filter" data-col="price_10" data-bound="min" placeholder="Min" step="any" style="font-size:.7rem;margin-bottom:2px;"><input type="number" class="form-control form-control-sm cli-filter" data-col="price_10" data-bound="max" placeholder="Max" step="any" style="font-size:.7rem;"></th>
-        <th><input type="number" class="form-control form-control-sm cli-filter" data-col="price" data-bound="min" placeholder="Min" step="any" style="font-size:.7rem;margin-bottom:2px;"><input type="number" class="form-control form-control-sm cli-filter" data-col="price" data-bound="max" placeholder="Max" step="any" style="font-size:.7rem;"></th>
-        <th><input type="number" class="form-control form-control-sm cli-filter" data-col="avg_vol" data-bound="min" placeholder="Min" step="any" style="font-size:.7rem;margin-bottom:2px;"><input type="number" class="form-control form-control-sm cli-filter" data-col="avg_vol" data-bound="max" placeholder="Max" step="any" style="font-size:.7rem;"></th>
-        <th><input type="number" class="form-control form-control-sm cli-filter" data-col="mkt_cap" data-bound="min" placeholder="Min" step="any" style="font-size:.7rem;margin-bottom:2px;"><input type="number" class="form-control form-control-sm cli-filter" data-col="mkt_cap" data-bound="max" placeholder="Max" step="any" style="font-size:.7rem;"></th>
-        <th><input type="number" class="form-control form-control-sm cli-filter" data-col="pe" data-bound="min" placeholder="Min" step="any" style="font-size:.7rem;margin-bottom:2px;"><input type="number" class="form-control form-control-sm cli-filter" data-col="pe" data-bound="max" placeholder="Max" step="any" style="font-size:.7rem;"></th>
+        <th>
+          <div class="fcw"><input type="number" class="form-control form-control-sm cli-filter" data-col="price" data-bound="min" placeholder="Min" step="any" style="font-size:.7rem;"><span class="fx" onclick="clearFilter(this)">&times;</span></div>
+          <div class="fcw" style="margin-top:2px"><input type="number" class="form-control form-control-sm cli-filter" data-col="price" data-bound="max" placeholder="Max" step="any" style="font-size:.7rem;"><span class="fx" onclick="clearFilter(this)">&times;</span></div>
+        </th>
+        <th>
+          <div class="fcw"><input type="number" class="form-control form-control-sm cli-filter" data-col="avg_vol" data-bound="min" placeholder="Min" step="any" style="font-size:.7rem;"><span class="fx" onclick="clearFilter(this)">&times;</span></div>
+          <div class="fcw" style="margin-top:2px"><input type="number" class="form-control form-control-sm cli-filter" data-col="avg_vol" data-bound="max" placeholder="Max" step="any" style="font-size:.7rem;"><span class="fx" onclick="clearFilter(this)">&times;</span></div>
+        </th>
+        <th>
+          <div class="fcw"><input type="number" class="form-control form-control-sm cli-filter" data-col="mkt_cap" data-bound="min" placeholder="Min" step="any" style="font-size:.7rem;"><span class="fx" onclick="clearFilter(this)">&times;</span></div>
+          <div class="fcw" style="margin-top:2px"><input type="number" class="form-control form-control-sm cli-filter" data-col="mkt_cap" data-bound="max" placeholder="Max" step="any" style="font-size:.7rem;"><span class="fx" onclick="clearFilter(this)">&times;</span></div>
+        </th>
+        <th>
+          <div class="fcw"><input type="number" class="form-control form-control-sm cli-filter" data-col="pe" data-bound="min" placeholder="Min" step="any" style="font-size:.7rem;"><span class="fx" onclick="clearFilter(this)">&times;</span></div>
+          <div class="fcw" style="margin-top:2px"><input type="number" class="form-control form-control-sm cli-filter" data-col="pe" data-bound="max" placeholder="Max" step="any" style="font-size:.7rem;"><span class="fx" onclick="clearFilter(this)">&times;</span></div>
+        </th>
         <th></th>
         <th></th>
         <th></th>
