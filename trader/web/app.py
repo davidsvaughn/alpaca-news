@@ -959,18 +959,18 @@ def create_app(
 
         if not entries:
             return []
-        stats_resolution = 60  # minutes (hourly)
+        res_min = settings.stats_resolution_minutes
         results = await asyncio.to_thread(
             run_backtest, strategy_key, params, entries, market_close, min_hold,
             guard_stop_pct, guard_target_pct, settings.price_delay_minutes,
-            stats_resolution,
+            res_min,
         )
         trades = [r.to_dict() for r in results]
         valid = [r for r in results if r.pnl_pct is not None]
         count = len(valid)
         avg_pnl = round(sum(r.pnl_pct for r in valid) / count, 2) if count else None
         stats_a = compute_ann_a(results)
-        stats_b = compute_ann_b(results, stats_resolution)
+        stats_b = compute_ann_b(results, res_min)
         return {
             "trades": trades,
             "summary": {

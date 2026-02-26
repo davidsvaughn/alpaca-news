@@ -92,6 +92,9 @@ class Settings:
     # Snapshot delayed-price capture
     price_delay_minutes: int
 
+    # Backtest stats resolution (minutes) for equity curve sampling
+    stats_resolution_minutes: int
+
     # SSE
     sse_ping_interval_s: float
 
@@ -221,6 +224,7 @@ def load_settings(*, dotenv_path: str | None = None, override: bool = False) -> 
     max_phase2_branches = _env_int("MAX_PHASE2_BRANCHES", 2)
 
     price_delay_minutes = _env_int("PRICE_DELAY_MINUTES", 10)
+    stats_resolution_minutes = _env_int("STATS_RESOLUTION_MINUTES", 60)
 
     sse_ping_interval_s = _env_float("SSE_PING_INTERVAL_S", 10.0)
 
@@ -319,6 +323,7 @@ def load_settings(*, dotenv_path: str | None = None, override: bool = False) -> 
         max_phase1_actions=max_phase1_actions,
         max_phase2_branches=max_phase2_branches,
         price_delay_minutes=price_delay_minutes,
+        stats_resolution_minutes=stats_resolution_minutes,
         sse_ping_interval_s=sse_ping_interval_s,
         mock_llm=mock_llm,
         backfill_on_start=backfill_on_start,
