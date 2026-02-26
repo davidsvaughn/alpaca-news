@@ -249,12 +249,19 @@
     "CHWY",
     "ETN",
     "UTHR",
-    "CM"
+    "CM",
+    "BMA",
+    "ABTC",
+    "IPGP",
+    "CSX",
+    "AJG",
+    "NUAI",
+    "ZM"
   ],
   "crypto": [],
   "rejected": [
     "BTCUSD",
     "VNP"
   ],
-  "last_updated": "2026-02-26T18:58:15.780459+00:00"
+  "last_updated": "2026-02-26T19:05:26.226251+00:00"
 }

@@ -55,7 +55,7 @@
     "mixed shelf offering",
     "Amounts Not Disclosed",
     "Option Alert:",
-    "Unusual options activity",
+    // "Unusual options activity",
     "What Is Everyone Watching",
     "what's moving markets",
     "top (upgrades|downgrades|analyst forecasts) for",
@@ -87,7 +87,7 @@
     "Under the Radar:",
     "Best Stock Spotlight",
     "Hosts Segment Titled",
-    "What's Going On With .* Stock",
+    // "What's Going On With .* Stock",
     "Benzinga Edge (scorecard|signal|rankings)",
     "Technical Momentum Signals"
   ],

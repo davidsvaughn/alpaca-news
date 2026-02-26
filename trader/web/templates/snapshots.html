@@ -558,34 +558,20 @@ function _collectParams() {
   return params;
 }
 
-function _collectEntries() {
-  var entries = [];
-  var tbl = document.getElementById('snapshots-tbl');
-  if (!tbl) return entries;
-  tbl.querySelectorAll('tbody tr').forEach(function(row) {
-    // Skip hidden (filtered out) rows
-    if (row.style.display === 'none') return;
-    var sid = row.getAttribute('data-snapshot-id');
-    var price = row.getAttribute('data-entry-price');
-    var entryTime = row.getAttribute('data-entry-time');
-    var sym = row.getAttribute('data-primary-symbol');
-    if (!sid || !entryTime || !sym) return;
-    price = parseFloat(price);
-    // Send entries even without price_10min — backtest engine will use 9:40 AM bar
-    entries.push({snapshot_id: sid, symbol: sym, entry_price: isNaN(price) || price <= 0 ? 0 : price, entry_time: entryTime});
+function _collectBacktestFilters() {
+  var filters = {};
+  _SRV_KEYS.forEach(function(key) {
+    filters[key] = _getSrvFilter(key);
   });
-  return entries;
+  filters.explored = document.getElementById('explored-input').value === '1' ? '1' : '';
+  return filters;
 }
 
 function runBacktest() {
   var strategy = _btCurrentStrategy;
   if (!strategy) return;
   var params = _collectParams();
-  var entries = _collectEntries();
-  if (!entries.length) {
-    alert('No snapshots with Price@{{ price_delay_minutes | default(10) }} data on this page.');
-    return;
-  }
+  var filters = _collectBacktestFilters();
 
   document.getElementById('bt-spinner').classList.remove('d-none');
   document.getElementById('bt-run-btn').disabled = true;
@@ -597,10 +583,14 @@ function runBacktest() {
   fetch('/api/strategies/backtest', {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({strategy: strategy, params: params, entries: entries, market_close: marketClose, min_hold: minHold, guard_stop_pct: guardStop, guard_target_pct: guardTarget}),
+    body: JSON.stringify({strategy: strategy, params: params, filters: filters, market_close: marketClose, min_hold: minHold, guard_stop_pct: guardStop, guard_target_pct: guardTarget}),
   })
   .then(function(r) { return r.json(); })
   .then(function(results) {
+    if (!results.length) {
+      alert('No snapshots match the current filters for backtest.');
+      return;
+    }
     _btResults = {};
     results.forEach(function(r) { _btResults[r.snapshot_id] = r; });
     _displayResults();
@@ -697,21 +687,18 @@ function _displayResults() {
 }
 
 function _updateAvgPnl() {
-  var tbl = document.getElementById('snapshots-tbl');
   var avgDiv = document.getElementById('bt-avg');
   var avgVal = document.getElementById('bt-avg-val');
   var avgCount = document.getElementById('bt-avg-count');
 
-  if (!tbl || !Object.keys(_btResults).length) {
+  if (!Object.keys(_btResults).length) {
     avgDiv.classList.add('d-none');
     return;
   }
 
-  // Only count visible rows with results
+  // Count all backtested rows in the current filtered dataset (not just this page)
   var pnls = [];
-  tbl.querySelectorAll('tbody tr').forEach(function(row) {
-    if (row.style.display === 'none') return;
-    var sid = row.getAttribute('data-snapshot-id');
+  Object.keys(_btResults).forEach(function(sid) {
     var r = _btResults[sid];
     if (r && r.pnl_pct != null) pnls.push(r.pnl_pct);
   });
