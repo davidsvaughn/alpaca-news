@@ -167,6 +167,33 @@ class TestComputeAnnA:
         assert compute_ann_a([r]) is None
         assert compute_ann_a([]) is None
 
+    def test_daily_pnl_matches_ann_a_intermediate(self):
+        """daily_pnl should equal daily_log × 100, the pre-annualization rate."""
+        r = _make_result(pnl_pct=1.0, bars_held=_BARS_PER_DAY)
+        stats = compute_ann_a([r, r])
+        assert stats is not None
+        # Hand calc: daily_log = ln(1.01) / 1.0
+        expected_daily_pnl = math.log(1.01) * 100  # %/day
+        assert stats["daily_pnl"] == pytest.approx(expected_daily_pnl, rel=1e-6)
+
+    def test_daily_pnl_negative_for_losing_trades(self):
+        """Losing trades should produce negative daily_pnl."""
+        r = _make_result(pnl_pct=-2.0, bars_held=_BARS_PER_DAY)
+        stats = compute_ann_a([r, r])
+        assert stats is not None
+        assert stats["daily_pnl"] < 0
+
+    def test_daily_pnl_scales_with_duration(self):
+        """Same P&L in half the time → double the daily_pnl."""
+        r_full = _make_result(pnl_pct=1.0, bars_held=_BARS_PER_DAY)
+        r_half = _make_result(pnl_pct=1.0, bars_held=_BARS_PER_DAY // 2)
+        stats_full = compute_ann_a([r_full, r_full])
+        stats_half = compute_ann_a([r_half, r_half])
+        assert stats_full is not None and stats_half is not None
+        assert stats_half["daily_pnl"] == pytest.approx(
+            stats_full["daily_pnl"] * 2, rel=0.02,
+        )
+
     def test_sharpe_positive_for_consistent_gains(self):
         """Consistent positive trades should produce positive Sharpe."""
         results = [_make_result(pnl_pct=0.5, bars_held=_BARS_PER_DAY) for _ in range(10)]

@@ -271,7 +271,8 @@ _BARS_PER_DAY = 390  # 6.5 hours × 60 minutes
 def compute_ann_a(results: list[BacktestResult]) -> dict[str, float] | None:
     """Annualized stats — unlimited capital (time-weighted log return).
 
-    Returns dict with ann (%), vol (%), sharpe, or None if no valid trades.
+    Returns dict with ann (%), daily_pnl (%/day), vol (%), sharpe,
+    or None if no valid trades.
     """
     daily_rates: list[float] = []  # per-trade daily log return x_i = ℓ_i / d_i
     sum_log = 0.0
@@ -294,7 +295,8 @@ def compute_ann_a(results: list[BacktestResult]) -> dict[str, float] | None:
     std_x = math.sqrt(var_x)
     vol = std_x * math.sqrt(_TRADING_DAYS_PER_YEAR) * 100
     sharpe = (daily_log * _TRADING_DAYS_PER_YEAR) / (std_x * math.sqrt(_TRADING_DAYS_PER_YEAR)) if std_x > 0 else None
-    return {"ann": ann, "vol": vol, "sharpe": sharpe}
+    daily_pnl = daily_log * 100  # %/trading-day
+    return {"ann": ann, "daily_pnl": daily_pnl, "vol": vol, "sharpe": sharpe}
 
 
 

@@ -280,10 +280,17 @@
     </div>
 
     <div id="bt-stats" class="bt-stats d-none">
-      <div id="bt-avg" class="bt-metric">
-        <span class="bt-metric-label">Avg P&L:</span>
-        <span id="bt-avg-val" class="fw-bold"></span>
-        <span id="bt-avg-count" class="small text-muted ms-1"></span>
+      <div id="bt-avg-card" class="bt-metric bt-metric-pair">
+        <div id="bt-avg" class="bt-metric-row">
+          <span class="bt-metric-label">Avg P&L:</span>
+          <span id="bt-avg-val" class="fw-bold"></span>
+          <span id="bt-avg-count" class="small text-muted ms-1"></span>
+        </div>
+        <div id="bt-avg-divider" class="bt-metric-divider"></div>
+        <div id="bt-daily-pnl" class="bt-metric-row">
+          <span class="bt-metric-label" title="Time-weighted average P&L per trading day">P&L/day:</span>
+          <span id="bt-daily-pnl-val" class="fw-bold"></span>
+        </div>
       </div>
 
       <div id="bt-pair-a" class="bt-metric bt-metric-pair">
@@ -969,9 +976,11 @@ function _updateAvgPnl() {
     return;
   }
 
-  // Avg P&L
+  // Avg P&L + P&L/day
   _showMetric('bt-avg', 'bt-avg-val', s.avg_pnl, 2);
   document.getElementById('bt-avg-count').textContent = '(' + s.count + ' rows)';
+  _showMetric('bt-daily-pnl', 'bt-daily-pnl-val', s.daily_pnl, 3);
+  _syncMetricPair('bt-avg-card', 'bt-avg', 'bt-daily-pnl', 'bt-avg-divider');
 
   // Annualized metrics + Sharpe ratios
   _showMetric('bt-ann-a', 'bt-ann-a-val', s.ann_a, 1);

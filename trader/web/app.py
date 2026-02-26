@@ -989,6 +989,7 @@ def create_app(
             "summary": {
                 "count": count,
                 "avg_pnl": avg_pnl,
+                "daily_pnl": round(stats_a["daily_pnl"], 3) if stats_a else None,
                 "ann_a": round(stats_a["ann"], 1) if stats_a else None,
                 "sharpe_a": round(stats_a["sharpe"], 2) if stats_a and stats_a["sharpe"] is not None else None,
                 "ann_b": round(stats_b["ann"], 1) if stats_b else None,
