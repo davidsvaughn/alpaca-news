@@ -275,6 +275,24 @@ async def run_grok(
         _accumulate_usage(response)
         _extract_builtin_traces(response)
 
+    # Reconcile server-side tool counts with xAI's authoritative billing data.
+    # server_side_tool_usage is a dict like:
+    #   {"SERVER_SIDE_TOOL_WEB_SEARCH": 2, "SERVER_SIDE_TOOL_X_SEARCH": 3}
+    _sstu = getattr(response, "server_side_tool_usage", None)
+    if _sstu and isinstance(_sstu, dict):
+        auth_web = _sstu.get("SERVER_SIDE_TOOL_WEB_SEARCH", 0)
+        auth_x = _sstu.get("SERVER_SIDE_TOOL_X_SEARCH", 0)
+        manual_web = total_usage["web_search_calls"]
+        manual_x = total_usage["x_search_calls"]
+        if auth_web > manual_web or auth_x > manual_x:
+            if DEBUG:
+                print(
+                    f"  [Grok] server_side_tool_usage correction: "
+                    f"web_search {manual_web}→{auth_web}, x_search {manual_x}→{auth_x}"
+                )
+            total_usage["web_search_calls"] = max(auth_web, manual_web)
+            total_usage["x_search_calls"] = max(auth_x, manual_x)
+
     # Extract final output
     output_text = getattr(response, "output_text", "") or ""
 

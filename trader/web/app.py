@@ -127,6 +127,29 @@ def create_app(
 
     templates.env.filters["fmt_dt"] = _fmt_dt
 
+    def _normalize_signal_filter(value: str | None) -> str | None:
+        if not value:
+            return None
+        v = value.strip().lower()
+        if v in {"bull", "bullish"}:
+            return "bullish"
+        if v in {"bear", "bearish"}:
+            return "bearish"
+        if v == "neutral":
+            return "neutral"
+        return None
+
+    def _parse_optional_float(value: str | None) -> float | None:
+        if value is None:
+            return None
+        v = value.strip()
+        if not v:
+            return None
+        try:
+            return float(v)
+        except ValueError:
+            return None
+
     # ------------------------------------------------------------------
     # Page routes
     # ------------------------------------------------------------------
@@ -167,8 +190,14 @@ def create_app(
         created_after: str | None = None,
         created_before: str | None = None,
         headline: str | None = None,
+        signal: str | None = None,
+        price_10_min: str | None = None,
+        price_10_max: str | None = None,
     ):
         explored_only = explored == "1"
+        signal_direction = _normalize_signal_filter(signal)
+        price_10_min_val = _parse_optional_float(price_10_min)
+        price_10_max_val = _parse_optional_float(price_10_max)
         total = count_snapshots(
             db,
             symbol=symbol,
@@ -176,12 +205,18 @@ def create_app(
             created_after=created_after,
             created_before=created_before,
             headline=headline,
+            signal_direction=signal_direction,
+            price_10_min=price_10_min_val,
+            price_10_max=price_10_max_val,
         )
         return templates.TemplateResponse(
             request=request,
             name="snapshots.html",
             context={"active_page": "snapshots", "symbol_filter": symbol,
                      "headline_filter": headline,
+                     "signal_filter": signal or "",
+                     "price_10_min_filter": price_10_min or "",
+                     "price_10_max_filter": price_10_max or "",
                      "explored_only": explored_only, "total": total,
                      "created_after": created_after or "", "created_before": created_before or "",
                      "price_delay_minutes": settings.price_delay_minutes},
@@ -349,10 +384,16 @@ def create_app(
         created_after: str | None = None,
         created_before: str | None = None,
         headline: str | None = None,
+        signal: str | None = None,
+        price_10_min: str | None = None,
+        price_10_max: str | None = None,
         page: int = 1,
         per_page: int = 50,
     ):
         explored_only = explored == "1"
+        signal_direction = _normalize_signal_filter(signal)
+        price_10_min_val = _parse_optional_float(price_10_min)
+        price_10_max_val = _parse_optional_float(price_10_max)
         offset = (max(page, 1) - 1) * per_page
         total = count_snapshots(
             db,
@@ -361,6 +402,9 @@ def create_app(
             created_after=created_after,
             created_before=created_before,
             headline=headline,
+            signal_direction=signal_direction,
+            price_10_min=price_10_min_val,
+            price_10_max=price_10_max_val,
         )
         snaps = get_all_snapshots(
             db,
@@ -369,6 +413,9 @@ def create_app(
             created_after=created_after,
             created_before=created_before,
             headline=headline,
+            signal_direction=signal_direction,
+            price_10_min=price_10_min_val,
+            price_10_max=price_10_max_val,
             limit=per_page,
             offset=offset,
         )
@@ -384,6 +431,9 @@ def create_app(
                 "total_pages": total_pages,
                 "symbol_filter": symbol or "",
                 "headline_filter": headline or "",
+                "signal_filter": signal or "",
+                "price_10_min_filter": price_10_min or "",
+                "price_10_max_filter": price_10_max or "",
                 "explored_only": explored_only,
                 "created_after": created_after or "",
                 "created_before": created_before or "",

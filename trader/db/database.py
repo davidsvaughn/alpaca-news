@@ -513,22 +513,82 @@ def get_daily_cost_today(db: Database) -> float:
     return total
 
 
+def _provider_from_model(model: str) -> str:
+    """Heuristic: map a model name to a provider key."""
+    m = model.lower()
+    if "gemini" in m:
+        return "gemini"
+    if "grok" in m:
+        return "grok"
+    if any(k in m for k in ("gpt", "o3", "o4")):
+        return "openai"
+    return ""
+
+
 def get_daily_cost_today_by_provider(db: Database) -> dict[str, float]:
-    """Sum today's snapshot round costs by provider (openai, grok, gemini)."""
+    """Sum today's costs by provider (openai, grok, gemini).
+
+    Includes pipeline rounds, triage, follow-up searches, and watch check-ins.
+    """
+    from datetime import date as _date
+
     totals: dict[str, float] = {"openai": 0.0, "grok": 0.0, "gemini": 0.0}
+    today_str = _date.today().isoformat()
 
     with db.engine.connect() as conn:
-        rows = conn.execute(
+        # --- Snapshots: pipeline rounds + triage ---
+        snap_rows = conn.execute(
             text("SELECT snapshot_json FROM snapshots WHERE date(created_at) = date('now')"),
         ).fetchall()
 
-    for row in rows:
-        snap = json.loads(row[0]) if isinstance(row[0], str) else row[0]
-        for rnd in snap.get("rounds", []) or []:
-            provider = str(rnd.get("agent") or "").strip().lower()
-            cost = float(rnd.get("cost_usd", 0.0) or 0.0)
-            if provider in totals:
-                totals[provider] += cost
+        for row in snap_rows:
+            snap = json.loads(row[0]) if isinstance(row[0], str) else row[0]
+
+            # Pipeline agent rounds
+            for rnd in snap.get("rounds", []) or []:
+                provider = str(rnd.get("agent") or "").strip().lower()
+                cost = float(rnd.get("cost_usd", 0.0) or 0.0)
+                if provider in totals:
+                    totals[provider] += cost
+
+            # Triage cost (attributed to its provider)
+            triage = snap.get("triage") or {}
+            triage_cost = float(triage.get("cost_usd", 0.0) or 0.0)
+            if triage_cost > 0:
+                triage_provider = str(triage.get("provider", "")).strip().lower()
+                if triage_provider in totals:
+                    totals[triage_provider] += triage_cost
+
+        # --- Follow-up search costs (always use Grok / xAI API) ---
+        fu_rows = conn.execute(
+            text("SELECT follow_up_json FROM follow_ups WHERE date(updated_at) = date('now')"),
+        ).fetchall()
+        for row in fu_rows:
+            fu = json.loads(row[0]) if isinstance(row[0], str) else row[0]
+            for coll in fu.get("collections", []):
+                if not coll.get("collected_at", "").startswith(today_str):
+                    continue
+                fu_cost = float(coll.get("cost_usd", 0.0))
+                if fu_cost > 0:
+                    totals["grok"] += fu_cost
+
+        # --- Watch check-in costs (attributed by model name) ---
+        watch_rows = conn.execute(
+            text("SELECT watch_json FROM watches WHERE date(updated_at) = date('now')"),
+        ).fetchall()
+        for row in watch_rows:
+            watch = json.loads(row[0]) if isinstance(row[0], str) else row[0]
+            for ci in watch.get("checkin_history", []):
+                ci_cost = float(ci.get("cost_usd", 0.0) or 0.0)
+                if ci_cost <= 0:
+                    continue
+                if not ci.get("time", "").startswith(today_str):
+                    continue
+                prov = _provider_from_model(str(ci.get("model", "")))
+                if prov in totals:
+                    totals[prov] += ci_cost
+                else:
+                    totals["gemini"] += ci_cost  # default for watch check-ins
 
     return {k: round(v, 6) for k, v in totals.items()}
 
@@ -659,6 +719,9 @@ def get_all_snapshots(
     db: Database, *, symbol: str | None = None, explored_only: bool = False,
     created_after: str | None = None, created_before: str | None = None,
     headline: str | None = None,
+    signal_direction: str | None = None,
+    price_10_min: float | None = None,
+    price_10_max: float | None = None,
     limit: int = 50, offset: int = 0,
 ) -> list[dict[str, Any]]:
     """Fetch snapshots ordered by created_at DESC, with optional filters."""
@@ -678,6 +741,15 @@ def get_all_snapshots(
     if headline:
         clauses.append("json_extract(snapshot_json, '$.trigger.headline') LIKE :headline")
         params["headline"] = f"%{headline}%"
+    if signal_direction:
+        clauses.append("LOWER(json_extract(snapshot_json, '$.prediction.direction')) = :signal_direction")
+        params["signal_direction"] = signal_direction.lower()
+    if price_10_min is not None:
+        clauses.append("CAST(json_extract(snapshot_json, '$.price_10min') AS REAL) >= :price_10_min")
+        params["price_10_min"] = float(price_10_min)
+    if price_10_max is not None:
+        clauses.append("CAST(json_extract(snapshot_json, '$.price_10min') AS REAL) <= :price_10_max")
+        params["price_10_max"] = float(price_10_max)
     where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
     sql = f"SELECT snapshot_json FROM snapshots{where} ORDER BY created_at DESC LIMIT :lim OFFSET :off"
     with db.engine.connect() as conn:
@@ -693,6 +765,9 @@ def count_snapshots(
     created_after: str | None = None,
     created_before: str | None = None,
     headline: str | None = None,
+    signal_direction: str | None = None,
+    price_10_min: float | None = None,
+    price_10_max: float | None = None,
 ) -> int:
     """Count snapshots, optionally filtered by symbol and/or explored-only."""
     clauses: list[str] = []
@@ -711,6 +786,15 @@ def count_snapshots(
     if headline:
         clauses.append("json_extract(snapshot_json, '$.trigger.headline') LIKE :headline")
         params["headline"] = f"%{headline}%"
+    if signal_direction:
+        clauses.append("LOWER(json_extract(snapshot_json, '$.prediction.direction')) = :signal_direction")
+        params["signal_direction"] = signal_direction.lower()
+    if price_10_min is not None:
+        clauses.append("CAST(json_extract(snapshot_json, '$.price_10min') AS REAL) >= :price_10_min")
+        params["price_10_min"] = float(price_10_min)
+    if price_10_max is not None:
+        clauses.append("CAST(json_extract(snapshot_json, '$.price_10min') AS REAL) <= :price_10_max")
+        params["price_10_max"] = float(price_10_max)
     where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
     sql = f"SELECT COUNT(*) FROM snapshots{where}"
     with db.engine.connect() as conn:

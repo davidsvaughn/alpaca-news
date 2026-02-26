@@ -26,10 +26,20 @@
         </th>
         <th><div class="fcw"><input type="text" class="form-control form-control-sm srv-filter" data-key="headline" placeholder="Search..." value="{{ headline_filter }}" style="font-size:.7rem;"><span class="fx" onclick="clearFilter(this)">&times;</span></div></th>
         <th><div class="fcw"><input type="text" class="form-control form-control-sm srv-filter" data-key="symbol" placeholder="Symbol" value="{{ symbol_filter }}" maxlength="12" style="font-size:.7rem;"><span class="fx" onclick="clearFilter(this)">&times;</span></div></th>
-        <th><div class="fcw"><select class="form-select form-select-sm cli-filter" data-col="signal" style="font-size:.7rem;"><option value="">All</option><option value="bull">bull</option><option value="bear">bear</option><option value="neutral">neutral</option></select><span class="fx" onclick="clearFilter(this)">&times;</span></div></th>
         <th>
-          <div class="fcw"><input type="number" class="form-control form-control-sm cli-filter" data-col="price_10" data-bound="min" placeholder="Min" step="any" style="font-size:.7rem;"><span class="fx" onclick="clearFilter(this)">&times;</span></div>
-          <div class="fcw" style="margin-top:2px"><input type="number" class="form-control form-control-sm cli-filter" data-col="price_10" data-bound="max" placeholder="Max" step="any" style="font-size:.7rem;"><span class="fx" onclick="clearFilter(this)">&times;</span></div>
+          <div class="fcw">
+            <select class="form-select form-select-sm srv-filter" data-key="signal" style="font-size:.7rem;">
+              <option value="">All</option>
+              <option value="bull" {% if signal_filter == 'bull' %}selected{% endif %}>bull</option>
+              <option value="bear" {% if signal_filter == 'bear' %}selected{% endif %}>bear</option>
+              <option value="neutral" {% if signal_filter == 'neutral' %}selected{% endif %}>neutral</option>
+            </select>
+            <span class="fx" onclick="clearFilter(this)">&times;</span>
+          </div>
+        </th>
+        <th>
+          <div class="fcw"><input type="number" class="form-control form-control-sm srv-filter" data-key="price_10_min" value="{{ price_10_min_filter }}" placeholder="Min" step="any" style="font-size:.7rem;"><span class="fx" onclick="clearFilter(this)">&times;</span></div>
+          <div class="fcw" style="margin-top:2px"><input type="number" class="form-control form-control-sm srv-filter" data-key="price_10_max" value="{{ price_10_max_filter }}" placeholder="Max" step="any" style="font-size:.7rem;"><span class="fx" onclick="clearFilter(this)">&times;</span></div>
         </th>
         <th>
           <div class="fcw"><input type="number" class="form-control form-control-sm cli-filter" data-col="price" data-bound="min" placeholder="Min" step="any" style="font-size:.7rem;"><span class="fx" onclick="clearFilter(this)">&times;</span></div>
@@ -130,7 +140,7 @@
   <ul class="pagination pagination-sm justify-content-center">
     <li class="page-item {% if page <= 1 %}disabled{% endif %}">
       <a class="page-link" href="#"
-         hx-get="/api/snapshots?page={{ page - 1 }}&per_page={{ per_page }}&symbol={{ symbol_filter }}&headline={{ headline_filter }}&created_after={{ created_after }}&created_before={{ created_before }}&explored={{ '1' if explored_only else '' }}"
+         hx-get="/api/snapshots?page={{ page - 1 }}&per_page={{ per_page }}&symbol={{ symbol_filter }}&headline={{ headline_filter }}&created_after={{ created_after }}&created_before={{ created_before }}&signal={{ signal_filter }}&price_10_min={{ price_10_min_filter }}&price_10_max={{ price_10_max_filter }}&explored={{ '1' if explored_only else '' }}"
          hx-target="#snapshots-table" hx-swap="innerHTML">Prev</a>
     </li>
     {% set start_page = [1, page - 3] | max %}
@@ -138,7 +148,7 @@
     {% if start_page > 1 %}
     <li class="page-item">
       <a class="page-link" href="#"
-         hx-get="/api/snapshots?page=1&per_page={{ per_page }}&symbol={{ symbol_filter }}&headline={{ headline_filter }}&created_after={{ created_after }}&created_before={{ created_before }}&explored={{ '1' if explored_only else '' }}"
+         hx-get="/api/snapshots?page=1&per_page={{ per_page }}&symbol={{ symbol_filter }}&headline={{ headline_filter }}&created_after={{ created_after }}&created_before={{ created_before }}&signal={{ signal_filter }}&price_10_min={{ price_10_min_filter }}&price_10_max={{ price_10_max_filter }}&explored={{ '1' if explored_only else '' }}"
          hx-target="#snapshots-table" hx-swap="innerHTML">1</a>
     </li>
     {% if start_page > 2 %}<li class="page-item disabled"><span class="page-link">...</span></li>{% endif %}
@@ -146,7 +156,7 @@
     {% for p in range(start_page, end_page + 1) %}
     <li class="page-item {% if p == page %}active{% endif %}">
       <a class="page-link" href="#"
-         hx-get="/api/snapshots?page={{ p }}&per_page={{ per_page }}&symbol={{ symbol_filter }}&headline={{ headline_filter }}&created_after={{ created_after }}&created_before={{ created_before }}&explored={{ '1' if explored_only else '' }}"
+         hx-get="/api/snapshots?page={{ p }}&per_page={{ per_page }}&symbol={{ symbol_filter }}&headline={{ headline_filter }}&created_after={{ created_after }}&created_before={{ created_before }}&signal={{ signal_filter }}&price_10_min={{ price_10_min_filter }}&price_10_max={{ price_10_max_filter }}&explored={{ '1' if explored_only else '' }}"
          hx-target="#snapshots-table" hx-swap="innerHTML">{{ p }}</a>
     </li>
     {% endfor %}
@@ -154,13 +164,13 @@
     {% if end_page < total_pages - 1 %}<li class="page-item disabled"><span class="page-link">...</span></li>{% endif %}
     <li class="page-item">
       <a class="page-link" href="#"
-         hx-get="/api/snapshots?page={{ total_pages }}&per_page={{ per_page }}&symbol={{ symbol_filter }}&headline={{ headline_filter }}&created_after={{ created_after }}&created_before={{ created_before }}&explored={{ '1' if explored_only else '' }}"
+         hx-get="/api/snapshots?page={{ total_pages }}&per_page={{ per_page }}&symbol={{ symbol_filter }}&headline={{ headline_filter }}&created_after={{ created_after }}&created_before={{ created_before }}&signal={{ signal_filter }}&price_10_min={{ price_10_min_filter }}&price_10_max={{ price_10_max_filter }}&explored={{ '1' if explored_only else '' }}"
          hx-target="#snapshots-table" hx-swap="innerHTML">{{ total_pages }}</a>
     </li>
     {% endif %}
     <li class="page-item {% if page >= total_pages %}disabled{% endif %}">
       <a class="page-link" href="#"
-         hx-get="/api/snapshots?page={{ page + 1 }}&per_page={{ per_page }}&symbol={{ symbol_filter }}&headline={{ headline_filter }}&created_after={{ created_after }}&created_before={{ created_before }}&explored={{ '1' if explored_only else '' }}"
+         hx-get="/api/snapshots?page={{ page + 1 }}&per_page={{ per_page }}&symbol={{ symbol_filter }}&headline={{ headline_filter }}&created_after={{ created_after }}&created_before={{ created_before }}&signal={{ signal_filter }}&price_10_min={{ price_10_min_filter }}&price_10_max={{ price_10_max_filter }}&explored={{ '1' if explored_only else '' }}"
          hx-target="#snapshots-table" hx-swap="innerHTML">Next</a>
     </li>
   </ul>

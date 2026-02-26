@@ -466,10 +466,44 @@ def _run_x_search(query: str) -> dict[str, Any]:
         return {"query": query, "error": str(e), "source": "x_search"}
 
 
+def _compute_search_cost(usage: dict[str, Any] | None, source: str) -> float:
+    """Compute token + per-call cost for a follow-up search call.
+
+    The xAI API response ``usage`` dict contains ``input_tokens`` and
+    ``output_tokens`` (which include server-side search processing tokens).
+    We price those at the Grok model rate and add the per-call invocation fee.
+    """
+    from trader.llm.pricing import estimate_token_cost_grok, estimate_tool_cost
+
+    tool_fee = 0.005  # fallback
+    try:
+        tool_fee = estimate_tool_cost(provider="grok", tool_name=source, calls=1)
+    except KeyError:
+        pass
+
+    if not usage:
+        return tool_fee
+
+    model = os.getenv("XSEARCH_MODEL", "grok-4-1-fast-reasoning")
+    try:
+        token_cost = estimate_token_cost_grok(
+            model,
+            input_tokens=int(usage.get("input_tokens", 0) or 0),
+            output_tokens=int(usage.get("output_tokens", 0) or 0),
+        ).total_cost_usd
+    except (KeyError, ValueError):
+        token_cost = 0.0
+
+    return round(token_cost + tool_fee, 6)
+
+
 def _extract_search_result(
     data: dict[str, Any], query: str, source: str
 ) -> dict[str, Any]:
     """Extract text + citations from a Grok API response."""
+    usage = data.get("usage")
+    cost = _compute_search_cost(usage, source)
+
     for item in data.get("output", []):
         if item.get("type") == "message":
             for content in item.get("content", []):
@@ -485,12 +519,12 @@ def _extract_search_result(
                         "answer": content["text"],
                         "citations": citations,
                         "source": source,
+                        "cost_usd": cost,
                     }
-                    usage = data.get("usage")
                     if usage:
                         result["usage"] = usage
                     return result
-    return {"query": query, "error": "No output in response", "source": source}
+    return {"query": query, "error": "No output in response", "source": source, "cost_usd": cost}
 
 
 # ---------------------------------------------------------------------------
