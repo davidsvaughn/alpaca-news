@@ -223,6 +223,100 @@ All summary values are `null` when insufficient data exists for computation.
 
 3. **Short sample windows** — With only a few trading days of data, volatility estimates are unreliable and Sharpe ratios are unstable. More data = more meaningful metrics.
 
-4. **No transaction costs** — Neither method accounts for spreads, commissions, or slippage.
+4. **Transaction costs** — A configurable `cost_bps` parameter (default 10 bps = 0.10%) deducts round-trip transaction costs from each trade before computing summary stats. This adjusts `pnl_pct` and `entry_price` so both Method A and Method B reflect costs. Set to 0 for raw results. Note: this is a flat per-trade deduction — it does not model variable spreads, market impact, or slippage.
 
 5. **No capital constraint in Method A** — Method A assumes you can invest independently in every trade simultaneously. Real capital is finite.
+
+---
+
+## Sanity Tests
+
+The file `tests/test_backtest_sanity.py` contains 38 tests that verify the correctness of the backtest computation pipeline. These tests use synthetic 1-minute bar DataFrames (no network calls) and cover:
+
+### Method A — Hand Calculations (7 tests)
+
+| Test | What it verifies |
+|------|-----------------|
+| 1% gain over 1 trading day | Ann(A) matches `e^(252 × ln(1.01)) − 1` exactly |
+| 1% gain in half a day | Shorter duration → higher annualized return |
+| Losing trade | Negative P&L → negative Ann(A) |
+| `bars_held = 0` | Floors to 1 bar — no division by zero |
+| `pnl_pct = None` trades | Silently skipped, don't affect results |
+| Fewer than 2 trades | Returns `None` |
+| Sharpe sign | Consistent positive trades → positive Sharpe |
+
+### Method B — Equity Curve (4 tests)
+
+| Test | What it verifies |
+|------|-----------------|
+| Known single trade | CAGR from periodic closes matches hand calculation |
+| Two overlapping trades | Returns averaged at each timestamp (1/N capital split) |
+| Missing `periodic_closes` | Trade skipped, doesn't corrupt equity curve |
+| Fewer than 2 timestamps | Returns `None` |
+
+### Market Hours & Bar Counting (4 tests)
+
+These confirm that **duration is measured in market time, not wall-clock time**:
+
+| Test | What it verifies |
+|------|-----------------|
+| Overnight gap structure | Bar 389 = 15:59, bar 390 = next day 09:30 (no fake bars) |
+| Multi-day `bars_held` | 391 market bars, not 1440 wall-clock minutes |
+| Weekend gap | Friday → Monday, no Saturday/Sunday bars |
+| Ann(A) uses market time | Same P&L with fewer market bars → higher annualized return |
+
+> **Key insight**: `bars_held` counts actual 1-min OHLCV bars (market hours only). The `hold_minutes` field displayed in the Duration column uses wall-clock time (entry→exit timestamp delta), which includes overnight gaps. This is display-only — no return computation uses `hold_minutes`.
+
+### Trading Hours Filter (3 tests)
+
+| Test | What it verifies |
+|------|-----------------|
+| Regular hours (`16:00`) | Exactly 390 bars (09:30–15:59) |
+| Extended hours (`20:00`) | 630 bars (09:30–19:59) |
+| `None` (no filter) | All bars pass through |
+
+### Periodic Close Extraction (4 tests)
+
+| Test | What it verifies |
+|------|-----------------|
+| Hourly resolution | ~6–7 periods per trading day |
+| Every-bar resolution | Returns every bar |
+| Zero bars held | Empty list |
+| Overnight gap | No phantom periods outside market hours |
+
+### Transaction Cost Deduction (7 tests)
+
+| Test | What it verifies |
+|------|-----------------|
+| 10 bps reduces P&L | `pnl_pct` decreases by 0.10 percentage points |
+| Entry price adjusted | Increases by 0.10% (for Method B equity curve) |
+| Zero cost | No change to any field |
+| Losing trade | Cost makes it worse |
+| `None` P&L | Stays `None` |
+| Ann(A) reduction | Cost-adjusted Ann(A) < raw Ann(A) |
+| Sign flip | Marginal winner → loser with sufficient cost |
+
+### Sharpe Ratio Properties (3 tests)
+
+| Test | What it verifies |
+|------|-----------------|
+| Identical trades | Zero variance → Sharpe is `None` |
+| Mostly positive | Positive Sharpe |
+| All negative | Negative Sharpe |
+
+### Edge Cases (6 tests)
+
+| Test | What it verifies |
+|------|-----------------|
+| Non-overlapping A vs B | Both methods positive, same ballpark |
+| Breakeven (0% P&L) | ~0% annualized return |
+| +500% gain | No overflow |
+| −99% loss | Finite negative result |
+| −100% loss | Handles `ln(0)` gracefully |
+| 1-bar trade | Very high annualized return (correct math) |
+
+### Running
+
+```bash
+uv run python -m pytest tests/test_backtest_sanity.py -v -s
+```
