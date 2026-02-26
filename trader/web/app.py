@@ -918,6 +918,7 @@ def create_app(
         min_hold = body.get("min_hold", 5)
         guard_stop_pct = body.get("guard_stop_pct", 0)
         guard_target_pct = body.get("guard_target_pct", 0)
+        cost_bps = body.get("cost_bps", 10)
 
         if isinstance(filters, dict):
             sorted_rows, _ = _snapshot_rows_for_filters(
@@ -965,6 +966,18 @@ def create_app(
             guard_stop_pct, guard_target_pct, settings.price_delay_minutes,
             res_min,
         )
+        # Apply transaction cost deduction
+        if cost_bps > 0:
+            cost_pct = cost_bps / 100  # bps → percentage points
+            cost_frac = cost_bps / 10000  # bps → fraction
+            for r in results:
+                if r.pnl_pct is not None:
+                    r.pnl_pct -= cost_pct
+                    r.pnl_pct = round(r.pnl_pct, 4)
+                # Adjust entry price upward so Method B's equity curve reflects cost
+                if r.entry_price and r.entry_price > 0:
+                    r.entry_price *= 1 + cost_frac
+
         trades = [r.to_dict() for r in results]
         valid = [r for r in results if r.pnl_pct is not None]
         count = len(valid)

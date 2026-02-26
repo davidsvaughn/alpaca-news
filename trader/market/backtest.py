@@ -899,7 +899,7 @@ def _run_volume_delta_divergence(df, entry_idx, entry_price, params):
     for i in range(entry_idx, len(df)):
         bar = df.iloc[i]
         bars_held = i - entry_idx + 1
-        if i < lookback:
+        if (i - entry_idx) < lookback:
             continue
         # Price at new rolling high?
         window_start = max(entry_idx, i - lookback)
