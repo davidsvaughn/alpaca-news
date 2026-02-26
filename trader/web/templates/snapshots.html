@@ -25,6 +25,174 @@
 }
 .fx:hover { color: #333; }
 .fcw.has-val .fx { display: block; }
+
+.snapshots-top-controls { gap: .6rem .8rem; }
+
+.bt-toggle-btn {
+  min-width: 128px;
+}
+
+.bt-panel {
+  border: 1px solid #d5dce5;
+  background: linear-gradient(180deg, #f8fbff 0%, #f5f7fb 100%);
+}
+
+.bt-toolbar {
+  display: flex;
+  align-items: end;
+  justify-content: space-between;
+  gap: .75rem 1rem;
+  flex-wrap: wrap;
+  border-bottom: 1px solid #d8dee8;
+  padding-bottom: .8rem;
+}
+
+.bt-strategy-row {
+  display: flex;
+  align-items: end;
+  gap: .5rem .6rem;
+  flex-wrap: wrap;
+}
+
+.bt-ui-label {
+  display: block;
+  margin-bottom: .2rem;
+  font-size: .69rem;
+  color: #5e6978;
+  text-transform: uppercase;
+  letter-spacing: .05em;
+  font-weight: 700;
+}
+
+#bt-strategy {
+  min-width: 230px;
+}
+
+.bt-action-group .btn {
+  min-width: 68px;
+}
+
+.bt-layout {
+  margin-top: .75rem;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(270px, 1fr));
+  gap: .7rem;
+}
+
+.bt-section {
+  background: #fff;
+  border: 1px solid #d9e0ea;
+  border-radius: .6rem;
+  padding: .65rem .75rem;
+}
+
+.bt-section-title {
+  margin: 0 0 .45rem;
+  font-size: .68rem;
+  text-transform: uppercase;
+  letter-spacing: .05em;
+  font-weight: 700;
+}
+
+.bt-section-params .bt-section-title { color: #0d6efd; }
+.bt-section-session .bt-section-title { color: #b26a00; }
+.bt-section-risk .bt-section-title { color: #b4232f; }
+
+.bt-param-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(145px, 1fr));
+  gap: .5rem .6rem;
+}
+
+.bt-param-field label {
+  display: block;
+  margin-bottom: .18rem;
+  font-size: .72rem;
+  color: #516072;
+  white-space: nowrap;
+}
+
+.bt-param-field .bt-param {
+  font-size: .8rem;
+}
+
+.bt-inline-controls {
+  display: flex;
+  align-items: center;
+  gap: .7rem .8rem;
+  flex-wrap: wrap;
+}
+
+.bt-control-label {
+  font-size: .72rem;
+  color: #576477;
+  margin-right: .2rem;
+  white-space: nowrap;
+}
+
+.bt-short-input {
+  width: 74px;
+}
+
+.bt-stats {
+  margin-top: .8rem;
+  border-top: 1px solid #d8dee8;
+  padding-top: .75rem;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  gap: .55rem;
+}
+
+.bt-metric {
+  background: #fff;
+  border: 1px solid #d9e0ea;
+  border-radius: .5rem;
+  padding: .38rem .55rem;
+  min-height: 48px;
+  display: flex;
+  align-items: center;
+  gap: .35rem;
+  flex-wrap: wrap;
+}
+
+.bt-metric-label {
+  font-size: .72rem;
+  color: #5f6b7b;
+}
+
+.bt-metric-pair {
+  display: flex;
+  flex-direction: column;
+  gap: .28rem;
+}
+
+.bt-metric-row {
+  display: flex;
+  align-items: center;
+  gap: .35rem;
+  flex-wrap: wrap;
+}
+
+.bt-metric-divider {
+  height: 1px;
+  background: #e3e8ef;
+}
+
+@media (max-width: 768px) {
+  .bt-action-group {
+    width: 100%;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: .5rem;
+  }
+  .bt-action-group .btn {
+    width: 100%;
+  }
+  #bt-strategy {
+    min-width: 0;
+    width: 100%;
+  }
+}
 {% endblock %}
 
 {% block content %}
@@ -34,7 +202,10 @@
 </div>
 
 <!-- Controls above table -->
-<div class="d-flex align-items-center gap-3 mb-3 flex-wrap">
+<div class="d-flex align-items-center snapshots-top-controls mb-3 flex-wrap">
+  <button id="bt-panel-toggle-btn" class="btn btn-sm btn-outline-primary bt-toggle-btn" onclick="toggleBacktestPanel()">
+    <span id="bt-toggle-label">Backtest</span>
+  </button>
   <div class="form-check form-switch me-1">
     <input class="form-check-input" type="checkbox" id="explored-toggle"
            {% if explored_only %}checked{% endif %}
@@ -47,74 +218,97 @@
           onclick="deleteSelectedSnapshots()">
     Delete selected (<span id="sel-count">0</span>)
   </button>
-  <button class="btn btn-sm btn-outline-primary ms-auto" onclick="toggleBacktestPanel()">
-    <span id="bt-toggle-label">Backtest</span>
-  </button>
 </div>
 
 <!-- Backtest panel -->
-<div id="backtest-panel" class="card card-body py-2 px-3 mb-3 bg-light d-none">
-  <div class="d-flex align-items-center gap-3 flex-wrap">
-    <label class="small fw-semibold mb-0">Exit Strategy:</label>
-    <select id="bt-strategy" class="form-select form-select-sm" style="width:220px;font-size:.8rem;" onchange="onStrategyChange()">
-      <option value="">-- select --</option>
-    </select>
-    <div id="bt-params" class="d-flex align-items-center gap-2 flex-wrap"></div>
-    <button id="bt-run-btn" class="btn btn-sm btn-primary" onclick="runBacktest()" disabled>Run</button>
-    <button id="bt-clear-btn" class="btn btn-sm btn-outline-secondary d-none" onclick="clearBacktest()">Clear</button>
-    <div class="d-flex align-items-center gap-1 ms-2" style="border-left:1px solid #ccc;padding-left:8px;">
-      <div class="form-check form-switch mb-0">
-        <input class="form-check-input" type="checkbox" id="bt-ext-hours" onchange="onExtHoursToggle()">
-        <label class="form-check-label small text-muted mb-0" for="bt-ext-hours">Ext hours</label>
+<div id="backtest-panel" class="card bt-panel mb-3 d-none">
+  <div class="card-body p-3">
+    <div class="bt-toolbar">
+      <div class="bt-strategy-row">
+        <div>
+          <label class="bt-ui-label mb-1" for="bt-strategy">Exit Strategy</label>
+          <select id="bt-strategy" class="form-select form-select-sm" onchange="onStrategyChange()">
+            <option value="">-- select --</option>
+          </select>
+        </div>
+        <div class="btn-group btn-group-sm bt-action-group" role="group" aria-label="backtest actions">
+          <button id="bt-run-btn" class="btn btn-primary" onclick="runBacktest()" disabled>Run</button>
+          <button id="bt-clear-btn" class="btn btn-outline-secondary d-none" onclick="clearBacktest()">Clear</button>
+        </div>
+        <span id="bt-spinner" class="spinner-border spinner-border-sm text-primary d-none"></span>
       </div>
-      <input type="time" id="bt-close-time" value="16:00" class="form-control form-control-sm d-none"
-             style="width:90px;font-size:.75rem;" onchange="saveBtSettings()">
     </div>
-    <div class="d-flex align-items-center gap-1 ms-1">
-      <label class="small text-muted mb-0" style="white-space:nowrap;">Min hold:</label>
-      <input type="number" id="bt-min-hold" value="5" min="0" max="60" step="1"
-             class="form-control form-control-sm" style="width:55px;font-size:.75rem;" onchange="saveBtSettings()">
-      <span class="small text-muted">m</span>
+
+    <div class="bt-layout">
+      <div class="bt-section bt-section-params">
+        <p class="bt-section-title">Strategy Parameters</p>
+        <div id="bt-params" class="bt-param-grid"></div>
+      </div>
+
+      <div class="bt-section bt-section-session">
+        <p class="bt-section-title">Execution Window</p>
+        <div class="bt-inline-controls">
+          <div class="form-check form-switch mb-0">
+            <input class="form-check-input" type="checkbox" id="bt-ext-hours" onchange="onExtHoursToggle()">
+            <label class="form-check-label small text-muted mb-0" for="bt-ext-hours">Extended Hours</label>
+          </div>
+          <label class="bt-control-label mb-0" for="bt-close-time">Close Time</label>
+          <input type="time" id="bt-close-time" value="16:00" class="form-control form-control-sm bt-short-input d-none"
+                 onchange="saveBtSettings()">
+          <label class="bt-control-label mb-0" for="bt-min-hold">Min Hold</label>
+          <input type="number" id="bt-min-hold" value="5" min="0" max="60" step="1"
+                 class="form-control form-control-sm bt-short-input" onchange="saveBtSettings()">
+          <span class="small text-muted">m</span>
+        </div>
+      </div>
+
+      <div class="bt-section bt-section-risk">
+        <p class="bt-section-title">Risk & Cost Controls</p>
+        <div class="bt-inline-controls">
+          <label class="bt-control-label mb-0" for="bt-guard-stop">Stop %</label>
+          <input type="number" id="bt-guard-stop" value="0" min="0" max="50" step="0.5"
+                 class="form-control form-control-sm bt-short-input" onchange="saveBtSettings()">
+          <label class="bt-control-label mb-0" for="bt-guard-target">Target %</label>
+          <input type="number" id="bt-guard-target" value="0" min="0" max="100" step="0.5"
+                 class="form-control form-control-sm bt-short-input" onchange="saveBtSettings()">
+          <label class="bt-control-label mb-0" for="bt-cost-bps"
+                 title="Round-trip transaction cost in basis points">Cost (bps)</label>
+          <input type="number" id="bt-cost-bps" value="10" min="0" max="100" step="1"
+                 class="form-control form-control-sm bt-short-input" onchange="saveBtSettings()">
+        </div>
+      </div>
     </div>
-    <div class="d-flex align-items-center gap-1 ms-1" style="border-left:1px solid #ccc;padding-left:8px;">
-      <label class="small text-muted mb-0" style="white-space:nowrap;">Guard:</label>
-      <label class="small text-muted mb-0">stop</label>
-      <input type="number" id="bt-guard-stop" value="0" min="0" max="50" step="0.5"
-             class="form-control form-control-sm" style="width:55px;font-size:.75rem;" onchange="saveBtSettings()">
-      <label class="small text-muted mb-0">target</label>
-      <input type="number" id="bt-guard-target" value="0" min="0" max="100" step="0.5"
-             class="form-control form-control-sm" style="width:55px;font-size:.75rem;" onchange="saveBtSettings()">
-      <span class="small text-muted">%</span>
-    </div>
-    <div class="d-flex align-items-center gap-1 ms-1" style="border-left:1px solid #ccc;padding-left:8px;">
-      <label class="small text-muted mb-0" style="white-space:nowrap;" title="Round-trip transaction cost in basis points">Cost:</label>
-      <input type="number" id="bt-cost-bps" value="10" min="0" max="100" step="1"
-             class="form-control form-control-sm" style="width:55px;font-size:.75rem;" onchange="saveBtSettings()">
-      <span class="small text-muted">bps</span>
-    </div>
-    <span id="bt-spinner" class="spinner-border spinner-border-sm text-primary d-none"></span>
-  </div>
-  <div id="bt-stats" class="d-none d-flex gap-3 flex-wrap align-items-center mt-2 pt-2" style="border-top:1px solid #dee2e6;">
-    <div id="bt-avg">
-      <span class="small text-muted">Avg P&L:</span>
-      <span id="bt-avg-val" class="fw-bold"></span>
-      <span id="bt-avg-count" class="small text-muted ms-1"></span>
-    </div>
-    <div id="bt-ann-a" style="border-left:1px solid #ccc;padding-left:8px;">
-      <span class="small text-muted" title="Annualized return (unlimited capital, time-weighted log return)">Ann(A):</span>
-      <span id="bt-ann-a-val" class="fw-bold"></span>
-    </div>
-    <div id="bt-sharpe-a">
-      <span class="small text-muted" title="Sharpe ratio (unlimited capital)">Sharpe(A):</span>
-      <span id="bt-sharpe-a-val" class="fw-bold"></span>
-    </div>
-    <div id="bt-ann-b" style="border-left:1px solid #ccc;padding-left:8px;">
-      <span class="small text-muted" title="Annualized return (fixed capital split, daily equity curve CAGR)">Ann(B):</span>
-      <span id="bt-ann-b-val" class="fw-bold"></span>
-    </div>
-    <div id="bt-sharpe-b">
-      <span class="small text-muted" title="Sharpe ratio (fixed capital split)">Sharpe(B):</span>
-      <span id="bt-sharpe-b-val" class="fw-bold"></span>
+
+    <div id="bt-stats" class="bt-stats d-none">
+      <div id="bt-avg" class="bt-metric">
+        <span class="bt-metric-label">Avg P&L:</span>
+        <span id="bt-avg-val" class="fw-bold"></span>
+        <span id="bt-avg-count" class="small text-muted ms-1"></span>
+      </div>
+
+      <div id="bt-pair-a" class="bt-metric bt-metric-pair">
+        <div id="bt-ann-a" class="bt-metric-row">
+          <span class="bt-metric-label" title="Annualized return (unlimited capital, time-weighted log return)">Ann(A):</span>
+          <span id="bt-ann-a-val" class="fw-bold"></span>
+        </div>
+        <div id="bt-pair-a-divider" class="bt-metric-divider"></div>
+        <div id="bt-sharpe-a" class="bt-metric-row">
+          <span class="bt-metric-label" title="Sharpe ratio (unlimited capital)">Sharpe(A):</span>
+          <span id="bt-sharpe-a-val" class="fw-bold"></span>
+        </div>
+      </div>
+
+      <div id="bt-pair-b" class="bt-metric bt-metric-pair">
+        <div id="bt-ann-b" class="bt-metric-row">
+          <span class="bt-metric-label" title="Annualized return (fixed capital split, daily equity curve CAGR)">Ann(B):</span>
+          <span id="bt-ann-b-val" class="fw-bold"></span>
+        </div>
+        <div id="bt-pair-b-divider" class="bt-metric-divider"></div>
+        <div id="bt-sharpe-b" class="bt-metric-row">
+          <span class="bt-metric-label" title="Sharpe ratio (fixed capital split)">Sharpe(B):</span>
+          <span id="bt-sharpe-b-val" class="fw-bold"></span>
+        </div>
+      </div>
     </div>
   </div>
 </div>
@@ -493,8 +687,14 @@ function _getMarketClose() {
 function toggleBacktestPanel() {
   var panel = document.getElementById('backtest-panel');
   var label = document.getElementById('bt-toggle-label');
+  var btn = document.getElementById('bt-panel-toggle-btn');
   var hidden = panel.classList.toggle('d-none');
   label.textContent = hidden ? 'Backtest' : 'Hide Backtest';
+  if (btn) {
+    btn.classList.toggle('btn-outline-primary', hidden);
+    btn.classList.toggle('btn-primary', !hidden);
+    btn.setAttribute('aria-expanded', hidden ? 'false' : 'true');
+  }
   if (!hidden && !_btStrategies) {
     // First open: fetch strategy definitions
     loadBtSettings();
@@ -555,14 +755,14 @@ function onStrategyChange() {
   Object.keys(strat.params).forEach(function(pk) {
     var p = strat.params[pk];
     var val = sp[pk] !== undefined ? sp[pk] : p['default'];
-    var html = '<div class="d-flex align-items-center gap-1">'
-      + '<label class="small text-muted mb-0" style="white-space:nowrap;">' + p.label + ':</label>'
+    var html = '<div class="bt-param-field">'
+      + '<label>' + p.label + ':</label>'
       + '<input type="number" class="form-control form-control-sm bt-param" data-param="' + pk + '"'
       + ' value="' + val + '"'
       + (p.min != null ? ' min="' + p.min + '"' : '')
       + (p.max != null ? ' max="' + p.max + '"' : '')
       + (p.step != null ? ' step="' + p.step + '"' : '')
-      + ' style="width:80px;font-size:.8rem;">'
+      + '>'
       + '</div>';
     paramsDiv.insertAdjacentHTML('beforeend', html);
   });
@@ -749,6 +949,18 @@ function _showMetric(divId, valId, value, decimals) {
   div.classList.remove('d-none');
 }
 
+function _syncMetricPair(cardId, firstId, secondId, dividerId) {
+  var card = document.getElementById(cardId);
+  var first = document.getElementById(firstId);
+  var second = document.getElementById(secondId);
+  var divider = document.getElementById(dividerId);
+  if (!card || !first || !second) return;
+  var firstHidden = first.classList.contains('d-none');
+  var secondHidden = second.classList.contains('d-none');
+  card.classList.toggle('d-none', firstHidden && secondHidden);
+  if (divider) divider.classList.toggle('d-none', firstHidden || secondHidden);
+}
+
 function _updateAvgPnl() {
   var statsDiv = document.getElementById('bt-stats');
   var s = _btSummary;
@@ -766,6 +978,8 @@ function _updateAvgPnl() {
   _showSharpe('bt-sharpe-a', 'bt-sharpe-a-val', s.sharpe_a);
   _showMetric('bt-ann-b', 'bt-ann-b-val', s.ann_b, 1);
   _showSharpe('bt-sharpe-b', 'bt-sharpe-b-val', s.sharpe_b);
+  _syncMetricPair('bt-pair-a', 'bt-ann-a', 'bt-sharpe-a', 'bt-pair-a-divider');
+  _syncMetricPair('bt-pair-b', 'bt-ann-b', 'bt-sharpe-b', 'bt-pair-b-divider');
 
   statsDiv.classList.remove('d-none');
 }
