@@ -13,6 +13,7 @@
       <col data-col="mkt_cap" style="width:6%">
       <col data-col="pe" style="width:6%">
       <col data-col="tools" style="width:4%">
+      <col data-col="exit_pnl" style="width:5%">
       <col data-col="cost" style="width:4%">
       <col data-col="action" style="width:4%">
     </colgroup>
@@ -50,6 +51,7 @@
         <th></th>
         <th></th>
         <th></th>
+        <th></th>
       </tr>
       <!-- Column headers -->
       <tr>
@@ -64,6 +66,7 @@
         <th data-col="mkt_cap" data-sort="num" class="resizable-th sortable-th"><span class="col-label">MktCap</span><span class="sort-arrow"></span><div class="resize-handle"></div></th>
         <th data-col="pe" data-sort="num" class="resizable-th sortable-th"><span class="col-label">P/E</span><span class="sort-arrow"></span><div class="resize-handle"></div></th>
         <th data-col="tools" data-sort="num" class="resizable-th sortable-th"><span class="col-label">Tools</span><span class="sort-arrow"></span><div class="resize-handle"></div></th>
+        <th data-col="exit_pnl" data-sort="num" class="resizable-th sortable-th"><span class="col-label">Exit P&L</span><span class="sort-arrow"></span><div class="resize-handle"></div></th>
         <th data-col="cost" data-sort="num" class="resizable-th sortable-th"><span class="col-label">Cost</span><span class="sort-arrow"></span><div class="resize-handle"></div></th>
         <th data-col="action"></th>
       </tr>
@@ -73,7 +76,10 @@
       {% set primary_sym = s.trigger.symbols[0] if s.trigger.symbols else '' %}
       {% set dir = s.prediction.direction if s.prediction and s.prediction.direction else '' %}
       {% set conf = s.prediction.confidence if s.prediction and s.prediction.confidence is defined else None %}
-      <tr>
+      <tr data-snapshot-id="{{ s.snapshot_id }}"
+          data-entry-price="{{ s.price_10min if s.price_10min is defined and s.price_10min else '' }}"
+          data-entry-date="{{ s.created_at[:10] if s.created_at else '' }}"
+          data-primary-symbol="{{ primary_sym }}">
         <td><input type="checkbox" class="snap-check" value="{{ s.snapshot_id }}" onchange="updateDeleteBtn()"></td>
         <td class="small text-muted text-nowrap" data-sort-val="{{ s.created_at }}">{{ s.created_at | fmt_dt("short") }}</td>
         <td class="text-truncate">{{ s.trigger.headline }}</td>
@@ -115,6 +121,7 @@
         <td class="small" data-sort-val="{{ s.tool_traces|length if s.tool_traces else 0 }}">
           {% if s.tool_traces %}{{ s.tool_traces|length }}{% else %}<span class="text-muted">&mdash;</span>{% endif %}
         </td>
+        <td class="small exit-pnl" data-col="exit_pnl" data-sort-val=""><span class="text-muted">&mdash;</span></td>
         <td class="small" data-sort-val="{{ s.cost_summary.total_usd if s.cost_summary and s.cost_summary.total_usd is defined else 0 }}">
           {% if s.cost_summary and s.cost_summary.total_usd is defined %}
             ${{ "%.2f"|format(s.cost_summary.total_usd) }}

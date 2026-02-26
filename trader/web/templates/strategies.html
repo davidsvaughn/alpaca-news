@@ -1,0 +1,124 @@
+{% extends "base.html" %}
+
+{% block title %}alpaca-news | Strategies{% endblock %}
+
+{% block extra_css %}
+.param-input { max-width: 100px; }
+.section-badge { font-size: .7rem; }
+{% endblock %}
+
+{% block content %}
+<h2 class="mb-3">Exit Strategies</h2>
+<p class="text-muted small mb-3">Configure parameters for each exit strategy. Changes are saved automatically and used on the Snapshots backtest panel.</p>
+
+<div class="accordion" id="strategies-accordion">
+{% set sections = {} %}
+{% for key, s in strategies.items() %}
+  {% if s.section not in sections %}
+    {% set _ = sections.update({s.section: true}) %}
+    <h6 class="text-muted mt-3 mb-2">{{ s.section }}</h6>
+  {% endif %}
+  <div class="accordion-item">
+    <h2 class="accordion-header">
+      <button class="accordion-button collapsed py-2" type="button"
+              data-bs-toggle="collapse" data-bs-target="#strat-{{ key }}">
+        <span class="fw-semibold me-2">{{ loop.index }}.</span>
+        {{ s.name }}
+        <span class="badge bg-secondary section-badge ms-2">{{ s.section }}</span>
+      </button>
+    </h2>
+    <div id="strat-{{ key }}" class="accordion-collapse collapse" data-bs-parent="#strategies-accordion">
+      <div class="accordion-body py-2">
+        <p class="text-muted small mb-2">{{ s.description }}</p>
+        <table class="table table-sm table-borderless mb-1" style="max-width:400px;">
+          <thead>
+            <tr class="small text-muted">
+              <th>Parameter</th>
+              <th>Value</th>
+              <th>Default</th>
+              <th>Range</th>
+            </tr>
+          </thead>
+          <tbody>
+          {% for pk, pv in s.params.items() %}
+            <tr>
+              <td class="small">{{ pv.label }}</td>
+              <td>
+                <input type="number"
+                       class="form-control form-control-sm param-input strat-param"
+                       data-strategy="{{ key }}"
+                       data-param="{{ pk }}"
+                       value="{{ pv.default }}"
+                       {% if pv.min is not none %}min="{{ pv.min }}"{% endif %}
+                       {% if pv.max is not none %}max="{{ pv.max }}"{% endif %}
+                       {% if pv.step is not none %}step="{{ pv.step }}"{% endif %}>
+              </td>
+              <td class="small text-muted">{{ pv.default }}</td>
+              <td class="small text-muted">
+                {% if pv.min is not none and pv.max is not none %}
+                  {{ pv.min }}–{{ pv.max }}
+                {% endif %}
+              </td>
+            </tr>
+          {% endfor %}
+          </tbody>
+        </table>
+        <button class="btn btn-sm btn-outline-secondary"
+                onclick="resetStrategy('{{ key }}')">Reset defaults</button>
+      </div>
+    </div>
+  </div>
+{% endfor %}
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+var _SP_KEY = 'strategy_params';
+
+function _loadParams() {
+  try { return JSON.parse(localStorage.getItem(_SP_KEY)) || {}; } catch(e) { return {}; }
+}
+
+function _saveParams(obj) {
+  localStorage.setItem(_SP_KEY, JSON.stringify(obj));
+}
+
+function resetStrategy(stratKey) {
+  var params = _loadParams();
+  delete params[stratKey];
+  _saveParams(params);
+  // Reset inputs to default
+  document.querySelectorAll('.strat-param[data-strategy="' + stratKey + '"]').forEach(function(el) {
+    // Fetch default from the server-rendered value
+    var row = el.closest('tr');
+    var defCell = row.querySelector('td:nth-child(3)');
+    el.value = defCell ? defCell.textContent.trim() : el.getAttribute('value');
+  });
+}
+
+// Load saved params on page load
+(function() {
+  var saved = _loadParams();
+  Object.keys(saved).forEach(function(stratKey) {
+    var sp = saved[stratKey];
+    Object.keys(sp).forEach(function(pk) {
+      var el = document.querySelector('.strat-param[data-strategy="' + stratKey + '"][data-param="' + pk + '"]');
+      if (el) el.value = sp[pk];
+    });
+  });
+
+  // Auto-save on change
+  document.querySelectorAll('.strat-param').forEach(function(el) {
+    el.addEventListener('input', function() {
+      var params = _loadParams();
+      var strat = el.getAttribute('data-strategy');
+      var param = el.getAttribute('data-param');
+      if (!params[strat]) params[strat] = {};
+      params[strat][param] = parseFloat(el.value);
+      _saveParams(params);
+    });
+  });
+})();
+</script>
+{% endblock %}

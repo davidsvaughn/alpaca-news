@@ -47,6 +47,28 @@
           onclick="deleteSelectedSnapshots()">
     Delete selected (<span id="sel-count">0</span>)
   </button>
+  <button class="btn btn-sm btn-outline-primary ms-auto" onclick="toggleBacktestPanel()">
+    <span id="bt-toggle-label">Backtest</span>
+  </button>
+</div>
+
+<!-- Backtest panel -->
+<div id="backtest-panel" class="card card-body py-2 px-3 mb-3 bg-light d-none">
+  <div class="d-flex align-items-center gap-3 flex-wrap">
+    <label class="small fw-semibold mb-0">Exit Strategy:</label>
+    <select id="bt-strategy" class="form-select form-select-sm" style="width:220px;font-size:.8rem;" onchange="onStrategyChange()">
+      <option value="">-- select --</option>
+    </select>
+    <div id="bt-params" class="d-flex align-items-center gap-2 flex-wrap"></div>
+    <button id="bt-run-btn" class="btn btn-sm btn-primary" onclick="runBacktest()" disabled>Run</button>
+    <button id="bt-clear-btn" class="btn btn-sm btn-outline-secondary d-none" onclick="clearBacktest()">Clear</button>
+    <div id="bt-avg" class="d-none ms-2">
+      <span class="small text-muted">Avg P&L:</span>
+      <span id="bt-avg-val" class="fw-bold"></span>
+      <span id="bt-avg-count" class="small text-muted ms-1"></span>
+    </div>
+    <span id="bt-spinner" class="spinner-border spinner-border-sm text-primary d-none"></span>
+  </div>
 </div>
 
 <!-- Snapshots table -->
@@ -574,6 +596,249 @@ function fetchFundamentals() {
 }
 
 // =====================================================================
+// Backtest panel
+// =====================================================================
+var _btStrategies = null;  // cached strategy definitions
+var _btResults = {};       // snapshot_id -> result dict
+var _btCurrentStrategy = '';
+var _BT_STRAT_KEY = 'bt_last_strategy';
+var _SP_KEY = 'strategy_params';
+
+function toggleBacktestPanel() {
+  var panel = document.getElementById('backtest-panel');
+  var label = document.getElementById('bt-toggle-label');
+  var hidden = panel.classList.toggle('d-none');
+  label.textContent = hidden ? 'Backtest' : 'Hide Backtest';
+  if (!hidden && !_btStrategies) {
+    // First open: fetch strategy definitions
+    fetch('/api/strategies')
+      .then(function(r) { return r.json(); })
+      .then(function(data) {
+        _btStrategies = data;
+        _populateStrategyDropdown();
+        // Restore last-used strategy
+        var last = localStorage.getItem(_BT_STRAT_KEY);
+        if (last && data[last]) {
+          document.getElementById('bt-strategy').value = last;
+          onStrategyChange();
+        }
+      });
+  }
+}
+
+function _populateStrategyDropdown() {
+  var sel = document.getElementById('bt-strategy');
+  // Group by section
+  var sections = {};
+  Object.keys(_btStrategies).forEach(function(key) {
+    var s = _btStrategies[key];
+    if (!sections[s.section]) sections[s.section] = [];
+    sections[s.section].push({key: key, name: s.name});
+  });
+  Object.keys(sections).forEach(function(sec) {
+    var og = document.createElement('optgroup');
+    og.label = sec;
+    sections[sec].forEach(function(item) {
+      var opt = document.createElement('option');
+      opt.value = item.key;
+      opt.textContent = item.name;
+      og.appendChild(opt);
+    });
+    sel.appendChild(og);
+  });
+}
+
+function onStrategyChange() {
+  var key = document.getElementById('bt-strategy').value;
+  _btCurrentStrategy = key;
+  var paramsDiv = document.getElementById('bt-params');
+  paramsDiv.innerHTML = '';
+  document.getElementById('bt-run-btn').disabled = !key;
+
+  if (!key || !_btStrategies[key]) return;
+
+  localStorage.setItem(_BT_STRAT_KEY, key);
+
+  // Load saved params
+  var saved = {};
+  try { saved = JSON.parse(localStorage.getItem(_SP_KEY)) || {}; } catch(e) {}
+  var sp = saved[key] || {};
+
+  var strat = _btStrategies[key];
+  Object.keys(strat.params).forEach(function(pk) {
+    var p = strat.params[pk];
+    var val = sp[pk] !== undefined ? sp[pk] : p['default'];
+    var html = '<div class="d-flex align-items-center gap-1">'
+      + '<label class="small text-muted mb-0" style="white-space:nowrap;">' + p.label + ':</label>'
+      + '<input type="number" class="form-control form-control-sm bt-param" data-param="' + pk + '"'
+      + ' value="' + val + '"'
+      + (p.min != null ? ' min="' + p.min + '"' : '')
+      + (p.max != null ? ' max="' + p.max + '"' : '')
+      + (p.step != null ? ' step="' + p.step + '"' : '')
+      + ' style="width:80px;font-size:.8rem;">'
+      + '</div>';
+    paramsDiv.insertAdjacentHTML('beforeend', html);
+  });
+
+  // Auto-save param changes
+  paramsDiv.querySelectorAll('.bt-param').forEach(function(el) {
+    el.addEventListener('input', function() {
+      var allSaved = {};
+      try { allSaved = JSON.parse(localStorage.getItem(_SP_KEY)) || {}; } catch(e) {}
+      if (!allSaved[key]) allSaved[key] = {};
+      allSaved[key][el.getAttribute('data-param')] = parseFloat(el.value);
+      localStorage.setItem(_SP_KEY, JSON.stringify(allSaved));
+    });
+  });
+}
+
+function _collectParams() {
+  var params = {};
+  document.querySelectorAll('#bt-params .bt-param').forEach(function(el) {
+    params[el.getAttribute('data-param')] = parseFloat(el.value);
+  });
+  return params;
+}
+
+function _collectEntries() {
+  var entries = [];
+  var tbl = document.getElementById('snapshots-tbl');
+  if (!tbl) return entries;
+  tbl.querySelectorAll('tbody tr').forEach(function(row) {
+    // Skip hidden (filtered out) rows
+    if (row.style.display === 'none') return;
+    var sid = row.getAttribute('data-snapshot-id');
+    var price = row.getAttribute('data-entry-price');
+    var date = row.getAttribute('data-entry-date');
+    var sym = row.getAttribute('data-primary-symbol');
+    if (!sid || !price || !date || !sym) return;
+    price = parseFloat(price);
+    if (isNaN(price) || price <= 0) return;
+    entries.push({snapshot_id: sid, symbol: sym, entry_price: price, entry_date: date});
+  });
+  return entries;
+}
+
+function runBacktest() {
+  var strategy = _btCurrentStrategy;
+  if (!strategy) return;
+  var params = _collectParams();
+  var entries = _collectEntries();
+  if (!entries.length) {
+    alert('No snapshots with Price@10 data on this page.');
+    return;
+  }
+
+  document.getElementById('bt-spinner').classList.remove('d-none');
+  document.getElementById('bt-run-btn').disabled = true;
+
+  fetch('/api/strategies/backtest', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({strategy: strategy, params: params, entries: entries}),
+  })
+  .then(function(r) { return r.json(); })
+  .then(function(results) {
+    _btResults = {};
+    results.forEach(function(r) { _btResults[r.snapshot_id] = r; });
+    _displayResults();
+    document.getElementById('bt-clear-btn').classList.remove('d-none');
+  })
+  .catch(function(err) {
+    console.error('Backtest error:', err);
+    alert('Backtest failed. Check console for details.');
+  })
+  .finally(function() {
+    document.getElementById('bt-spinner').classList.add('d-none');
+    document.getElementById('bt-run-btn').disabled = false;
+  });
+}
+
+function _displayResults() {
+  var tbl = document.getElementById('snapshots-tbl');
+  if (!tbl) return;
+
+  // Update each row's Exit P&L cell
+  tbl.querySelectorAll('tbody tr').forEach(function(row) {
+    var sid = row.getAttribute('data-snapshot-id');
+    var cell = row.querySelector('.exit-pnl');
+    if (!cell) return;
+    var r = _btResults[sid];
+    if (!r) {
+      cell.innerHTML = '<span class="text-muted">&mdash;</span>';
+      cell.setAttribute('data-sort-val', '');
+      return;
+    }
+    if (r.pnl_pct == null) {
+      cell.innerHTML = '<span class="text-muted">N/A</span>';
+      cell.setAttribute('data-sort-val', '');
+      return;
+    }
+    var pnl = r.pnl_pct;
+    var sign = pnl >= 0 ? '+' : '';
+    var cls = pnl >= 0 ? 'text-success' : 'text-danger';
+    var prefix = r.exit_reason === 'still_open' ? '<span class="text-muted" style="font-size:.65rem;">open </span>' : '';
+    cell.innerHTML = prefix + '<span class="' + cls + ' fw-semibold">' + sign + pnl.toFixed(1) + '%</span>';
+    cell.setAttribute('data-sort-val', String(pnl));
+    // Tooltip with details
+    var tip = r.exit_reason;
+    if (r.exit_date) tip += ' on ' + r.exit_date;
+    if (r.bars_held) tip += ' (' + r.bars_held + 'd)';
+    if (r.exit_price) tip += ' @ $' + r.exit_price.toFixed(2);
+    cell.title = tip;
+  });
+
+  _updateAvgPnl();
+}
+
+function _updateAvgPnl() {
+  var tbl = document.getElementById('snapshots-tbl');
+  var avgDiv = document.getElementById('bt-avg');
+  var avgVal = document.getElementById('bt-avg-val');
+  var avgCount = document.getElementById('bt-avg-count');
+
+  if (!tbl || !Object.keys(_btResults).length) {
+    avgDiv.classList.add('d-none');
+    return;
+  }
+
+  // Only count visible rows with results
+  var pnls = [];
+  tbl.querySelectorAll('tbody tr').forEach(function(row) {
+    if (row.style.display === 'none') return;
+    var sid = row.getAttribute('data-snapshot-id');
+    var r = _btResults[sid];
+    if (r && r.pnl_pct != null) pnls.push(r.pnl_pct);
+  });
+
+  if (!pnls.length) {
+    avgDiv.classList.add('d-none');
+    return;
+  }
+
+  var avg = pnls.reduce(function(a, b) { return a + b; }, 0) / pnls.length;
+  var sign = avg >= 0 ? '+' : '';
+  avgVal.textContent = sign + avg.toFixed(2) + '%';
+  avgVal.className = 'fw-bold ' + (avg >= 0 ? 'text-success' : 'text-danger');
+  avgCount.textContent = '(' + pnls.length + ' rows)';
+  avgDiv.classList.remove('d-none');
+}
+
+function clearBacktest() {
+  _btResults = {};
+  var tbl = document.getElementById('snapshots-tbl');
+  if (tbl) {
+    tbl.querySelectorAll('.exit-pnl').forEach(function(cell) {
+      cell.innerHTML = '<span class="text-muted">&mdash;</span>';
+      cell.setAttribute('data-sort-val', '');
+      cell.title = '';
+    });
+  }
+  document.getElementById('bt-avg').classList.add('d-none');
+  document.getElementById('bt-clear-btn').classList.add('d-none');
+}
+
+// =====================================================================
 // Post-swap hook
 // =====================================================================
 document.addEventListener('htmx:afterSwap', function(e) {
@@ -591,8 +856,17 @@ document.addEventListener('htmx:afterSwap', function(e) {
     applyClientFilters();
     updateClearAllBtn();
     updateFilterXButtons();
+    // Re-apply cached backtest results after table swap
+    if (Object.keys(_btResults).length) _displayResults();
   }
 });
+
+// Hook into client-side filtering to recalculate avg P&L
+var _origApplyClientFilters = applyClientFilters;
+applyClientFilters = function() {
+  _origApplyClientFilters();
+  if (Object.keys(_btResults).length) _updateAvgPnl();
+};
 
 // Initial load
 (function() {

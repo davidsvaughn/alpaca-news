@@ -205,6 +205,15 @@ def create_app(
             },
         )
 
+    @app.get("/strategies", response_class=HTMLResponse)
+    async def strategies_page(request: Request):
+        from trader.market.backtest import STRATEGIES
+        return templates.TemplateResponse(
+            request=request,
+            name="strategies.html",
+            context={"active_page": "strategies", "strategies": STRATEGIES},
+        )
+
     @app.get("/costs", response_class=HTMLResponse)
     async def costs_page(request: Request):
         daily_history = get_daily_cost_history(db, days=30)
@@ -454,6 +463,29 @@ def create_app(
                 result[sym] = entry
 
         return result
+
+    # ------------------------------------------------------------------
+    # Exit strategy backtest API
+    # ------------------------------------------------------------------
+
+    @app.get("/api/strategies")
+    async def api_strategies():
+        from trader.market.backtest import strategies_json
+        return strategies_json()
+
+    @app.post("/api/strategies/backtest")
+    async def api_backtest(request: Request):
+        import asyncio
+        from trader.market.backtest import run_backtest
+
+        body = await request.json()
+        strategy_key = body.get("strategy", "")
+        params = body.get("params", {})
+        entries = body.get("entries", [])
+        if not entries:
+            return []
+        results = await asyncio.to_thread(run_backtest, strategy_key, params, entries)
+        return [r.to_dict() for r in results]
 
     @app.get("/api/activity-panel", response_class=HTMLResponse)
     async def api_activity_panel(request: Request):
