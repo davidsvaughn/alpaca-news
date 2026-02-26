@@ -24,10 +24,11 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import time
 from collections import defaultdict
 from dataclasses import asdict, dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -252,6 +253,114 @@ class BacktestResult:
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
+
+
+# ---------------------------------------------------------------------------
+# Annualized return helpers
+# ---------------------------------------------------------------------------
+
+_TRADING_DAYS_PER_YEAR = 252
+_BARS_PER_DAY = 390  # 6.5 hours × 60 minutes
+
+
+def compute_ann_a(results: list[BacktestResult]) -> float | None:
+    """Annualized return — unlimited capital (time-weighted log return).
+
+    Annualized = exp(252 × Σln(1+rᵢ) / Σdᵢ) - 1
+    where dᵢ = bars_held / 390 (trading days).
+    Returns percentage, or None if no valid trades.
+    """
+    sum_log = 0.0
+    sum_days = 0.0
+    for r in results:
+        if r.pnl_pct is None:
+            continue
+        sum_log += math.log(1 + r.pnl_pct / 100)
+        sum_days += max(r.bars_held, 1) / _BARS_PER_DAY
+    if sum_days <= 0:
+        return None
+    daily_log = sum_log / sum_days
+    return (math.exp(_TRADING_DAYS_PER_YEAR * daily_log) - 1) * 100
+
+
+def _parse_date(s: str | None) -> date | None:
+    """Parse an ISO-ish timestamp string to a date."""
+    if not s:
+        return None
+    try:
+        return datetime.fromisoformat(s).date()
+    except (ValueError, TypeError):
+        return None
+
+
+def _count_weekdays(start: date, end: date) -> int:
+    """Count weekdays (Mon-Fri) from start to end inclusive."""
+    if start > end:
+        return 1
+    count = 0
+    d = start
+    one_day = timedelta(days=1)
+    while d <= end:
+        if d.weekday() < 5:
+            count += 1
+        d += one_day
+    return max(count, 1)
+
+
+def compute_ann_b(results: list[BacktestResult]) -> float | None:
+    """Annualized return — fixed capital split (daily equity curve CAGR).
+
+    Builds a daily equity curve where capital is split equally among
+    active trades each day.  Returns percentage, or None if insufficient data.
+    """
+    # Build per-trade info: date range + daily log rate
+    trade_infos: list[tuple[date, date, float]] = []  # (entry_d, exit_d, daily_rate)
+    global_min: date | None = None
+    global_max: date | None = None
+
+    for r in results:
+        if r.pnl_pct is None:
+            continue
+        entry_d = _parse_date(r.entry_time)
+        exit_d = _parse_date(r.exit_time)
+        if entry_d is None or exit_d is None:
+            continue
+        if entry_d > exit_d:
+            exit_d = entry_d
+        wd = _count_weekdays(entry_d, exit_d)
+        daily_rate = math.log(1 + r.pnl_pct / 100) / wd
+        trade_infos.append((entry_d, exit_d, daily_rate))
+        if global_min is None or entry_d < global_min:
+            global_min = entry_d
+        if global_max is None or exit_d > global_max:
+            global_max = exit_d
+
+    if not trade_infos or global_min is None or global_max is None:
+        return None
+
+    # Walk weekdays, build equity curve
+    equity = 1.0
+    total_weekdays = 0
+    d = global_min
+    one_day = timedelta(days=1)
+    while d <= global_max:
+        if d.weekday() < 5:
+            total_weekdays += 1
+            # Find active trades
+            sum_rate = 0.0
+            active = 0
+            for entry_d, exit_d, daily_rate in trade_infos:
+                if entry_d <= d <= exit_d:
+                    sum_rate += daily_rate
+                    active += 1
+            if active > 0:
+                equity *= math.exp(sum_rate / active)
+        d += one_day
+
+    if total_weekdays <= 0:
+        return None
+    cagr = (equity ** (_TRADING_DAYS_PER_YEAR / total_weekdays)) - 1
+    return cagr * 100
 
 
 # ---------------------------------------------------------------------------

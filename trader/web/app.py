@@ -907,7 +907,7 @@ def create_app(
     @app.post("/api/strategies/backtest")
     async def api_backtest(request: Request):
         import asyncio
-        from trader.market.backtest import run_backtest
+        from trader.market.backtest import compute_ann_a, compute_ann_b, run_backtest
 
         body = await request.json()
         strategy_key = body.get("strategy", "")
@@ -963,7 +963,21 @@ def create_app(
             run_backtest, strategy_key, params, entries, market_close, min_hold,
             guard_stop_pct, guard_target_pct, settings.price_delay_minutes,
         )
-        return [r.to_dict() for r in results]
+        trades = [r.to_dict() for r in results]
+        valid = [r for r in results if r.pnl_pct is not None]
+        count = len(valid)
+        avg_pnl = round(sum(r.pnl_pct for r in valid) / count, 2) if count else None
+        ann_a = compute_ann_a(results)
+        ann_b = compute_ann_b(results)
+        return {
+            "trades": trades,
+            "summary": {
+                "count": count,
+                "avg_pnl": avg_pnl,
+                "ann_a": round(ann_a, 1) if ann_a is not None else None,
+                "ann_b": round(ann_b, 1) if ann_b is not None else None,
+            },
+        }
 
     @app.get("/api/activity-panel", response_class=HTMLResponse)
     async def api_activity_panel(request: Request):

@@ -86,12 +86,22 @@
              class="form-control form-control-sm" style="width:55px;font-size:.75rem;" onchange="saveBtSettings()">
       <span class="small text-muted">%</span>
     </div>
-    <div id="bt-avg" class="d-none ms-2">
+    <span id="bt-spinner" class="spinner-border spinner-border-sm text-primary d-none"></span>
+  </div>
+  <div id="bt-stats" class="d-none d-flex gap-3 mt-2 pt-2" style="border-top:1px solid #dee2e6;">
+    <div id="bt-avg">
       <span class="small text-muted">Avg P&L:</span>
       <span id="bt-avg-val" class="fw-bold"></span>
       <span id="bt-avg-count" class="small text-muted ms-1"></span>
     </div>
-    <span id="bt-spinner" class="spinner-border spinner-border-sm text-primary d-none"></span>
+    <div id="bt-ann-a">
+      <span class="small text-muted" title="Annualized return (unlimited capital, time-weighted log return)">Ann(A):</span>
+      <span id="bt-ann-a-val" class="fw-bold"></span>
+    </div>
+    <div id="bt-ann-b">
+      <span class="small text-muted" title="Annualized return (fixed capital split, daily equity curve CAGR)">Ann(B):</span>
+      <span id="bt-ann-b-val" class="fw-bold"></span>
+    </div>
   </div>
 </div>
 
@@ -407,6 +417,7 @@ function clearAllFilters() {
 // =====================================================================
 var _btStrategies = null;  // cached strategy definitions
 var _btResults = {};       // snapshot_id -> result dict
+var _btSummary = null;     // server-computed summary stats
 var _btCurrentStrategy = '';
 var _BT_STRAT_KEY = 'bt_last_strategy';
 var _SP_KEY = 'strategy_params';
@@ -586,13 +597,15 @@ function runBacktest() {
     body: JSON.stringify({strategy: strategy, params: params, filters: filters, market_close: marketClose, min_hold: minHold, guard_stop_pct: guardStop, guard_target_pct: guardTarget}),
   })
   .then(function(r) { return r.json(); })
-  .then(function(results) {
-    if (!results.length) {
+  .then(function(data) {
+    var trades = data.trades || [];
+    if (!trades.length) {
       alert('No snapshots match the current filters for backtest.');
       return;
     }
     _btResults = {};
-    results.forEach(function(r) { _btResults[r.snapshot_id] = r; });
+    trades.forEach(function(r) { _btResults[r.snapshot_id] = r; });
+    _btSummary = data.summary || null;
     _displayResults();
     document.getElementById('bt-clear-btn').classList.remove('d-none');
   })
@@ -686,38 +699,45 @@ function _displayResults() {
   _updateAvgPnl();
 }
 
+function _fmtPct(val, decimals) {
+  var sign = val >= 0 ? '+' : '';
+  return sign + val.toFixed(decimals) + '%';
+}
+
+function _showMetric(divId, valId, value, decimals) {
+  var div = document.getElementById(divId);
+  var span = document.getElementById(valId);
+  if (value == null) {
+    div.classList.add('d-none');
+    return;
+  }
+  span.textContent = _fmtPct(value, decimals);
+  span.className = 'fw-bold ' + (value >= 0 ? 'text-success' : 'text-danger');
+  div.classList.remove('d-none');
+}
+
 function _updateAvgPnl() {
-  var avgDiv = document.getElementById('bt-avg');
-  var avgVal = document.getElementById('bt-avg-val');
-  var avgCount = document.getElementById('bt-avg-count');
-
-  if (!Object.keys(_btResults).length) {
-    avgDiv.classList.add('d-none');
+  var statsDiv = document.getElementById('bt-stats');
+  var s = _btSummary;
+  if (!s || s.avg_pnl == null) {
+    statsDiv.classList.add('d-none');
     return;
   }
 
-  // Count all backtested rows in the current filtered dataset (not just this page)
-  var pnls = [];
-  Object.keys(_btResults).forEach(function(sid) {
-    var r = _btResults[sid];
-    if (r && r.pnl_pct != null) pnls.push(r.pnl_pct);
-  });
+  // Avg P&L
+  _showMetric('bt-avg', 'bt-avg-val', s.avg_pnl, 2);
+  document.getElementById('bt-avg-count').textContent = '(' + s.count + ' rows)';
 
-  if (!pnls.length) {
-    avgDiv.classList.add('d-none');
-    return;
-  }
+  // Annualized metrics
+  _showMetric('bt-ann-a', 'bt-ann-a-val', s.ann_a, 1);
+  _showMetric('bt-ann-b', 'bt-ann-b-val', s.ann_b, 1);
 
-  var avg = pnls.reduce(function(a, b) { return a + b; }, 0) / pnls.length;
-  var sign = avg >= 0 ? '+' : '';
-  avgVal.textContent = sign + avg.toFixed(2) + '%';
-  avgVal.className = 'fw-bold ' + (avg >= 0 ? 'text-success' : 'text-danger');
-  avgCount.textContent = '(' + pnls.length + ' rows)';
-  avgDiv.classList.remove('d-none');
+  statsDiv.classList.remove('d-none');
 }
 
 function clearBacktest() {
   _btResults = {};
+  _btSummary = null;
   var tbl = document.getElementById('snapshots-tbl');
   if (tbl) {
     tbl.querySelectorAll('.exit-pnl, .exit-duration').forEach(function(cell) {
@@ -726,7 +746,7 @@ function clearBacktest() {
       cell.title = '';
     });
   }
-  document.getElementById('bt-avg').classList.add('d-none');
+  document.getElementById('bt-stats').classList.add('d-none');
   document.getElementById('bt-clear-btn').classList.add('d-none');
 }
 
