@@ -730,12 +730,13 @@ def process_news_file(
         })
     )
 
-    # Schedule 10-min delayed price capture for the snapshots table
+    # Schedule delayed price capture for the snapshots table
     _primary_sym = trigger.symbols[0] if trigger.symbols else None
     _snap_id = snapshot.snapshot_id
+    _delay_min = settings.price_delay_minutes
     if _primary_sym:
         def _capture_price_10min():
-            time.sleep(600)
+            time.sleep(_delay_min * 60)
             try:
                 from trader.market.data_service import MarketDataService
                 from trader.db.database import update_snapshot_field

@@ -221,12 +221,25 @@
     "MELI",
     "ETON",
     "GILD",
-    "CCAP"
+    "CCAP",
+    "DCTH",
+    "CELH",
+    "BFRI",
+    "AI",
+    "SKT",
+    "EME",
+    "VTRS",
+    "RSVR",
+    "RDW",
+    "ALC",
+    "ATAI",
+    "GPGI",
+    "PENN"
   ],
   "crypto": [],
   "rejected": [
     "BTCUSD",
     "VNP"
   ],
-  "last_updated": "2026-02-25T19:24:55.048282+00:00"
+  "last_updated": "2026-02-26T14:54:41.797210+00:00"
 }

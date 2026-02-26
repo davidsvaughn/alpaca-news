@@ -997,6 +997,7 @@ def run_backtest(
     min_hold: int = 5,
     guard_stop_pct: float = 0,
     guard_target_pct: float = 0,
+    price_delay_minutes: int = 10,
 ) -> list[BacktestResult]:
     """Run an exit strategy backtest for a batch of entries using 1-min bars.
 
@@ -1042,8 +1043,8 @@ def run_backtest(
         for e in sym_entries:
             et_str = e.get("entry_time", e.get("entry_date", ""))
             et = _parse_entry_time(et_str)
-            # Add 10 minutes to get past the entry point
-            et_plus_10 = et + timedelta(minutes=10)
+            # Add delay minutes to get past the entry point
+            et_plus_10 = et + timedelta(minutes=price_delay_minutes)
             parsed_times.append((e, et_plus_10))
 
         earliest_dt = min(t for _, t in parsed_times)
@@ -1092,13 +1093,14 @@ def run_backtest(
                 ))
                 continue
 
-            # If entry_price is missing (0) or entry landed before 9:40 AM
-            # (pre-market/after-hours quote), use the 9:40 AM bar close instead.
+            # If entry_price is missing (0) or entry landed before 9:30+delay
+            # (pre-market/after-hours quote), use the bar at that offset instead.
             actual_entry_bar = df.index[entry_idx]
             entry_time_of_day = actual_entry_bar.hour * 60 + actual_entry_bar.minute
-            if entry_price <= 0 or entry_time_of_day <= 9 * 60 + 40:
-                # Use the close of the bar 10 minutes into the session (≈9:40)
-                target_idx = min(entry_idx + 10, len(df) - 1)
+            cutoff_minutes = 9 * 60 + 30 + price_delay_minutes
+            if entry_price <= 0 or entry_time_of_day <= cutoff_minutes:
+                # Use the close of the bar N minutes into the session
+                target_idx = min(entry_idx + price_delay_minutes, len(df) - 1)
                 entry_price = float(df.iloc[target_idx]["Close"])
                 entry_idx = target_idx  # walk-forward starts from here too
 

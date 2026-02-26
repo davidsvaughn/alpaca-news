@@ -832,7 +832,7 @@ function runBacktest() {
   var params = _collectParams();
   var entries = _collectEntries();
   if (!entries.length) {
-    alert('No snapshots with Price@10 data on this page.');
+    alert('No snapshots with Price@{{ price_delay_minutes | default(10) }} data on this page.');
     return;
   }
 

@@ -89,6 +89,9 @@ class Settings:
     max_phase1_actions: int
     max_phase2_branches: int
 
+    # Snapshot delayed-price capture
+    price_delay_minutes: int
+
     # SSE
     sse_ping_interval_s: float
 
@@ -217,6 +220,8 @@ def load_settings(*, dotenv_path: str | None = None, override: bool = False) -> 
     max_phase1_actions = _env_int("MAX_PHASE1_ACTIONS", 4)
     max_phase2_branches = _env_int("MAX_PHASE2_BRANCHES", 2)
 
+    price_delay_minutes = _env_int("PRICE_DELAY_MINUTES", 10)
+
     sse_ping_interval_s = _env_float("SSE_PING_INTERVAL_S", 10.0)
 
     mock_llm = _env_bool("MOCK_LLM", False)
@@ -313,6 +318,7 @@ def load_settings(*, dotenv_path: str | None = None, override: bool = False) -> 
         triage_symbol_cooldown_minutes=triage_symbol_cooldown_minutes,
         max_phase1_actions=max_phase1_actions,
         max_phase2_branches=max_phase2_branches,
+        price_delay_minutes=price_delay_minutes,
         sse_ping_interval_s=sse_ping_interval_s,
         mock_llm=mock_llm,
         backfill_on_start=backfill_on_start,

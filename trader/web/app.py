@@ -183,7 +183,8 @@ def create_app(
             context={"active_page": "snapshots", "symbol_filter": symbol,
                      "headline_filter": headline,
                      "explored_only": explored_only, "total": total,
-                     "created_after": created_after or "", "created_before": created_before or ""},
+                     "created_after": created_after or "", "created_before": created_before or "",
+                     "price_delay_minutes": settings.price_delay_minutes},
         )
 
     @app.get("/snapshots/{snapshot_id}", response_class=HTMLResponse)
@@ -386,6 +387,7 @@ def create_app(
                 "explored_only": explored_only,
                 "created_after": created_after or "",
                 "created_before": created_before or "",
+                "price_delay_minutes": settings.price_delay_minutes,
             },
         )
 
@@ -490,7 +492,7 @@ def create_app(
             return []
         results = await asyncio.to_thread(
             run_backtest, strategy_key, params, entries, market_close, min_hold,
-            guard_stop_pct, guard_target_pct,
+            guard_stop_pct, guard_target_pct, settings.price_delay_minutes,
         )
         return [r.to_dict() for r in results]
 

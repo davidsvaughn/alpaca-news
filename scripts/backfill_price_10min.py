@@ -78,10 +78,11 @@ def main(dry_run: bool = False) -> None:
             no_data += 1
             continue
 
-        target = created + timedelta(minutes=10)
+        delay_min = settings.price_delay_minutes
+        target = created + timedelta(minutes=delay_min)
         now = datetime.now(tz=timezone.utc)
 
-        # Skip if less than 10 min old (not yet eligible)
+        # Skip if not yet old enough to be eligible
         if target > now:
             skipped += 1
             continue

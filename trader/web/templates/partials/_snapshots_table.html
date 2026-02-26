@@ -58,7 +58,7 @@
         <th data-col="headline" data-sort="text" class="resizable-th sortable-th"><span class="col-label">Headline</span><span class="sort-arrow"></span><div class="resize-handle"></div></th>
         <th data-col="symbols" data-sort="text" class="resizable-th sortable-th"><span class="col-label">Symbols</span><span class="sort-arrow"></span><div class="resize-handle"></div></th>
         <th data-col="signal" data-sort="text" class="resizable-th sortable-th"><span class="col-label">Signal</span><span class="sort-arrow"></span><div class="resize-handle"></div></th>
-        <th data-col="price_10" data-sort="num" class="resizable-th sortable-th"><span class="col-label">Price@10</span><span class="sort-arrow"></span><div class="resize-handle"></div></th>
+        <th data-col="price_10" data-sort="num" class="resizable-th sortable-th"><span class="col-label">Price@{{ price_delay_minutes | default(10) }}</span><span class="sort-arrow"></span><div class="resize-handle"></div></th>
         <th data-col="price" data-sort="num" class="resizable-th sortable-th"><span class="col-label">Price</span><span class="sort-arrow"></span><div class="resize-handle"></div></th>
         <th data-col="avg_vol" data-sort="num" class="resizable-th sortable-th"><span class="col-label">AvgVol</span><span class="sort-arrow"></span><div class="resize-handle"></div></th>
         <th data-col="mkt_cap" data-sort="num" class="resizable-th sortable-th"><span class="col-label">MktCap</span><span class="sort-arrow"></span><div class="resize-handle"></div></th>
