@@ -78,7 +78,7 @@
       {% set conf = s.prediction.confidence if s.prediction and s.prediction.confidence is defined else None %}
       <tr data-snapshot-id="{{ s.snapshot_id }}"
           data-entry-price="{{ s.price_10min if s.price_10min is defined and s.price_10min else '' }}"
-          data-entry-date="{{ s.created_at[:10] if s.created_at else '' }}"
+          data-entry-time="{{ s.created_at if s.created_at else '' }}"
           data-primary-symbol="{{ primary_sym }}">
         <td><input type="checkbox" class="snap-check" value="{{ s.snapshot_id }}" onchange="updateDeleteBtn()"></td>
         <td class="small text-muted text-nowrap" data-sort-val="{{ s.created_at }}">{{ s.created_at | fmt_dt("short") }}</td>

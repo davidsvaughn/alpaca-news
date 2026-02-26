@@ -709,12 +709,12 @@ function _collectEntries() {
     if (row.style.display === 'none') return;
     var sid = row.getAttribute('data-snapshot-id');
     var price = row.getAttribute('data-entry-price');
-    var date = row.getAttribute('data-entry-date');
+    var entryTime = row.getAttribute('data-entry-time');
     var sym = row.getAttribute('data-primary-symbol');
-    if (!sid || !price || !date || !sym) return;
+    if (!sid || !price || !entryTime || !sym) return;
     price = parseFloat(price);
     if (isNaN(price) || price <= 0) return;
-    entries.push({snapshot_id: sid, symbol: sym, entry_price: price, entry_date: date});
+    entries.push({snapshot_id: sid, symbol: sym, entry_price: price, entry_time: entryTime});
   });
   return entries;
 }
@@ -782,8 +782,18 @@ function _displayResults() {
     cell.setAttribute('data-sort-val', String(pnl));
     // Tooltip with details
     var tip = r.exit_reason;
-    if (r.exit_date) tip += ' on ' + r.exit_date;
-    if (r.bars_held) tip += ' (' + r.bars_held + 'd)';
+    if (r.exit_time) {
+      // Format: show date + time if available
+      var et = r.exit_time;
+      if (et.indexOf('T') >= 0) et = et.replace('T', ' ').slice(0, 16);
+      tip += ' on ' + et;
+    }
+    if (r.hold_minutes != null && r.hold_minutes > 0) {
+      var hm = r.hold_minutes;
+      if (hm >= 390) tip += ' (' + (hm / 390).toFixed(1) + 'd)';
+      else if (hm >= 60) tip += ' (' + Math.floor(hm / 60) + 'h ' + (hm % 60) + 'm)';
+      else tip += ' (' + hm + 'm)';
+    }
     if (r.exit_price) tip += ' @ $' + r.exit_price.toFixed(2);
     cell.title = tip;
   });
