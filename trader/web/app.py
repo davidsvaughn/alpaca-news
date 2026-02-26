@@ -959,23 +959,27 @@ def create_app(
 
         if not entries:
             return []
+        stats_resolution = 60  # minutes (hourly)
         results = await asyncio.to_thread(
             run_backtest, strategy_key, params, entries, market_close, min_hold,
             guard_stop_pct, guard_target_pct, settings.price_delay_minutes,
+            stats_resolution,
         )
         trades = [r.to_dict() for r in results]
         valid = [r for r in results if r.pnl_pct is not None]
         count = len(valid)
         avg_pnl = round(sum(r.pnl_pct for r in valid) / count, 2) if count else None
-        ann_a = compute_ann_a(results)
-        ann_b = compute_ann_b(results)
+        stats_a = compute_ann_a(results)
+        stats_b = compute_ann_b(results, stats_resolution)
         return {
             "trades": trades,
             "summary": {
                 "count": count,
                 "avg_pnl": avg_pnl,
-                "ann_a": round(ann_a, 1) if ann_a is not None else None,
-                "ann_b": round(ann_b, 1) if ann_b is not None else None,
+                "ann_a": round(stats_a["ann"], 1) if stats_a else None,
+                "sharpe_a": round(stats_a["sharpe"], 2) if stats_a and stats_a["sharpe"] is not None else None,
+                "ann_b": round(stats_b["ann"], 1) if stats_b else None,
+                "sharpe_b": round(stats_b["sharpe"], 2) if stats_b and stats_b["sharpe"] is not None else None,
             },
         }
 

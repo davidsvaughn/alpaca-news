@@ -250,9 +250,14 @@ class BacktestResult:
     exit_reason: str = "no_data"  # stop, target, signal, time, still_open, no_data
     bars_held: int = 0
     hold_minutes: int = 0
+    # Periodic close prices for equity curve (not sent to frontend).
+    # List of (iso_timestamp, close_price) at configured resolution.
+    periodic_closes: list[tuple[str, float]] | None = None
 
     def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
+        d = asdict(self)
+        d.pop("periodic_closes", None)
+        return d
 
 
 # ---------------------------------------------------------------------------
@@ -263,104 +268,93 @@ _TRADING_DAYS_PER_YEAR = 252
 _BARS_PER_DAY = 390  # 6.5 hours × 60 minutes
 
 
-def compute_ann_a(results: list[BacktestResult]) -> float | None:
-    """Annualized return — unlimited capital (time-weighted log return).
+def compute_ann_a(results: list[BacktestResult]) -> dict[str, float] | None:
+    """Annualized stats — unlimited capital (time-weighted log return).
 
-    Annualized = exp(252 × Σln(1+rᵢ) / Σdᵢ) - 1
-    where dᵢ = bars_held / 390 (trading days).
-    Returns percentage, or None if no valid trades.
+    Returns dict with ann (%), vol (%), sharpe, or None if no valid trades.
     """
+    daily_rates: list[float] = []  # per-trade daily log return x_i = ℓ_i / d_i
     sum_log = 0.0
     sum_days = 0.0
     for r in results:
         if r.pnl_pct is None:
             continue
-        sum_log += math.log(1 + r.pnl_pct / 100)
-        sum_days += max(r.bars_held, 1) / _BARS_PER_DAY
-    if sum_days <= 0:
+        log_r = math.log(1 + r.pnl_pct / 100)
+        days = max(r.bars_held, 1) / _BARS_PER_DAY
+        sum_log += log_r
+        sum_days += days
+        daily_rates.append(log_r / days)
+    if sum_days <= 0 or len(daily_rates) < 2:
         return None
     daily_log = sum_log / sum_days
-    return (math.exp(_TRADING_DAYS_PER_YEAR * daily_log) - 1) * 100
+    ann = (math.exp(_TRADING_DAYS_PER_YEAR * daily_log) - 1) * 100
+    # Volatility: std of per-trade daily rates, annualized
+    mean_x = sum(daily_rates) / len(daily_rates)
+    var_x = sum((x - mean_x) ** 2 for x in daily_rates) / (len(daily_rates) - 1)
+    std_x = math.sqrt(var_x)
+    vol = std_x * math.sqrt(_TRADING_DAYS_PER_YEAR) * 100
+    sharpe = (daily_log * _TRADING_DAYS_PER_YEAR) / (std_x * math.sqrt(_TRADING_DAYS_PER_YEAR)) if std_x > 0 else None
+    return {"ann": ann, "vol": vol, "sharpe": sharpe}
 
 
-def _parse_date(s: str | None) -> date | None:
-    """Parse an ISO-ish timestamp string to a date."""
-    if not s:
-        return None
-    try:
-        return datetime.fromisoformat(s).date()
-    except (ValueError, TypeError):
-        return None
 
+def compute_ann_b(
+    results: list[BacktestResult],
+    resolution_minutes: int = 60,
+) -> dict[str, float] | None:
+    """Annualized stats — fixed capital split (equity curve from real prices).
 
-def _count_weekdays(start: date, end: date) -> int:
-    """Count weekdays (Mon-Fri) from start to end inclusive."""
-    if start > end:
-        return 1
-    count = 0
-    d = start
-    one_day = timedelta(days=1)
-    while d <= end:
-        if d.weekday() < 5:
-            count += 1
-        d += one_day
-    return max(count, 1)
-
-
-def compute_ann_b(results: list[BacktestResult]) -> float | None:
-    """Annualized return — fixed capital split (daily equity curve CAGR).
-
-    Builds a daily equity curve where capital is split equally among
-    active trades each day.  Returns percentage, or None if insufficient data.
+    Uses periodic close prices (at the given resolution) to build a portfolio
+    equity curve with 1/N capital split among active trades.
+    Returns dict with ann (%), vol (%), sharpe, or None if insufficient data.
     """
-    # Build per-trade info: date range + daily log rate
-    trade_infos: list[tuple[date, date, float]] = []  # (entry_d, exit_d, daily_rate)
-    global_min: date | None = None
-    global_max: date | None = None
+    periods_per_year = _TRADING_DAYS_PER_YEAR * _BARS_PER_DAY / resolution_minutes
+
+    # For each trade, compute per-period log returns from actual prices
+    all_timestamps: set[str] = set()
+    trade_returns_list: list[dict[str, float]] = []
 
     for r in results:
-        if r.pnl_pct is None:
+        if r.pnl_pct is None or not r.periodic_closes:
             continue
-        entry_d = _parse_date(r.entry_time)
-        exit_d = _parse_date(r.exit_time)
-        if entry_d is None or exit_d is None:
-            continue
-        if entry_d > exit_d:
-            exit_d = entry_d
-        wd = _count_weekdays(entry_d, exit_d)
-        daily_rate = math.log(1 + r.pnl_pct / 100) / wd
-        trade_infos.append((entry_d, exit_d, daily_rate))
-        if global_min is None or entry_d < global_min:
-            global_min = entry_d
-        if global_max is None or exit_d > global_max:
-            global_max = exit_d
+        prev_price = r.entry_price
+        returns: dict[str, float] = {}
+        for ts, close in r.periodic_closes:
+            if prev_price > 0 and close > 0:
+                returns[ts] = math.log(close / prev_price)
+            prev_price = close
+        if returns:
+            trade_returns_list.append(returns)
+            all_timestamps.update(returns.keys())
 
-    if not trade_infos or global_min is None or global_max is None:
+    if not trade_returns_list or len(all_timestamps) < 2:
         return None
 
-    # Walk weekdays, build equity curve
+    # Sort timestamps chronologically, build portfolio return series
+    sorted_ts = sorted(all_timestamps)
+    portfolio_returns: list[float] = []
     equity = 1.0
-    total_weekdays = 0
-    d = global_min
-    one_day = timedelta(days=1)
-    while d <= global_max:
-        if d.weekday() < 5:
-            total_weekdays += 1
-            # Find active trades
-            sum_rate = 0.0
-            active = 0
-            for entry_d, exit_d, daily_rate in trade_infos:
-                if entry_d <= d <= exit_d:
-                    sum_rate += daily_rate
-                    active += 1
-            if active > 0:
-                equity *= math.exp(sum_rate / active)
-        d += one_day
+    for ts in sorted_ts:
+        active = [tr[ts] for tr in trade_returns_list if ts in tr]
+        if active:
+            r_t = sum(active) / len(active)  # 1/N capital split
+            portfolio_returns.append(r_t)
+            equity *= math.exp(r_t)
 
-    if total_weekdays <= 0:
+    n = len(portfolio_returns)
+    if n < 2:
         return None
-    cagr = (equity ** (_TRADING_DAYS_PER_YEAR / total_weekdays)) - 1
-    return cagr * 100
+
+    # Annualized return (CAGR)
+    ann = (equity ** (periods_per_year / n) - 1) * 100
+
+    # Volatility & Sharpe
+    mean_r = sum(portfolio_returns) / n
+    var_r = sum((x - mean_r) ** 2 for x in portfolio_returns) / (n - 1)
+    std_r = math.sqrt(var_r)
+    vol = std_r * math.sqrt(periods_per_year) * 100
+    sharpe = (mean_r * periods_per_year) / (std_r * math.sqrt(periods_per_year)) if std_r > 0 else None
+    return {"ann": ann, "vol": vol, "sharpe": sharpe}
 
 
 # ---------------------------------------------------------------------------
@@ -1098,6 +1092,31 @@ def _wrap_with_guards(
     return guarded_runner_v2
 
 
+def _extract_periodic_closes(
+    df: pd.DataFrame,
+    entry_idx: int,
+    bars_held: int,
+    resolution_minutes: int,
+) -> list[tuple[str, float]]:
+    """Extract close prices at regular intervals from the held bar slice.
+
+    Returns list of (iso_timestamp, close_price) tuples.
+    """
+    end_idx = min(entry_idx + bars_held, len(df))
+    if end_idx <= entry_idx:
+        return []
+    held = df.iloc[entry_idx:end_idx]
+    if resolution_minutes <= 1:
+        # Every bar
+        resampled = held
+    else:
+        # Resample to the desired resolution, take last close per window
+        rule = f"{resolution_minutes}min"
+        resampled = held["Close"].resample(rule).last().dropna()
+        return [(t.isoformat(), float(v)) for t, v in resampled.items()]
+    return [(t.isoformat(), float(row["Close"])) for t, row in resampled.iterrows()]
+
+
 def run_backtest(
     strategy_key: str,
     params: dict[str, float],
@@ -1107,6 +1126,7 @@ def run_backtest(
     guard_stop_pct: float = 0,
     guard_target_pct: float = 0,
     price_delay_minutes: int = 10,
+    stats_resolution_minutes: int = 60,
 ) -> list[BacktestResult]:
     """Run an exit strategy backtest for a batch of entries using 1-min bars.
 
@@ -1245,6 +1265,11 @@ def run_backtest(
                 except Exception:
                     pass
 
+            # Extract periodic close prices for equity curve stats
+            pc = _extract_periodic_closes(
+                df, entry_idx, bars_held, stats_resolution_minutes,
+            ) if pnl_pct is not None else None
+
             results.append(BacktestResult(
                 snapshot_id=e["snapshot_id"],
                 symbol=symbol,
@@ -1256,6 +1281,7 @@ def run_backtest(
                 exit_reason=reason,
                 bars_held=bars_held,
                 hold_minutes=hold_minutes,
+                periodic_closes=pc,
             ))
 
     return results
