@@ -482,9 +482,16 @@ def create_app(
         strategy_key = body.get("strategy", "")
         params = body.get("params", {})
         entries = body.get("entries", [])
+        market_close = body.get("market_close", "16:00")  # None = extended hours
+        min_hold = body.get("min_hold", 5)
+        guard_stop_pct = body.get("guard_stop_pct", 0)
+        guard_target_pct = body.get("guard_target_pct", 0)
         if not entries:
             return []
-        results = await asyncio.to_thread(run_backtest, strategy_key, params, entries)
+        results = await asyncio.to_thread(
+            run_backtest, strategy_key, params, entries, market_close, min_hold,
+            guard_stop_pct, guard_target_pct,
+        )
         return [r.to_dict() for r in results]
 
     @app.get("/api/activity-panel", response_class=HTMLResponse)

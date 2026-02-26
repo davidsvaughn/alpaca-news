@@ -235,17 +235,28 @@ def _write_cache(symbol: str, date_str: str, bars: list[dict]) -> None:
 
 
 def _bars_to_df(bars: list[dict]) -> pd.DataFrame:
-    """Convert list of bar dicts to a DataFrame with DatetimeIndex."""
+    """Convert list of bar dicts to a DataFrame with tz-naive Eastern DatetimeIndex.
+
+    Schwab timestamps are UTC (e.g. 2026-02-25T14:30:00+00:00 = 9:30 AM ET).
+    Cached timestamps are tz-naive Eastern (e.g. 2026-02-25T09:30:00).
+    We normalize everything to tz-naive Eastern time.
+    """
     if not bars:
         return pd.DataFrame()
     df = pd.DataFrame(bars)
     df.rename(columns={"t": "Time", "o": "Open", "h": "High",
                         "l": "Low", "c": "Close", "v": "Volume"}, inplace=True)
     df["Time"] = pd.to_datetime(df["Time"])
+    # Only convert if timestamps have timezone info (UTC from Schwab)
+    if df["Time"].dt.tz is not None:
+        try:
+            from zoneinfo import ZoneInfo
+            df["Time"] = df["Time"].dt.tz_convert(ZoneInfo("US/Eastern")).dt.tz_localize(None)
+        except Exception:
+            df["Time"] = df["Time"].dt.tz_localize(None)
+    # else: already tz-naive Eastern (from cache or yfinance)
     df.set_index("Time", inplace=True)
     df.sort_index(inplace=True)
-    if df.index.tz is not None:
-        df.index = df.index.tz_localize(None)
     return df
 
 
@@ -293,15 +304,20 @@ def _fetch_schwab_1m(symbol: str, period: int = 10) -> pd.DataFrame | None:
 
 
 def _fetch_yfinance_1m(symbol: str, period: str = "7d") -> pd.DataFrame | None:
-    """Fetch 1-min bars from yfinance (fallback)."""
+    """Fetch 1-min bars from yfinance (fallback), including extended hours."""
     try:
         import yfinance as yf
         ticker = yf.Ticker(symbol.upper())
-        df = ticker.history(period=period, interval="1m")
+        df = ticker.history(period=period, interval="1m", prepost=True)
         if df is None or df.empty:
             return None
+        # yfinance returns tz-aware Eastern timestamps — convert to tz-naive Eastern
         if df.index.tz is not None:
-            df.index = df.index.tz_localize(None)
+            try:
+                from zoneinfo import ZoneInfo
+                df.index = df.index.tz_convert(ZoneInfo("US/Eastern")).tz_localize(None)
+            except Exception:
+                df.index = df.index.tz_localize(None)
         return df
     except Exception as e:
         log.debug("yfinance 1m fetch failed for %s: %s", symbol, e)
@@ -337,11 +353,19 @@ def _get_ohlcv_1m(symbol: str, start_date: str, end_date: str | None = None) -> 
                 missing_dates.append(ds)
         cur += timedelta(days=1)
 
-    # Fetch missing data if any
+    # Fetch missing data if any — merge Schwab + yfinance for completeness.
+    # Schwab has more bar coverage but thinly-traded stocks may have gaps.
+    # yfinance fills those gaps with different data providers.
     if missing_dates:
-        fetched_df = _fetch_schwab_1m(symbol, period=10)
-        if fetched_df is None or fetched_df.empty:
-            fetched_df = _fetch_yfinance_1m(symbol, period="7d")
+        schwab_df = _fetch_schwab_1m(symbol, period=10)
+        yf_df = _fetch_yfinance_1m(symbol, period="7d")
+        if schwab_df is not None and yf_df is not None:
+            # Merge: Schwab takes priority, yfinance fills gaps
+            fetched_df = pd.concat([schwab_df, yf_df])
+            fetched_df = fetched_df[~fetched_df.index.duplicated(keep="first")]
+            fetched_df.sort_index(inplace=True)
+        else:
+            fetched_df = schwab_df if schwab_df is not None else yf_df
 
         if fetched_df is not None and not fetched_df.empty:
             by_date = _split_by_date(fetched_df)
@@ -653,10 +677,107 @@ def _parse_entry_time(entry_time_str: str) -> datetime:
     return datetime.strptime(s[:10], "%Y-%m-%d")
 
 
+def _filter_trading_hours(df: pd.DataFrame, market_close: str | None) -> pd.DataFrame:
+    """Filter DataFrame to only include bars within trading hours.
+
+    Args:
+        market_close: Cutoff time as "HH:MM" in Eastern time (e.g. "16:00"),
+                      or None to include all bars (extended hours).
+
+    The DataFrame index is assumed to be tz-naive Eastern time.
+    Regular market open is 09:30.
+    """
+    if not market_close:
+        return df
+    try:
+        close_h, close_m = int(market_close.split(":")[0]), int(market_close.split(":")[1])
+    except (ValueError, IndexError):
+        return df
+
+    hours = df.index.hour
+    minutes = df.index.minute
+    time_val = hours * 60 + minutes
+    open_val = 9 * 60 + 30   # 09:30
+    close_val = close_h * 60 + close_m
+    mask = (time_val >= open_val) & (time_val < close_val)
+    return df[mask]
+
+
+def _wrap_with_guards(
+    runner, guard_stop_pct: float, guard_target_pct: float,
+):
+    """Wrap a strategy runner with guard stop-loss and take-profit checks.
+
+    Guards fire on each bar BEFORE the primary strategy check.
+    Stop uses bar Low, target uses bar High (conservative).
+    """
+    if guard_stop_pct <= 0 and guard_target_pct <= 0:
+        return runner  # no guards, return original
+
+    def guarded_runner(df, entry_idx, entry_price, params):
+        stop = entry_price * (1 - guard_stop_pct / 100) if guard_stop_pct > 0 else 0
+        target = entry_price * (1 + guard_target_pct / 100) if guard_target_pct > 0 else float("inf")
+
+        for i in range(entry_idx, len(df)):
+            bar = df.iloc[i]
+            bars_held = i - entry_idx + 1
+            # Guard stop (check Low)
+            if guard_stop_pct > 0 and bar["Low"] <= stop:
+                return stop, _fmt_ts(df.index, i), "guard_stop", bars_held
+            # Guard target (check High)
+            if guard_target_pct > 0 and bar["High"] >= target:
+                return target, _fmt_ts(df.index, i), "guard_target", bars_held
+            # Now check primary strategy for this bar only
+            # We call the runner starting at this bar, but only check one bar
+            # by creating a slice. Instead, just let the runner do a full scan
+            # from entry_idx and compare which fires first.
+            pass
+
+        # No guard triggered — fall through to primary strategy
+        return runner(df, entry_idx, entry_price, params)
+
+    # Better approach: run both in parallel (bar by bar)
+    def guarded_runner_v2(df, entry_idx, entry_price, params):
+        stop = entry_price * (1 - guard_stop_pct / 100) if guard_stop_pct > 0 else 0
+        target = entry_price * (1 + guard_target_pct / 100) if guard_target_pct > 0 else float("inf")
+
+        # Get the primary strategy result
+        prim_price, prim_time, prim_reason, prim_bars = runner(
+            df, entry_idx, entry_price, params,
+        )
+
+        # Walk forward checking guards — if a guard fires earlier, use it
+        for i in range(entry_idx, len(df)):
+            bar = df.iloc[i]
+            bars_held = i - entry_idx + 1
+
+            # Did the primary strategy fire on or before this bar?
+            if prim_price is not None and prim_bars <= bars_held:
+                return prim_price, prim_time, prim_reason, prim_bars
+
+            # Guard stop
+            if guard_stop_pct > 0 and bar["Low"] <= stop:
+                return stop, _fmt_ts(df.index, i), "guard_stop", bars_held
+            # Guard target
+            if guard_target_pct > 0 and bar["High"] >= target:
+                return target, _fmt_ts(df.index, i), "guard_target", bars_held
+
+        # Neither guard nor primary triggered
+        if prim_price is not None:
+            return prim_price, prim_time, prim_reason, prim_bars
+        return None, None, "still_open", len(df) - entry_idx
+
+    return guarded_runner_v2
+
+
 def run_backtest(
     strategy_key: str,
     params: dict[str, float],
     entries: list[dict[str, Any]],
+    market_close: str | None = "16:00",
+    min_hold: int = 5,
+    guard_stop_pct: float = 0,
+    guard_target_pct: float = 0,
 ) -> list[BacktestResult]:
     """Run an exit strategy backtest for a batch of entries using 1-min bars.
 
@@ -665,12 +786,17 @@ def run_backtest(
         params: User-provided parameter values.
         entries: List of dicts with keys: snapshot_id, symbol,
                  entry_price (float), entry_time (ISO timestamp string).
+        market_close: Trading cutoff as "HH:MM" Eastern (e.g. "16:00",
+                      "17:30", "20:00"), or None for extended hours.
+        min_hold: Minimum bars to hold before exit checks begin (default 5).
+        guard_stop_pct: Guard stop-loss % (0 = disabled).
+        guard_target_pct: Guard take-profit % (0 = disabled).
 
     Returns:
         List of BacktestResult, one per entry.
     """
-    runner = _STRATEGY_RUNNERS.get(strategy_key)
-    if runner is None:
+    base_runner = _STRATEGY_RUNNERS.get(strategy_key)
+    if base_runner is None:
         return [
             BacktestResult(
                 snapshot_id=e["snapshot_id"],
@@ -681,6 +807,8 @@ def run_backtest(
             )
             for e in entries
         ]
+
+    runner = _wrap_with_guards(base_runner, guard_stop_pct, guard_target_pct)
 
     results: list[BacktestResult] = []
 
@@ -703,8 +831,21 @@ def run_backtest(
         start_date = (earliest_dt - timedelta(days=1)).strftime("%Y-%m-%d")
         today_str = datetime.now().strftime("%Y-%m-%d")
 
-        df = _get_ohlcv_1m(symbol, start_date, today_str)
-        if df is None or df.empty:
+        df_raw = _get_ohlcv_1m(symbol, start_date, today_str)
+        if df_raw is None or df_raw.empty:
+            for e in sym_entries:
+                results.append(BacktestResult(
+                    snapshot_id=e["snapshot_id"],
+                    symbol=symbol,
+                    entry_price=e["entry_price"],
+                    entry_time=e.get("entry_time", e.get("entry_date", "")),
+                    exit_reason="no_data",
+                ))
+            continue
+
+        # Filter to trading hours (removes extended-hours bars)
+        df = _filter_trading_hours(df_raw, market_close)
+        if df.empty:
             for e in sym_entries:
                 results.append(BacktestResult(
                     snapshot_id=e["snapshot_id"],
@@ -732,9 +873,23 @@ def run_backtest(
                 ))
                 continue
 
+            # If entry_price is missing (0) or entry landed before 9:40 AM
+            # (pre-market/after-hours quote), use the 9:40 AM bar close instead.
+            actual_entry_bar = df.index[entry_idx]
+            entry_time_of_day = actual_entry_bar.hour * 60 + actual_entry_bar.minute
+            if entry_price <= 0 or entry_time_of_day <= 9 * 60 + 40:
+                # Use the close of the bar 10 minutes into the session (≈9:40)
+                target_idx = min(entry_idx + 10, len(df) - 1)
+                entry_price = float(df.iloc[target_idx]["Close"])
+                entry_idx = target_idx  # walk-forward starts from here too
+
+            # Apply min_hold: start exit checks after min_hold bars
+            run_idx = min(entry_idx + max(0, min_hold), len(df) - 1)
             exit_price, exit_time, reason, bars_held = runner(
-                df, entry_idx, entry_price, params,
+                df, run_idx, entry_price, params,
             )
+            # Adjust bars_held to include the min_hold period
+            bars_held = bars_held + (run_idx - entry_idx)
 
             # Ensure native Python types (not numpy)
             if exit_price is not None:
@@ -748,6 +903,18 @@ def run_backtest(
                 pnl_pct = None
             bars_held = int(bars_held)
 
+            # Compute wall-clock hold_minutes from actual timestamps
+            # (bar count doesn't reflect overnight gaps)
+            hold_minutes = bars_held  # fallback
+            if exit_time:
+                try:
+                    exit_dt = pd.Timestamp(exit_time)
+                    entry_bar_dt = df.index[entry_idx]
+                    delta = exit_dt - entry_bar_dt
+                    hold_minutes = max(1, int(delta.total_seconds() / 60))
+                except Exception:
+                    pass
+
             results.append(BacktestResult(
                 snapshot_id=e["snapshot_id"],
                 symbol=symbol,
@@ -758,7 +925,7 @@ def run_backtest(
                 pnl_pct=pnl_pct,
                 exit_reason=reason,
                 bars_held=bars_held,
-                hold_minutes=bars_held,
+                hold_minutes=hold_minutes,
             ))
 
     return results

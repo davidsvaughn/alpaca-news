@@ -11,10 +11,9 @@
       <col data-col="price" style="width:6%">
       <col data-col="avg_vol" style="width:6%">
       <col data-col="mkt_cap" style="width:6%">
-      <col data-col="pe" style="width:6%">
-      <col data-col="tools" style="width:4%">
+      <col data-col="pe" style="width:5%">
       <col data-col="exit_pnl" style="width:5%">
-      <col data-col="cost" style="width:4%">
+      <col data-col="duration" style="width:5%">
       <col data-col="action" style="width:4%">
     </colgroup>
     <thead class="table-light">
@@ -51,7 +50,6 @@
         <th></th>
         <th></th>
         <th></th>
-        <th></th>
       </tr>
       <!-- Column headers -->
       <tr>
@@ -65,9 +63,8 @@
         <th data-col="avg_vol" data-sort="num" class="resizable-th sortable-th"><span class="col-label">AvgVol</span><span class="sort-arrow"></span><div class="resize-handle"></div></th>
         <th data-col="mkt_cap" data-sort="num" class="resizable-th sortable-th"><span class="col-label">MktCap</span><span class="sort-arrow"></span><div class="resize-handle"></div></th>
         <th data-col="pe" data-sort="num" class="resizable-th sortable-th"><span class="col-label">P/E</span><span class="sort-arrow"></span><div class="resize-handle"></div></th>
-        <th data-col="tools" data-sort="num" class="resizable-th sortable-th"><span class="col-label">Tools</span><span class="sort-arrow"></span><div class="resize-handle"></div></th>
         <th data-col="exit_pnl" data-sort="num" class="resizable-th sortable-th"><span class="col-label">Exit P&L</span><span class="sort-arrow"></span><div class="resize-handle"></div></th>
-        <th data-col="cost" data-sort="num" class="resizable-th sortable-th"><span class="col-label">Cost</span><span class="sort-arrow"></span><div class="resize-handle"></div></th>
+        <th data-col="duration" data-sort="num" class="resizable-th sortable-th"><span class="col-label">Duration</span><span class="sort-arrow"></span><div class="resize-handle"></div></th>
         <th data-col="action"></th>
       </tr>
     </thead>
@@ -118,17 +115,8 @@
         <td class="small market-data" data-col="pe" data-symbol="{{ primary_sym }}" data-sort-val="">
           <span class="text-muted">&mdash;</span>
         </td>
-        <td class="small" data-sort-val="{{ s.tool_traces|length if s.tool_traces else 0 }}">
-          {% if s.tool_traces %}{{ s.tool_traces|length }}{% else %}<span class="text-muted">&mdash;</span>{% endif %}
-        </td>
         <td class="small exit-pnl" data-col="exit_pnl" data-sort-val=""><span class="text-muted">&mdash;</span></td>
-        <td class="small" data-sort-val="{{ s.cost_summary.total_usd if s.cost_summary and s.cost_summary.total_usd is defined else 0 }}">
-          {% if s.cost_summary and s.cost_summary.total_usd is defined %}
-            ${{ "%.2f"|format(s.cost_summary.total_usd) }}
-          {% else %}
-            <span class="text-muted">&mdash;</span>
-          {% endif %}
-        </td>
+        <td class="small exit-duration" data-col="duration" data-sort-val=""><span class="text-muted">&mdash;</span></td>
         <td><a href="/snapshots/{{ s.snapshot_id }}" class="btn btn-sm btn-outline-secondary">Detail</a></td>
       </tr>
       {% endfor %}

@@ -62,6 +62,30 @@
     <div id="bt-params" class="d-flex align-items-center gap-2 flex-wrap"></div>
     <button id="bt-run-btn" class="btn btn-sm btn-primary" onclick="runBacktest()" disabled>Run</button>
     <button id="bt-clear-btn" class="btn btn-sm btn-outline-secondary d-none" onclick="clearBacktest()">Clear</button>
+    <div class="d-flex align-items-center gap-1 ms-2" style="border-left:1px solid #ccc;padding-left:8px;">
+      <div class="form-check form-switch mb-0">
+        <input class="form-check-input" type="checkbox" id="bt-ext-hours" onchange="onExtHoursToggle()">
+        <label class="form-check-label small text-muted mb-0" for="bt-ext-hours">Ext hours</label>
+      </div>
+      <input type="time" id="bt-close-time" value="16:00" class="form-control form-control-sm d-none"
+             style="width:90px;font-size:.75rem;" onchange="saveBtSettings()">
+    </div>
+    <div class="d-flex align-items-center gap-1 ms-1">
+      <label class="small text-muted mb-0" style="white-space:nowrap;">Min hold:</label>
+      <input type="number" id="bt-min-hold" value="5" min="0" max="60" step="1"
+             class="form-control form-control-sm" style="width:55px;font-size:.75rem;" onchange="saveBtSettings()">
+      <span class="small text-muted">m</span>
+    </div>
+    <div class="d-flex align-items-center gap-1 ms-1" style="border-left:1px solid #ccc;padding-left:8px;">
+      <label class="small text-muted mb-0" style="white-space:nowrap;">Guard:</label>
+      <label class="small text-muted mb-0">stop</label>
+      <input type="number" id="bt-guard-stop" value="0" min="0" max="50" step="0.5"
+             class="form-control form-control-sm" style="width:55px;font-size:.75rem;" onchange="saveBtSettings()">
+      <label class="small text-muted mb-0">target</label>
+      <input type="number" id="bt-guard-target" value="0" min="0" max="100" step="0.5"
+             class="form-control form-control-sm" style="width:55px;font-size:.75rem;" onchange="saveBtSettings()">
+      <span class="small text-muted">%</span>
+    </div>
     <div id="bt-avg" class="d-none ms-2">
       <span class="small text-muted">Avg P&L:</span>
       <span id="bt-avg-val" class="fw-bold"></span>
@@ -102,14 +126,17 @@ function _getSrvFilter(key) {
 }
 
 function loadFilterState() {
+  // Server-side filters: only restore from localStorage if the input is currently empty.
+  // After pagination, the server-rendered inputs already have the correct values
+  // from the URL params — don't overwrite them with stale localStorage values.
   _SRV_KEYS.forEach(function(key) {
+    var el = document.querySelector('.srv-filter[data-key="' + key + '"]');
+    if (!el) return;
+    if (el.value.trim()) return;  // already has a value from server render
     var v = localStorage.getItem('snap_f_' + key);
-    if (v !== null) {
-      var el = document.querySelector('.srv-filter[data-key="' + key + '"]');
-      if (el) el.value = v;
-    }
+    if (v) el.value = v;
   });
-  // Client-side filters
+  // Client-side filters: always restore (they're not in the URL)
   var cli = localStorage.getItem('snap_cli_filters');
   if (cli) {
     try {
@@ -215,6 +242,16 @@ function applyColumnWidths() {
   if (!saved) return;
   try {
     var widths = JSON.parse(saved);
+    // Invalidate stale widths if column set changed (e.g., exit_pnl was added)
+    var currentCols = [];
+    tbl.querySelectorAll('col[data-col]').forEach(function(col) {
+      currentCols.push(col.getAttribute('data-col'));
+    });
+    var savedCols = Object.keys(widths);
+    if (currentCols.length !== savedCols.length) {
+      localStorage.removeItem(_COL_WIDTHS_KEY);
+      return;
+    }
     tbl.querySelectorAll('col[data-col]').forEach(function(col) {
       var w = widths[col.getAttribute('data-col')];
       if (w) col.style.width = w + 'px';
@@ -403,7 +440,10 @@ function applyClientFilters() {
         // Numeric min/max
         var n = parseNum(cellVal);
         var fv = parseFloat(f.val);
-        if (isNaN(n)) { show = false; break; }
+        // If cell has no data yet (async columns like MktCap, AvgVol, Price),
+        // skip this filter rather than hiding the row. The filter will be
+        // re-applied after the data arrives.
+        if (isNaN(n)) continue;
         if (f.bound === 'min' && n < fv) { show = false; break; }
         if (f.bound === 'max' && n > fv) { show = false; break; }
       }
@@ -550,6 +590,7 @@ function fetchPrices() {
           td.setAttribute('data-sort-val', String(p));
         }
       });
+      applyClientFilters();
     })
     .catch(function() {});
 }
@@ -591,6 +632,10 @@ function fetchFundamentals() {
           td.setAttribute('data-sort-val', String(d.pe_ratio));
         }
       });
+      // Re-apply client-side filters now that market data cells are populated.
+      // Without this, filters on avg_vol/mkt_cap/pe hide all rows because
+      // the cells still show "—" when applyClientFilters() first runs.
+      applyClientFilters();
     })
     .catch(function() {});
 }
@@ -603,6 +648,56 @@ var _btResults = {};       // snapshot_id -> result dict
 var _btCurrentStrategy = '';
 var _BT_STRAT_KEY = 'bt_last_strategy';
 var _SP_KEY = 'strategy_params';
+var _BT_SETTINGS_KEY = 'bt_settings';
+
+function onExtHoursToggle() {
+  var checked = document.getElementById('bt-ext-hours').checked;
+  var timeInput = document.getElementById('bt-close-time');
+  if (checked) {
+    timeInput.classList.remove('d-none');
+  } else {
+    timeInput.classList.add('d-none');
+  }
+  saveBtSettings();
+}
+
+function saveBtSettings() {
+  var ext = document.getElementById('bt-ext-hours').checked;
+  var closeTime = document.getElementById('bt-close-time').value;
+  var minHold = parseInt(document.getElementById('bt-min-hold').value) || 5;
+  var guardStop = parseFloat(document.getElementById('bt-guard-stop').value) || 0;
+  var guardTarget = parseFloat(document.getElementById('bt-guard-target').value) || 0;
+  localStorage.setItem(_BT_SETTINGS_KEY, JSON.stringify({extHours: ext, closeTime: closeTime, minHold: minHold, guardStop: guardStop, guardTarget: guardTarget}));
+}
+
+function loadBtSettings() {
+  try {
+    var s = JSON.parse(localStorage.getItem(_BT_SETTINGS_KEY));
+    if (!s) return;
+    if (s.extHours) {
+      document.getElementById('bt-ext-hours').checked = true;
+      document.getElementById('bt-close-time').classList.remove('d-none');
+    }
+    if (s.closeTime) {
+      document.getElementById('bt-close-time').value = s.closeTime;
+    }
+    if (s.minHold != null) {
+      document.getElementById('bt-min-hold').value = s.minHold;
+    }
+    if (s.guardStop != null) {
+      document.getElementById('bt-guard-stop').value = s.guardStop;
+    }
+    if (s.guardTarget != null) {
+      document.getElementById('bt-guard-target').value = s.guardTarget;
+    }
+  } catch(e) {}
+}
+
+function _getMarketClose() {
+  var ext = document.getElementById('bt-ext-hours').checked;
+  if (!ext) return '16:00';  // regular hours only
+  return document.getElementById('bt-close-time').value || '20:00';
+}
 
 function toggleBacktestPanel() {
   var panel = document.getElementById('backtest-panel');
@@ -611,6 +706,7 @@ function toggleBacktestPanel() {
   label.textContent = hidden ? 'Backtest' : 'Hide Backtest';
   if (!hidden && !_btStrategies) {
     // First open: fetch strategy definitions
+    loadBtSettings();
     fetch('/api/strategies')
       .then(function(r) { return r.json(); })
       .then(function(data) {
@@ -711,10 +807,10 @@ function _collectEntries() {
     var price = row.getAttribute('data-entry-price');
     var entryTime = row.getAttribute('data-entry-time');
     var sym = row.getAttribute('data-primary-symbol');
-    if (!sid || !price || !entryTime || !sym) return;
+    if (!sid || !entryTime || !sym) return;
     price = parseFloat(price);
-    if (isNaN(price) || price <= 0) return;
-    entries.push({snapshot_id: sid, symbol: sym, entry_price: price, entry_time: entryTime});
+    // Send entries even without price_10min — backtest engine will use 9:40 AM bar
+    entries.push({snapshot_id: sid, symbol: sym, entry_price: isNaN(price) || price <= 0 ? 0 : price, entry_time: entryTime});
   });
   return entries;
 }
@@ -732,10 +828,14 @@ function runBacktest() {
   document.getElementById('bt-spinner').classList.remove('d-none');
   document.getElementById('bt-run-btn').disabled = true;
 
+  var marketClose = _getMarketClose();
+  var minHold = parseInt(document.getElementById('bt-min-hold').value) || 5;
+  var guardStop = parseFloat(document.getElementById('bt-guard-stop').value) || 0;
+  var guardTarget = parseFloat(document.getElementById('bt-guard-target').value) || 0;
   fetch('/api/strategies/backtest', {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({strategy: strategy, params: params, entries: entries}),
+    body: JSON.stringify({strategy: strategy, params: params, entries: entries, market_close: marketClose, min_hold: minHold, guard_stop_pct: guardStop, guard_target_pct: guardTarget}),
   })
   .then(function(r) { return r.json(); })
   .then(function(results) {
@@ -754,48 +854,81 @@ function runBacktest() {
   });
 }
 
+function _fmtDuration(minutes) {
+  if (minutes == null || minutes <= 0) return '';
+  if (minutes >= 1440) {
+    var days = Math.floor(minutes / 1440);
+    var rem = Math.floor((minutes % 1440) / 60);
+    return days + 'd' + (rem > 0 ? ' ' + rem + 'h' : '');
+  }
+  if (minutes >= 60) {
+    return Math.floor(minutes / 60) + 'h ' + (minutes % 60) + 'm';
+  }
+  return minutes + 'm';
+}
+
 function _displayResults() {
   var tbl = document.getElementById('snapshots-tbl');
   if (!tbl) return;
 
-  // Update each row's Exit P&L cell
+  // Update each row's Exit P&L and Duration cells
   tbl.querySelectorAll('tbody tr').forEach(function(row) {
     var sid = row.getAttribute('data-snapshot-id');
-    var cell = row.querySelector('.exit-pnl');
-    if (!cell) return;
+    var pnlCell = row.querySelector('.exit-pnl');
+    var durCell = row.querySelector('.exit-duration');
     var r = _btResults[sid];
-    if (!r) {
-      cell.innerHTML = '<span class="text-muted">&mdash;</span>';
-      cell.setAttribute('data-sort-val', '');
+
+    if (!r || r.pnl_pct == null) {
+      if (pnlCell) {
+        pnlCell.innerHTML = r ? '<span class="text-muted">N/A</span>' : '<span class="text-muted">&mdash;</span>';
+        pnlCell.setAttribute('data-sort-val', '');
+        pnlCell.title = '';
+      }
+      if (durCell) {
+        durCell.innerHTML = '<span class="text-muted">&mdash;</span>';
+        durCell.setAttribute('data-sort-val', '');
+      }
       return;
     }
-    if (r.pnl_pct == null) {
-      cell.innerHTML = '<span class="text-muted">N/A</span>';
-      cell.setAttribute('data-sort-val', '');
-      return;
+
+    // Update Price@10 cell if the backtest corrected the entry price
+    if (r.entry_price) {
+      var p10Cell = row.querySelector('[data-col="price_10"]');
+      if (p10Cell) {
+        var origPrice = parseFloat(row.getAttribute('data-entry-price'));
+        if (!origPrice || Math.abs(origPrice - r.entry_price) > 0.01) {
+          // Backtest used a corrected price — show it
+          p10Cell.textContent = '$' + r.entry_price.toFixed(2);
+          p10Cell.setAttribute('data-sort-val', String(r.entry_price));
+        }
+      }
     }
+
+    // P&L cell
     var pnl = r.pnl_pct;
     var sign = pnl >= 0 ? '+' : '';
     var cls = pnl >= 0 ? 'text-success' : 'text-danger';
     var prefix = r.exit_reason === 'still_open' ? '<span class="text-muted" style="font-size:.65rem;">open </span>' : '';
-    cell.innerHTML = prefix + '<span class="' + cls + ' fw-semibold">' + sign + pnl.toFixed(1) + '%</span>';
-    cell.setAttribute('data-sort-val', String(pnl));
-    // Tooltip with details
-    var tip = r.exit_reason;
-    if (r.exit_time) {
-      // Format: show date + time if available
-      var et = r.exit_time;
-      if (et.indexOf('T') >= 0) et = et.replace('T', ' ').slice(0, 16);
-      tip += ' on ' + et;
+    if (pnlCell) {
+      pnlCell.innerHTML = prefix + '<span class="' + cls + ' fw-semibold">' + sign + pnl.toFixed(1) + '%</span>';
+      pnlCell.setAttribute('data-sort-val', String(pnl));
+      // Tooltip
+      var tip = r.exit_reason;
+      if (r.entry_price) tip += ' | entry $' + r.entry_price.toFixed(2);
+      if (r.exit_price) tip += ' → exit $' + r.exit_price.toFixed(2);
+      pnlCell.title = tip;
     }
-    if (r.hold_minutes != null && r.hold_minutes > 0) {
-      var hm = r.hold_minutes;
-      if (hm >= 390) tip += ' (' + (hm / 390).toFixed(1) + 'd)';
-      else if (hm >= 60) tip += ' (' + Math.floor(hm / 60) + 'h ' + (hm % 60) + 'm)';
-      else tip += ' (' + hm + 'm)';
+
+    // Duration cell (only show if actually exited, not still_open)
+    if (durCell) {
+      if (r.exit_reason !== 'still_open' && r.hold_minutes > 0) {
+        durCell.textContent = _fmtDuration(r.hold_minutes);
+        durCell.setAttribute('data-sort-val', String(r.hold_minutes));
+      } else {
+        durCell.innerHTML = '<span class="text-muted">&mdash;</span>';
+        durCell.setAttribute('data-sort-val', '');
+      }
     }
-    if (r.exit_price) tip += ' @ $' + r.exit_price.toFixed(2);
-    cell.title = tip;
   });
 
   _updateAvgPnl();
@@ -838,7 +971,7 @@ function clearBacktest() {
   _btResults = {};
   var tbl = document.getElementById('snapshots-tbl');
   if (tbl) {
-    tbl.querySelectorAll('.exit-pnl').forEach(function(cell) {
+    tbl.querySelectorAll('.exit-pnl, .exit-duration').forEach(function(cell) {
       cell.innerHTML = '<span class="text-muted">&mdash;</span>';
       cell.setAttribute('data-sort-val', '');
       cell.title = '';

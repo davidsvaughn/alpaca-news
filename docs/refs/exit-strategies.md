@@ -1,4 +1,4 @@
-# **EXIT STRATEGIES**
+# PART 1: **EXIT STRATEGIES**
 
 Each exit strategy clearly separates:
 
@@ -450,3 +450,251 @@ If building a trading agent, you should:
 * Make exit modules composable
 * Log trigger reason for post-trade analysis
 * Store state variables explicitly ($P_max, ATR_at_entry, etc.$)
+
+---
+
+# PART 2 : **COMBINING MULTIPLE STRATEGIES**
+
+Yes. Combining exits is not only possible — it’s standard practice.
+
+Most real systems use **multiple concurrent exit rules**. The question isn’t whether you can combine them. The question is:
+
+> How do you define precedence and interaction?
+
+Below is the clean way to think about it.
+
+---
+
+# 1. Core Concept: Exit = OR of Independent Triggers
+
+The standard architecture:
+
+[
+Exit = StopLoss ;; \lor ;; ProfitTarget ;; \lor ;; IndicatorSignal ;; \lor ;; TimeExit
+]
+
+In practice:
+
+* If **any risk rule fires**, exit immediately.
+* If **any profit rule fires**, exit.
+* If **any signal rule fires**, exit.
+
+This is almost always implemented as logical **OR**.
+
+---
+
+# 2. Your Specific Example
+
+You already have:
+
+RSI Exit:
+[
+RSI_t \ge 80
+]
+
+You want to add:
+
+Stop Loss:
+[
+P_t \le P_{entry}(1 - s)
+]
+
+Combined:
+
+[
+Exit = (RSI_t \ge 80) ;; \lor ;; (P_t \le P_{entry}(1 - s))
+]
+
+This is completely valid and very common.
+
+---
+
+# 3. Should You Use AND?
+
+Almost never for stop losses.
+
+Example AND logic:
+
+[
+Exit = (RSI_t \ge 80) ;; \land ;; (P_t < MA)
+]
+
+This delays exit and increases risk.
+
+AND logic is usually reserved for:
+
+* Entry filters
+* Scaling logic
+* Confirmations
+
+For exits, OR is safer.
+
+---
+
+# 4. Separating Loss vs Gain Logic
+
+Best practice:
+
+### Loss Rules (Risk Layer)
+
+These are always OR'd and highest priority:
+
+* Fixed stop
+* ATR stop
+* Trailing stop
+* Max drawdown
+
+They are “hard stops”.
+
+---
+
+### Profit / Signal Rules (Alpha Layer)
+
+* RSI overbought
+* MACD cross
+* Resistance hit
+* Time decay
+
+Also typically OR’d.
+
+---
+
+# 5. Recommended Architecture
+
+Instead of Boolean spaghetti, structure it as:
+
+```
+RiskExit = any(risk_rules_triggered)
+AlphaExit = any(signal_rules_triggered)
+
+Exit = RiskExit OR AlphaExit
+```
+
+Then log:
+
+* exit_reason = "risk" or "signal"
+
+This helps evaluation.
+
+---
+
+# 6. Advanced Option: Hierarchical Priority
+
+Sometimes you want:
+
+1. If StopLoss → exit immediately.
+2. Else if ProfitTarget → exit.
+3. Else if RSI → exit.
+
+That is ordered OR:
+
+```
+if stop_loss:
+    exit(reason="risk")
+elif profit_target:
+    exit(reason="target")
+elif rsi_signal:
+    exit(reason="signal")
+```
+
+Still OR logic — but with classification.
+
+---
+
+# 7. More Advanced: Conditional Activation
+
+You can also gate exits.
+
+Example:
+
+Only activate RSI exit after trade is profitable:
+
+[
+ActivateRSI = P_t > P_{entry}
+]
+
+[
+Exit = StopLoss \lor (ActivateRSI \land RSIExit)
+]
+
+This prevents RSI from closing losing trades prematurely.
+
+---
+
+# 8. For Backtesting Cleanly
+
+The cleanest abstraction:
+
+[
+Exit = f(MarketData, State, Params)
+]
+
+Where each rule returns:
+
+* True/False
+* Exit price
+* Reason
+* Priority
+
+Then the engine chooses the first triggered by priority.
+
+---
+
+# 9. Professional Reality
+
+Almost all profitable systems have:
+
+* Hard stop (risk containment)
+* Trailing stop (profit protection)
+* Signal exit (edge decay)
+
+All running simultaneously.
+
+---
+
+# 10. What You Should Avoid
+
+* Deeply nested AND conditions
+* Dynamic rule toggling without logging
+* Optimizing combinations without cross-validation
+* Overfitting exit parameters
+
+Exit rules are extremely easy to overfit.
+
+---
+
+# 11. For Your AI / Agent System
+
+Since you're building modular systems:
+
+Make each exit rule:
+
+```
+class ExitRule:
+    def check(self, market_data, state) -> ExitSignal:
+        return {triggered, price, reason, priority}
+```
+
+Then combine with:
+
+* OR logic
+* Priority ordering
+* Layer separation (risk vs alpha)
+
+---
+
+# Bottom Line
+
+Yes — combine them.
+Use OR logic.
+Keep risk exits independent and always active.
+Layer signal exits on top.
+Track which rule fired.
+
+---
+
+If you want next level, I can show:
+
+* A formal composable exit rule algebra
+* How to measure marginal contribution of each exit
+* Or how to optimize multi-exit systems without overfitting
