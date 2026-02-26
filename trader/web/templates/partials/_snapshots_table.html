@@ -1,4 +1,6 @@
-{% if snapshots %}
+<div class="d-none" data-total-count="{{ total | default(0) }}"></div>
+<input type="hidden" class="srv-filter" data-key="sort_col" value="{{ sort_col }}">
+<input type="hidden" class="srv-filter" data-key="sort_dir" value="{{ sort_dir }}">
 <div>
   <table id="snapshots-tbl" class="table table-sm table-hover align-middle" style="table-layout: fixed; width: 100%;">
     <colgroup>
@@ -42,20 +44,20 @@
           <div class="fcw" style="margin-top:2px"><input type="number" class="form-control form-control-sm srv-filter" data-key="price_10_max" value="{{ price_10_max_filter }}" placeholder="Max" step="any" style="font-size:.7rem;"><span class="fx" onclick="clearFilter(this)">&times;</span></div>
         </th>
         <th>
-          <div class="fcw"><input type="number" class="form-control form-control-sm cli-filter" data-col="price" data-bound="min" placeholder="Min" step="any" style="font-size:.7rem;"><span class="fx" onclick="clearFilter(this)">&times;</span></div>
-          <div class="fcw" style="margin-top:2px"><input type="number" class="form-control form-control-sm cli-filter" data-col="price" data-bound="max" placeholder="Max" step="any" style="font-size:.7rem;"><span class="fx" onclick="clearFilter(this)">&times;</span></div>
+          <div class="fcw"><input type="number" class="form-control form-control-sm srv-filter" data-key="price_min" value="{{ price_min_filter }}" placeholder="Min" step="any" style="font-size:.7rem;"><span class="fx" onclick="clearFilter(this)">&times;</span></div>
+          <div class="fcw" style="margin-top:2px"><input type="number" class="form-control form-control-sm srv-filter" data-key="price_max" value="{{ price_max_filter }}" placeholder="Max" step="any" style="font-size:.7rem;"><span class="fx" onclick="clearFilter(this)">&times;</span></div>
         </th>
         <th>
-          <div class="fcw"><input type="number" class="form-control form-control-sm cli-filter" data-col="avg_vol" data-bound="min" placeholder="Min" step="any" style="font-size:.7rem;"><span class="fx" onclick="clearFilter(this)">&times;</span></div>
-          <div class="fcw" style="margin-top:2px"><input type="number" class="form-control form-control-sm cli-filter" data-col="avg_vol" data-bound="max" placeholder="Max" step="any" style="font-size:.7rem;"><span class="fx" onclick="clearFilter(this)">&times;</span></div>
+          <div class="fcw"><input type="number" class="form-control form-control-sm srv-filter" data-key="avg_vol_min" value="{{ avg_vol_min_filter }}" placeholder="Min" step="any" style="font-size:.7rem;"><span class="fx" onclick="clearFilter(this)">&times;</span></div>
+          <div class="fcw" style="margin-top:2px"><input type="number" class="form-control form-control-sm srv-filter" data-key="avg_vol_max" value="{{ avg_vol_max_filter }}" placeholder="Max" step="any" style="font-size:.7rem;"><span class="fx" onclick="clearFilter(this)">&times;</span></div>
         </th>
         <th>
-          <div class="fcw"><input type="number" class="form-control form-control-sm cli-filter" data-col="mkt_cap" data-bound="min" placeholder="Min" step="any" style="font-size:.7rem;"><span class="fx" onclick="clearFilter(this)">&times;</span></div>
-          <div class="fcw" style="margin-top:2px"><input type="number" class="form-control form-control-sm cli-filter" data-col="mkt_cap" data-bound="max" placeholder="Max" step="any" style="font-size:.7rem;"><span class="fx" onclick="clearFilter(this)">&times;</span></div>
+          <div class="fcw"><input type="number" class="form-control form-control-sm srv-filter" data-key="mkt_cap_min" value="{{ mkt_cap_min_filter }}" placeholder="Min" step="any" style="font-size:.7rem;"><span class="fx" onclick="clearFilter(this)">&times;</span></div>
+          <div class="fcw" style="margin-top:2px"><input type="number" class="form-control form-control-sm srv-filter" data-key="mkt_cap_max" value="{{ mkt_cap_max_filter }}" placeholder="Max" step="any" style="font-size:.7rem;"><span class="fx" onclick="clearFilter(this)">&times;</span></div>
         </th>
         <th>
-          <div class="fcw"><input type="number" class="form-control form-control-sm cli-filter" data-col="pe" data-bound="min" placeholder="Min" step="any" style="font-size:.7rem;"><span class="fx" onclick="clearFilter(this)">&times;</span></div>
-          <div class="fcw" style="margin-top:2px"><input type="number" class="form-control form-control-sm cli-filter" data-col="pe" data-bound="max" placeholder="Max" step="any" style="font-size:.7rem;"><span class="fx" onclick="clearFilter(this)">&times;</span></div>
+          <div class="fcw"><input type="number" class="form-control form-control-sm srv-filter" data-key="pe_min" value="{{ pe_min_filter }}" placeholder="Min" step="any" style="font-size:.7rem;"><span class="fx" onclick="clearFilter(this)">&times;</span></div>
+          <div class="fcw" style="margin-top:2px"><input type="number" class="form-control form-control-sm srv-filter" data-key="pe_max" value="{{ pe_max_filter }}" placeholder="Max" step="any" style="font-size:.7rem;"><span class="fx" onclick="clearFilter(this)">&times;</span></div>
         </th>
         <th></th>
         <th></th>
@@ -64,23 +66,24 @@
       <!-- Column headers -->
       <tr>
         <th data-col="check"><input type="checkbox" onchange="toggleAllSnaps(this)"></th>
-        <th data-col="created" data-sort="date" class="resizable-th sortable-th"><span class="col-label">Created</span><span class="sort-arrow"></span><div class="resize-handle"></div></th>
-        <th data-col="headline" data-sort="text" class="resizable-th sortable-th"><span class="col-label">Headline</span><span class="sort-arrow"></span><div class="resize-handle"></div></th>
-        <th data-col="symbols" data-sort="text" class="resizable-th sortable-th"><span class="col-label">Symbols</span><span class="sort-arrow"></span><div class="resize-handle"></div></th>
-        <th data-col="signal" data-sort="text" class="resizable-th sortable-th"><span class="col-label">Signal</span><span class="sort-arrow"></span><div class="resize-handle"></div></th>
-        <th data-col="price_10" data-sort="num" class="resizable-th sortable-th"><span class="col-label">Price@{{ price_delay_minutes | default(10) }}</span><span class="sort-arrow"></span><div class="resize-handle"></div></th>
-        <th data-col="price" data-sort="num" class="resizable-th sortable-th"><span class="col-label">Price</span><span class="sort-arrow"></span><div class="resize-handle"></div></th>
-        <th data-col="avg_vol" data-sort="num" class="resizable-th sortable-th"><span class="col-label">AvgVol</span><span class="sort-arrow"></span><div class="resize-handle"></div></th>
-        <th data-col="mkt_cap" data-sort="num" class="resizable-th sortable-th"><span class="col-label">MktCap</span><span class="sort-arrow"></span><div class="resize-handle"></div></th>
-        <th data-col="pe" data-sort="num" class="resizable-th sortable-th"><span class="col-label">P/E</span><span class="sort-arrow"></span><div class="resize-handle"></div></th>
-        <th data-col="exit_pnl" data-sort="num" class="resizable-th sortable-th"><span class="col-label">Exit P&L</span><span class="sort-arrow"></span><div class="resize-handle"></div></th>
-        <th data-col="duration" data-sort="num" class="resizable-th sortable-th"><span class="col-label">Duration</span><span class="sort-arrow"></span><div class="resize-handle"></div></th>
+        <th data-col="created" data-sort="date" class="resizable-th sortable-th"><span class="col-label">Created</span><span class="sort-arrow">{% if sort_col == 'created' %} {% if sort_dir == 'asc' %}&#9650;{% else %}&#9660;{% endif %}{% endif %}</span><div class="resize-handle"></div></th>
+        <th data-col="headline" data-sort="text" class="resizable-th sortable-th"><span class="col-label">Headline</span><span class="sort-arrow">{% if sort_col == 'headline' %} {% if sort_dir == 'asc' %}&#9650;{% else %}&#9660;{% endif %}{% endif %}</span><div class="resize-handle"></div></th>
+        <th data-col="symbols" data-sort="text" class="resizable-th sortable-th"><span class="col-label">Symbols</span><span class="sort-arrow">{% if sort_col == 'symbols' %} {% if sort_dir == 'asc' %}&#9650;{% else %}&#9660;{% endif %}{% endif %}</span><div class="resize-handle"></div></th>
+        <th data-col="signal" data-sort="text" class="resizable-th sortable-th"><span class="col-label">Signal</span><span class="sort-arrow">{% if sort_col == 'signal' %} {% if sort_dir == 'asc' %}&#9650;{% else %}&#9660;{% endif %}{% endif %}</span><div class="resize-handle"></div></th>
+        <th data-col="price_10" data-sort="num" class="resizable-th sortable-th"><span class="col-label">Price@{{ price_delay_minutes | default(10) }}</span><span class="sort-arrow">{% if sort_col == 'price_10' %} {% if sort_dir == 'asc' %}&#9650;{% else %}&#9660;{% endif %}{% endif %}</span><div class="resize-handle"></div></th>
+        <th data-col="price" data-sort="num" class="resizable-th sortable-th"><span class="col-label">Price</span><span class="sort-arrow">{% if sort_col == 'price' %} {% if sort_dir == 'asc' %}&#9650;{% else %}&#9660;{% endif %}{% endif %}</span><div class="resize-handle"></div></th>
+        <th data-col="avg_vol" data-sort="num" class="resizable-th sortable-th"><span class="col-label">AvgVol</span><span class="sort-arrow">{% if sort_col == 'avg_vol' %} {% if sort_dir == 'asc' %}&#9650;{% else %}&#9660;{% endif %}{% endif %}</span><div class="resize-handle"></div></th>
+        <th data-col="mkt_cap" data-sort="num" class="resizable-th sortable-th"><span class="col-label">MktCap</span><span class="sort-arrow">{% if sort_col == 'mkt_cap' %} {% if sort_dir == 'asc' %}&#9650;{% else %}&#9660;{% endif %}{% endif %}</span><div class="resize-handle"></div></th>
+        <th data-col="pe" data-sort="num" class="resizable-th sortable-th"><span class="col-label">P/E</span><span class="sort-arrow">{% if sort_col == 'pe' %} {% if sort_dir == 'asc' %}&#9650;{% else %}&#9660;{% endif %}{% endif %}</span><div class="resize-handle"></div></th>
+        <th data-col="exit_pnl" class="resizable-th"><span class="col-label">Exit P&L</span><span class="sort-arrow"></span><div class="resize-handle"></div></th>
+        <th data-col="duration" class="resizable-th"><span class="col-label">Duration</span><span class="sort-arrow"></span><div class="resize-handle"></div></th>
         <th data-col="action"></th>
       </tr>
     </thead>
     <tbody>
+      {% if snapshots %}
       {% for s in snapshots %}
-      {% set primary_sym = s.trigger.symbols[0] if s.trigger.symbols else '' %}
+      {% set primary_sym = s._primary_symbol if s._primary_symbol else (s.trigger.symbols[0] if s.trigger.symbols else '') %}
       {% set dir = s.prediction.direction if s.prediction and s.prediction.direction else '' %}
       {% set conf = s.prediction.confidence if s.prediction and s.prediction.confidence is defined else None %}
       <tr data-snapshot-id="{{ s.snapshot_id }}"
@@ -113,23 +116,44 @@
             <span class="text-muted">&mdash;</span>
           {% endif %}
         </td>
-        <td class="small live-price" data-symbol="{{ primary_sym }}" data-sort-val="">
-          <span class="text-muted">&mdash;</span>
+        <td class="small" data-col="price" data-sort-val="{{ s._price if s._price is not none else '' }}">
+          {% if s._price is not none %}
+            {{ s._price_text }}
+          {% else %}
+            <span class="text-muted">&mdash;</span>
+          {% endif %}
         </td>
-        <td class="small market-data" data-col="avg_vol" data-symbol="{{ primary_sym }}" data-sort-val="">
-          <span class="text-muted">&mdash;</span>
+        <td class="small" data-col="avg_vol" data-sort-val="{{ s._avg_vol if s._avg_vol is not none else '' }}">
+          {% if s._avg_vol is not none %}
+            {{ s._avg_vol_text }}
+          {% else %}
+            <span class="text-muted">&mdash;</span>
+          {% endif %}
         </td>
-        <td class="small market-data" data-col="mkt_cap" data-symbol="{{ primary_sym }}" data-sort-val="">
-          <span class="text-muted">&mdash;</span>
+        <td class="small" data-col="mkt_cap" data-sort-val="{{ s._mkt_cap if s._mkt_cap is not none else '' }}">
+          {% if s._mkt_cap is not none %}
+            {{ s._mkt_cap_text }}
+          {% else %}
+            <span class="text-muted">&mdash;</span>
+          {% endif %}
         </td>
-        <td class="small market-data" data-col="pe" data-symbol="{{ primary_sym }}" data-sort-val="">
-          <span class="text-muted">&mdash;</span>
+        <td class="small" data-col="pe" data-sort-val="{{ s._pe if s._pe is not none else '' }}">
+          {% if s._pe is not none %}
+            {{ s._pe_text }}
+          {% else %}
+            <span class="text-muted">&mdash;</span>
+          {% endif %}
         </td>
         <td class="small exit-pnl" data-col="exit_pnl" data-sort-val=""><span class="text-muted">&mdash;</span></td>
         <td class="small exit-duration" data-col="duration" data-sort-val=""><span class="text-muted">&mdash;</span></td>
         <td><a href="/snapshots/{{ s.snapshot_id }}" class="btn btn-sm btn-outline-secondary">Detail</a></td>
       </tr>
       {% endfor %}
+      {% else %}
+      <tr>
+        <td colspan="13" class="text-center text-muted py-3">No snapshots found.</td>
+      </tr>
+      {% endif %}
     </tbody>
   </table>
 </div>
@@ -140,7 +164,7 @@
   <ul class="pagination pagination-sm justify-content-center">
     <li class="page-item {% if page <= 1 %}disabled{% endif %}">
       <a class="page-link" href="#"
-         hx-get="/api/snapshots?page={{ page - 1 }}&per_page={{ per_page }}&symbol={{ symbol_filter }}&headline={{ headline_filter }}&created_after={{ created_after }}&created_before={{ created_before }}&signal={{ signal_filter }}&price_10_min={{ price_10_min_filter }}&price_10_max={{ price_10_max_filter }}&explored={{ '1' if explored_only else '' }}"
+         hx-get="/api/snapshots?page={{ page - 1 }}&per_page={{ per_page }}{{ query_suffix }}"
          hx-target="#snapshots-table" hx-swap="innerHTML">Prev</a>
     </li>
     {% set start_page = [1, page - 3] | max %}
@@ -148,7 +172,7 @@
     {% if start_page > 1 %}
     <li class="page-item">
       <a class="page-link" href="#"
-         hx-get="/api/snapshots?page=1&per_page={{ per_page }}&symbol={{ symbol_filter }}&headline={{ headline_filter }}&created_after={{ created_after }}&created_before={{ created_before }}&signal={{ signal_filter }}&price_10_min={{ price_10_min_filter }}&price_10_max={{ price_10_max_filter }}&explored={{ '1' if explored_only else '' }}"
+         hx-get="/api/snapshots?page=1&per_page={{ per_page }}{{ query_suffix }}"
          hx-target="#snapshots-table" hx-swap="innerHTML">1</a>
     </li>
     {% if start_page > 2 %}<li class="page-item disabled"><span class="page-link">...</span></li>{% endif %}
@@ -156,7 +180,7 @@
     {% for p in range(start_page, end_page + 1) %}
     <li class="page-item {% if p == page %}active{% endif %}">
       <a class="page-link" href="#"
-         hx-get="/api/snapshots?page={{ p }}&per_page={{ per_page }}&symbol={{ symbol_filter }}&headline={{ headline_filter }}&created_after={{ created_after }}&created_before={{ created_before }}&signal={{ signal_filter }}&price_10_min={{ price_10_min_filter }}&price_10_max={{ price_10_max_filter }}&explored={{ '1' if explored_only else '' }}"
+         hx-get="/api/snapshots?page={{ p }}&per_page={{ per_page }}{{ query_suffix }}"
          hx-target="#snapshots-table" hx-swap="innerHTML">{{ p }}</a>
     </li>
     {% endfor %}
@@ -164,20 +188,16 @@
     {% if end_page < total_pages - 1 %}<li class="page-item disabled"><span class="page-link">...</span></li>{% endif %}
     <li class="page-item">
       <a class="page-link" href="#"
-         hx-get="/api/snapshots?page={{ total_pages }}&per_page={{ per_page }}&symbol={{ symbol_filter }}&headline={{ headline_filter }}&created_after={{ created_after }}&created_before={{ created_before }}&signal={{ signal_filter }}&price_10_min={{ price_10_min_filter }}&price_10_max={{ price_10_max_filter }}&explored={{ '1' if explored_only else '' }}"
+         hx-get="/api/snapshots?page={{ total_pages }}&per_page={{ per_page }}{{ query_suffix }}"
          hx-target="#snapshots-table" hx-swap="innerHTML">{{ total_pages }}</a>
     </li>
     {% endif %}
     <li class="page-item {% if page >= total_pages %}disabled{% endif %}">
       <a class="page-link" href="#"
-         hx-get="/api/snapshots?page={{ page + 1 }}&per_page={{ per_page }}&symbol={{ symbol_filter }}&headline={{ headline_filter }}&created_after={{ created_after }}&created_before={{ created_before }}&signal={{ signal_filter }}&price_10_min={{ price_10_min_filter }}&price_10_max={{ price_10_max_filter }}&explored={{ '1' if explored_only else '' }}"
+         hx-get="/api/snapshots?page={{ page + 1 }}&per_page={{ per_page }}{{ query_suffix }}"
          hx-target="#snapshots-table" hx-swap="innerHTML">Next</a>
     </li>
   </ul>
   <div class="text-center text-muted small mb-2">Page {{ page }} of {{ total_pages }} ({{ total }} snapshots)</div>
 </nav>
-{% endif %}
-
-{% else %}
-<p class="text-muted">No snapshots found.</p>
 {% endif %}

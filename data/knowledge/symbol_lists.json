@@ -246,12 +246,15 @@
     "SOC",
     "HRL",
     "AEHL",
-    "CHWY"
+    "CHWY",
+    "ETN",
+    "UTHR",
+    "CM"
   ],
   "crypto": [],
   "rejected": [
     "BTCUSD",
     "VNP"
   ],
-  "last_updated": "2026-02-26T18:24:46.711384+00:00"
+  "last_updated": "2026-02-26T18:58:15.780459+00:00"
 }

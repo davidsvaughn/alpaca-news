@@ -8,6 +8,7 @@ import threading
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlencode
 
 from fastapi import FastAPI, Form, Request
 from fastapi.responses import HTMLResponse, Response
@@ -150,6 +151,152 @@ def create_app(
         except ValueError:
             return None
 
+    def _normalize_sort(value: str | None, direction: str | None) -> tuple[str, str]:
+        allowed = {"created", "headline", "symbols", "signal", "price_10", "price", "avg_vol", "mkt_cap", "pe"}
+        col = (value or "created").strip().lower()
+        if col not in allowed:
+            col = "created"
+        dir_norm = (direction or "desc").strip().lower()
+        if dir_norm not in {"asc", "desc"}:
+            dir_norm = "desc"
+        return col, dir_norm
+
+    def _build_query_suffix(params: dict[str, str]) -> str:
+        pairs = [(k, v) for k, v in params.items() if v != ""]
+        if not pairs:
+            return ""
+        return "&" + urlencode(pairs)
+
+    def _primary_symbol(snap: dict[str, Any]) -> str:
+        trigger = snap.get("trigger") or {}
+        symbols = trigger.get("symbols") or []
+        if not symbols:
+            return ""
+        return str(symbols[0]).strip().upper()
+
+    def _safe_float(value: Any) -> float | None:
+        if value is None:
+            return None
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return None
+
+    def _matches_range(value: float | None, min_val: float | None, max_val: float | None) -> bool:
+        if min_val is None and max_val is None:
+            return True
+        if value is None:
+            return False
+        if min_val is not None and value < min_val:
+            return False
+        if max_val is not None and value > max_val:
+            return False
+        return True
+
+    def _fmt_volume(v: float | None) -> str:
+        if v is None:
+            return "\u2014"
+        if v >= 1e9:
+            return f"{v / 1e9:.1f}B"
+        if v >= 1e6:
+            return f"{v / 1e6:.1f}M"
+        if v >= 1e3:
+            return f"{v / 1e3:.0f}K"
+        return str(int(round(v)))
+
+    def _fmt_mkt_cap(v: float | None) -> str:
+        if v is None:
+            return "\u2014"
+        if v >= 1e12:
+            return f"${v / 1e12:.2f}T"
+        if v >= 1e9:
+            return f"${v / 1e9:.1f}B"
+        if v >= 1e6:
+            return f"${v / 1e6:.0f}M"
+        return f"${int(round(v)):,}"
+
+    def _fmt_price(v: float | None) -> str:
+        if v is None:
+            return "\u2014"
+        return f"${v:.2f}"
+
+    def _fmt_pe(v: float | None) -> str:
+        if v is None:
+            return "\u2014"
+        return f"{v:.1f}"
+
+    def _sort_snapshot_rows(rows: list[dict[str, Any]], sort_col: str, sort_dir: str) -> list[dict[str, Any]]:
+        signal_rank = {"bearish": 0, "neutral": 1, "bullish": 2}
+
+        def _value(row: dict[str, Any]) -> Any:
+            if sort_col == "created":
+                return row.get("created_at") or ""
+            if sort_col == "headline":
+                trig = row.get("trigger") or {}
+                return str(trig.get("headline") or "").lower()
+            if sort_col == "symbols":
+                return row.get("_primary_symbol") or ""
+            if sort_col == "signal":
+                pred = row.get("prediction") or {}
+                d = str(pred.get("direction") or "").lower()
+                return signal_rank.get(d)
+            if sort_col == "price_10":
+                return _safe_float(row.get("price_10min"))
+            if sort_col == "price":
+                return _safe_float(row.get("_price"))
+            if sort_col == "avg_vol":
+                return _safe_float(row.get("_avg_vol"))
+            if sort_col == "mkt_cap":
+                return _safe_float(row.get("_mkt_cap"))
+            if sort_col == "pe":
+                return _safe_float(row.get("_pe"))
+            return row.get("created_at") or ""
+
+        with_values: list[tuple[Any, dict[str, Any]]] = []
+        missing: list[dict[str, Any]] = []
+        for row in rows:
+            v = _value(row)
+            if v is None or v == "":
+                missing.append(row)
+            else:
+                with_values.append((v, row))
+
+        with_values.sort(key=lambda x: x[0], reverse=(sort_dir == "desc"))
+        return [row for _, row in with_values] + missing
+
+    def _fetch_market_metrics(symbols: list[str]) -> dict[str, dict[str, float | None]]:
+        result: dict[str, dict[str, float | None]] = {}
+        uniq: list[str] = []
+        seen: set[str] = set()
+        for sym in symbols:
+            s = str(sym).strip().upper()
+            if not s or s in seen:
+                continue
+            seen.add(s)
+            uniq.append(s)
+            result[s] = {"price": None, "avg_vol": None, "mkt_cap": None, "pe": None}
+        if not uniq:
+            return result
+
+        market: MarketDataService = app.state.market
+        chunk_size = 50
+        for i in range(0, len(uniq), chunk_size):
+            chunk = uniq[i:i + chunk_size]
+            batch: dict[str, dict[str, Any]] = {}
+            try:
+                batch = market.get_quotes_with_fundamentals(chunk)
+            except Exception:
+                batch = {}
+            for sym in chunk:
+                d = batch.get(sym) or {}
+                result[sym] = {
+                    "price": _safe_float(d.get("last_price")),
+                    "avg_vol": _safe_float(d.get("avg_10d_volume") or d.get("avg_volume")),
+                    "mkt_cap": _safe_float(d.get("market_cap")),
+                    "pe": _safe_float(d.get("pe_ratio")),
+                }
+        return result
+
     # ------------------------------------------------------------------
     # Page routes
     # ------------------------------------------------------------------
@@ -193,9 +340,26 @@ def create_app(
         signal: str | None = None,
         price_10_min: str | None = None,
         price_10_max: str | None = None,
+        price_min: str | None = None,
+        price_max: str | None = None,
+        avg_vol_min: str | None = None,
+        avg_vol_max: str | None = None,
+        mkt_cap_min: str | None = None,
+        mkt_cap_max: str | None = None,
+        pe_min: str | None = None,
+        pe_max: str | None = None,
+        sort_col: str | None = None,
+        sort_dir: str | None = None,
     ):
         explored_only = explored == "1"
         signal_direction = _normalize_signal_filter(signal)
+        signal_filter = (
+            "bull" if signal_direction == "bullish"
+            else "bear" if signal_direction == "bearish"
+            else "neutral" if signal_direction == "neutral"
+            else ""
+        )
+        sort_col_norm, sort_dir_norm = _normalize_sort(sort_col, sort_dir)
         price_10_min_val = _parse_optional_float(price_10_min)
         price_10_max_val = _parse_optional_float(price_10_max)
         total = count_snapshots(
@@ -214,9 +378,19 @@ def create_app(
             name="snapshots.html",
             context={"active_page": "snapshots", "symbol_filter": symbol,
                      "headline_filter": headline,
-                     "signal_filter": signal or "",
+                     "signal_filter": signal_filter,
                      "price_10_min_filter": price_10_min or "",
                      "price_10_max_filter": price_10_max or "",
+                     "price_min_filter": price_min or "",
+                     "price_max_filter": price_max or "",
+                     "avg_vol_min_filter": avg_vol_min or "",
+                     "avg_vol_max_filter": avg_vol_max or "",
+                     "mkt_cap_min_filter": mkt_cap_min or "",
+                     "mkt_cap_max_filter": mkt_cap_max or "",
+                     "pe_min_filter": pe_min or "",
+                     "pe_max_filter": pe_max or "",
+                     "sort_col": sort_col_norm,
+                     "sort_dir": sort_dir_norm,
                      "explored_only": explored_only, "total": total,
                      "created_after": created_after or "", "created_before": created_before or "",
                      "price_delay_minutes": settings.price_delay_minutes},
@@ -387,15 +561,41 @@ def create_app(
         signal: str | None = None,
         price_10_min: str | None = None,
         price_10_max: str | None = None,
+        price_min: str | None = None,
+        price_max: str | None = None,
+        avg_vol_min: str | None = None,
+        avg_vol_max: str | None = None,
+        mkt_cap_min: str | None = None,
+        mkt_cap_max: str | None = None,
+        pe_min: str | None = None,
+        pe_max: str | None = None,
+        sort_col: str | None = None,
+        sort_dir: str | None = None,
         page: int = 1,
         per_page: int = 50,
     ):
         explored_only = explored == "1"
         signal_direction = _normalize_signal_filter(signal)
+        signal_filter = (
+            "bull" if signal_direction == "bullish"
+            else "bear" if signal_direction == "bearish"
+            else "neutral" if signal_direction == "neutral"
+            else ""
+        )
+        sort_col_norm, sort_dir_norm = _normalize_sort(sort_col, sort_dir)
+        per_page = max(1, min(per_page, 500))
         price_10_min_val = _parse_optional_float(price_10_min)
         price_10_max_val = _parse_optional_float(price_10_max)
-        offset = (max(page, 1) - 1) * per_page
-        total = count_snapshots(
+        price_min_val = _parse_optional_float(price_min)
+        price_max_val = _parse_optional_float(price_max)
+        avg_vol_min_val = _parse_optional_float(avg_vol_min)
+        avg_vol_max_val = _parse_optional_float(avg_vol_max)
+        mkt_cap_min_val = _parse_optional_float(mkt_cap_min)
+        mkt_cap_max_val = _parse_optional_float(mkt_cap_max)
+        pe_min_val = _parse_optional_float(pe_min)
+        pe_max_val = _parse_optional_float(pe_max)
+
+        base_total = count_snapshots(
             db,
             symbol=symbol,
             explored_only=explored_only,
@@ -406,7 +606,7 @@ def create_app(
             price_10_min=price_10_min_val,
             price_10_max=price_10_max_val,
         )
-        snaps = get_all_snapshots(
+        base_snaps = get_all_snapshots(
             db,
             symbol=symbol,
             explored_only=explored_only,
@@ -416,24 +616,94 @@ def create_app(
             signal_direction=signal_direction,
             price_10_min=price_10_min_val,
             price_10_max=price_10_max_val,
-            limit=per_page,
-            offset=offset,
+            limit=max(base_total, 1),
+            offset=0,
         )
+
+        symbols = [_primary_symbol(s) for s in base_snaps]
+        market_by_symbol = _fetch_market_metrics(symbols)
+
+        filtered_rows: list[dict[str, Any]] = []
+        for snap in base_snaps:
+            row = dict(snap)
+            sym = _primary_symbol(row)
+            md = market_by_symbol.get(sym) or {}
+            row["_primary_symbol"] = sym
+            row["_price"] = _safe_float(md.get("price"))
+            row["_avg_vol"] = _safe_float(md.get("avg_vol"))
+            row["_mkt_cap"] = _safe_float(md.get("mkt_cap"))
+            row["_pe"] = _safe_float(md.get("pe"))
+            row["_price_text"] = _fmt_price(row["_price"])
+            row["_avg_vol_text"] = _fmt_volume(row["_avg_vol"])
+            row["_mkt_cap_text"] = _fmt_mkt_cap(row["_mkt_cap"])
+            row["_pe_text"] = _fmt_pe(row["_pe"])
+
+            if not _matches_range(row["_price"], price_min_val, price_max_val):
+                continue
+            if not _matches_range(row["_avg_vol"], avg_vol_min_val, avg_vol_max_val):
+                continue
+            if not _matches_range(row["_mkt_cap"], mkt_cap_min_val, mkt_cap_max_val):
+                continue
+            if not _matches_range(row["_pe"], pe_min_val, pe_max_val):
+                continue
+
+            filtered_rows.append(row)
+
+        sorted_rows = _sort_snapshot_rows(filtered_rows, sort_col_norm, sort_dir_norm)
+        total = len(sorted_rows)
         total_pages = max(1, (total + per_page - 1) // per_page)
+        page = max(1, min(page, total_pages))
+        offset = (page - 1) * per_page
+        page_rows = sorted_rows[offset:offset + per_page]
+
+        query_suffix = _build_query_suffix(
+            {
+                "symbol": symbol or "",
+                "headline": headline or "",
+                "created_after": created_after or "",
+                "created_before": created_before or "",
+                "signal": signal_filter,
+                "price_10_min": price_10_min or "",
+                "price_10_max": price_10_max or "",
+                "price_min": price_min or "",
+                "price_max": price_max or "",
+                "avg_vol_min": avg_vol_min or "",
+                "avg_vol_max": avg_vol_max or "",
+                "mkt_cap_min": mkt_cap_min or "",
+                "mkt_cap_max": mkt_cap_max or "",
+                "pe_min": pe_min or "",
+                "pe_max": pe_max or "",
+                "sort_col": sort_col_norm,
+                "sort_dir": sort_dir_norm,
+                "explored": "1" if explored_only else "",
+            }
+        )
+
         return templates.TemplateResponse(
             request=request,
             name="partials/_snapshots_table.html",
             context={
-                "snapshots": [_DictObj(s) for s in snaps],
+                "snapshots": [_DictObj(s) for s in page_rows],
                 "page": page,
                 "per_page": per_page,
                 "total": total,
                 "total_pages": total_pages,
                 "symbol_filter": symbol or "",
                 "headline_filter": headline or "",
-                "signal_filter": signal or "",
+                "signal_filter": signal_filter,
                 "price_10_min_filter": price_10_min or "",
                 "price_10_max_filter": price_10_max or "",
+                "price_min_filter": price_min or "",
+                "price_max_filter": price_max or "",
+                "avg_vol_min_filter": avg_vol_min or "",
+                "avg_vol_max_filter": avg_vol_max or "",
+                "mkt_cap_min_filter": mkt_cap_min or "",
+                "mkt_cap_max_filter": mkt_cap_max or "",
+                "pe_min_filter": pe_min or "",
+                "pe_max_filter": pe_max or "",
+                "sort_col": sort_col_norm,
+                "sort_dir": sort_dir_norm,
+                "query_suffix": query_suffix,
                 "explored_only": explored_only,
                 "created_after": created_after or "",
                 "created_before": created_before or "",
@@ -785,7 +1055,7 @@ def create_app(
         )
 
     _KNOWLEDGE_WHITELIST = {
-        "skip_patterns.json",
+        "skip_patterns.jsonc",
         "investigate_patterns.json",
         "reliable_sources.json",
         "search_strategies.json",
