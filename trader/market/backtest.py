@@ -168,6 +168,58 @@ STRATEGIES: dict[str, StrategyDef] = {
             "multiplier": ParamDef("float", 0.5, "Multiplier (\u03b1)", 0.1, 1.0, 0.05),
         },
     ),
+    "roc_reversal": StrategyDef(
+        name="ROC Reversal Exit",
+        key="roc_reversal",
+        section="Momentum",
+        description="Exit when Rate of Change flips from positive to negative.",
+        params={
+            "roc_period": ParamDef("int", 10, "ROC period (bars)", 3, 100, 1),
+        },
+    ),
+    "stochastic_overbought": StrategyDef(
+        name="Stochastic Overbought Cross",
+        key="stochastic_overbought",
+        section="Momentum",
+        description="Exit when %K crosses below %D in the overbought zone.",
+        params={
+            "stoch_period": ParamDef("int", 14, "Lookback (bars)", 5, 50, 1),
+            "k_smooth": ParamDef("int", 3, "%K smoothing", 1, 10, 1),
+            "d_smooth": ParamDef("int", 3, "%D smoothing", 1, 10, 1),
+            "threshold": ParamDef("float", 80.0, "Overbought threshold", 60, 95, 1),
+        },
+    ),
+    "adx_trend_decay": StrategyDef(
+        name="ADX Trend Decay",
+        key="adx_trend_decay",
+        section="Momentum",
+        description="Exit when ADX drops from strong to weak (trend fading).",
+        params={
+            "adx_period": ParamDef("int", 14, "ADX period (bars)", 5, 50, 1),
+            "weak_threshold": ParamDef("float", 20.0, "Weak threshold", 10, 30, 1),
+            "strong_threshold": ParamDef("float", 30.0, "Strong threshold", 20, 50, 1),
+            "lookback": ParamDef("int", 10, "Strength lookback (bars)", 5, 50, 1),
+        },
+    ),
+    "volume_delta_divergence": StrategyDef(
+        name="Volume Delta Divergence",
+        key="volume_delta_divergence",
+        section="Volume",
+        description="Exit when price makes a new high but cumulative volume delta is declining.",
+        params={
+            "lookback": ParamDef("int", 30, "Lookback (bars)", 10, 100, 5),
+        },
+    ),
+    "volume_imbalance_flip": StrategyDef(
+        name="Volume Imbalance Flip",
+        key="volume_imbalance_flip",
+        section="Volume",
+        description="Exit when rolling volume imbalance flips from bullish to bearish.",
+        params={
+            "window": ParamDef("int", 30, "Rolling window (bars)", 10, 100, 5),
+            "threshold": ParamDef("float", 0.05, "Imbalance threshold (\u03b1)", 0.01, 0.20, 0.01),
+        },
+    ),
     "max_holding_period": StrategyDef(
         name="Max Holding Period",
         key="max_holding_period",
@@ -436,6 +488,63 @@ def _compute_macd(
     return macd_line, signal_line
 
 
+def _compute_roc(close: pd.Series, period: int) -> pd.Series:
+    return close.pct_change(period)
+
+
+def _compute_stochastic(
+    df: pd.DataFrame, n: int, k_smooth: int, d_smooth: int,
+) -> tuple[pd.Series, pd.Series]:
+    low_n = df["Low"].rolling(n).min()
+    high_n = df["High"].rolling(n).max()
+    k_raw = (df["Close"] - low_n) / (high_n - low_n) * 100
+    k_line = k_raw.rolling(k_smooth).mean()
+    d_line = k_line.rolling(d_smooth).mean()
+    return k_line, d_line
+
+
+def _compute_adx(df: pd.DataFrame, period: int) -> pd.Series:
+    high = df["High"]
+    low = df["Low"]
+    prev_high = high.shift(1)
+    prev_low = low.shift(1)
+    plus_dm = (high - prev_high).clip(lower=0)
+    minus_dm = (prev_low - low).clip(lower=0)
+    # Zero out whichever is smaller
+    plus_dm[plus_dm < minus_dm] = 0
+    minus_dm[minus_dm < plus_dm] = 0
+    atr = _compute_atr(df, period)
+    plus_di = _compute_ema(plus_dm, period) / atr * 100
+    minus_di = _compute_ema(minus_dm, period) / atr * 100
+    dx = (plus_di - minus_di).abs() / (plus_di + minus_di) * 100
+    return _compute_ema(dx, period)
+
+
+def _compute_volume_delta(df: pd.DataFrame) -> tuple[pd.Series, pd.Series]:
+    """Compute per-bar uptick/downtick volume using the inter-bar tick rule.
+
+    Returns (uptick_vol, downtick_vol) Series aligned to df index.
+    """
+    close = df["Close"].values
+    volume = df["Volume"].values
+    n = len(close)
+    direction = np.zeros(n)
+    for i in range(1, n):
+        if close[i] > close[i - 1]:
+            direction[i] = 1
+        elif close[i] < close[i - 1]:
+            direction[i] = -1
+        else:
+            direction[i] = direction[i - 1]
+    uptick = pd.Series(
+        np.where(direction > 0, volume, 0), index=df.index, dtype=float,
+    )
+    downtick = pd.Series(
+        np.where(direction < 0, volume, 0), index=df.index, dtype=float,
+    )
+    return uptick, downtick
+
+
 # ---------------------------------------------------------------------------
 # Walk-forward strategy runners
 # Each returns (exit_price, exit_timestamp_str, reason, bars_held).
@@ -619,6 +728,111 @@ def _run_volume_fade(df, entry_idx, entry_price, params):
     return None, None, "still_open", len(df) - entry_idx
 
 
+def _run_roc_reversal(df, entry_idx, entry_price, params):
+    period = int(params["roc_period"])
+    roc = _compute_roc(df["Close"], period)
+    prev_roc = None
+    for i in range(entry_idx, len(df)):
+        bar = df.iloc[i]
+        bars_held = i - entry_idx + 1
+        r = roc.iloc[i]
+        if pd.isna(r):
+            continue
+        if prev_roc is not None and prev_roc > 0 and r < 0:
+            return bar["Close"], _fmt_ts(df.index, i), "signal", bars_held
+        prev_roc = r
+    return None, None, "still_open", len(df) - entry_idx
+
+
+def _run_stochastic_overbought(df, entry_idx, entry_price, params):
+    n = int(params["stoch_period"])
+    k_smooth = int(params["k_smooth"])
+    d_smooth = int(params["d_smooth"])
+    threshold = params["threshold"]
+    k_line, d_line = _compute_stochastic(df, n, k_smooth, d_smooth)
+    prev_k_above = None
+    prev_k = None
+    for i in range(entry_idx, len(df)):
+        bar = df.iloc[i]
+        bars_held = i - entry_idx + 1
+        k = k_line.iloc[i]
+        d = d_line.iloc[i]
+        if pd.isna(k) or pd.isna(d):
+            continue
+        currently_above = k >= d
+        if (prev_k_above is not None and prev_k_above and not currently_above
+                and prev_k is not None and prev_k > threshold):
+            return bar["Close"], _fmt_ts(df.index, i), "signal", bars_held
+        prev_k_above = currently_above
+        prev_k = k
+    return None, None, "still_open", len(df) - entry_idx
+
+
+def _run_adx_trend_decay(df, entry_idx, entry_price, params):
+    period = int(params["adx_period"])
+    weak = params["weak_threshold"]
+    strong = params["strong_threshold"]
+    lookback = int(params["lookback"])
+    adx = _compute_adx(df, period)
+    for i in range(entry_idx, len(df)):
+        bar = df.iloc[i]
+        bars_held = i - entry_idx + 1
+        a = adx.iloc[i]
+        if pd.isna(a):
+            continue
+        if a < weak:
+            # Check if ADX was recently strong
+            start = max(0, i - lookback)
+            recent = adx.iloc[start:i]
+            if not recent.empty and recent.max() > strong:
+                return bar["Close"], _fmt_ts(df.index, i), "signal", bars_held
+    return None, None, "still_open", len(df) - entry_idx
+
+
+def _run_volume_delta_divergence(df, entry_idx, entry_price, params):
+    lookback = int(params["lookback"])
+    uptick, downtick = _compute_volume_delta(df)
+    cum_delta = (uptick - downtick).cumsum()
+    for i in range(entry_idx, len(df)):
+        bar = df.iloc[i]
+        bars_held = i - entry_idx + 1
+        if i < lookback:
+            continue
+        # Price at new rolling high?
+        window_start = max(entry_idx, i - lookback)
+        price_window = df["Close"].iloc[window_start:i]
+        if price_window.empty:
+            continue
+        if bar["Close"] >= price_window.max():
+            # But cumulative delta is lower than lookback bars ago?
+            if cum_delta.iloc[i] < cum_delta.iloc[window_start]:
+                return bar["Close"], _fmt_ts(df.index, i), "signal", bars_held
+    return None, None, "still_open", len(df) - entry_idx
+
+
+def _run_volume_imbalance_flip(df, entry_idx, entry_price, params):
+    window = int(params["window"])
+    alpha = params["threshold"]
+    uptick, downtick = _compute_volume_delta(df)
+    roll_up = uptick.rolling(window).sum()
+    roll_dn = downtick.rolling(window).sum()
+    roll_total = roll_up + roll_dn
+    imbalance = (roll_up - roll_dn) / roll_total.replace(0, np.nan)
+    for i in range(entry_idx, len(df)):
+        bar = df.iloc[i]
+        bars_held = i - entry_idx + 1
+        imb = imbalance.iloc[i]
+        if pd.isna(imb):
+            continue
+        if imb < -alpha:
+            # Was recently bullish?
+            start = max(0, i - window)
+            recent = imbalance.iloc[start:i]
+            if not recent.empty and recent.max() > alpha:
+                return bar["Close"], _fmt_ts(df.index, i), "signal", bars_held
+    return None, None, "still_open", len(df) - entry_idx
+
+
 def _run_max_holding_period(df, entry_idx, entry_price, params):
     max_bars = int(params["max_bars"])
     exit_idx = entry_idx + max_bars
@@ -640,6 +854,11 @@ _STRATEGY_RUNNERS = {
     "rsi_overbought": _run_rsi_overbought,
     "macd_bearish_cross": _run_macd_bearish_cross,
     "volume_fade": _run_volume_fade,
+    "roc_reversal": _run_roc_reversal,
+    "stochastic_overbought": _run_stochastic_overbought,
+    "adx_trend_decay": _run_adx_trend_decay,
+    "volume_delta_divergence": _run_volume_delta_divergence,
+    "volume_imbalance_flip": _run_volume_imbalance_flip,
     "max_holding_period": _run_max_holding_period,
 }
 

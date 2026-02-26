@@ -226,11 +226,78 @@ $MACD_t < Signal_t$
 
 ---
 
+## 11. ROC Reversal Exit
+
+Exit when momentum flips from positive to negative:
+
+$ROC_{n,t} < 0 \quad \text{AND} \quad ROC_{n,t-1} > 0$
+
+**Market Data**
+
+* Close prices
+
+**Derived**
+
+* Rate of Change ($ROC_n$)
+
+**User**
+
+* ROC period ($n$) (e.g., 10)
+
+---
+
+## 12. Stochastic Overbought Cross Exit
+
+Exit when %K crosses below %D in the overbought zone:
+
+$\%K_t < \%D_t \quad \text{AND} \quad \%K_{t-1} \ge \%D_{t-1} \quad \text{AND} \quad \%K_{t-1} > \theta$
+
+**Market Data**
+
+* High, Low, Close
+
+**Derived**
+
+* Stochastic %K
+* Stochastic %D (SMA of %K)
+
+**User**
+
+* Lookback period ($n$) (e.g., 14)
+* %K smoothing ($k$) (e.g., 3)
+* %D smoothing ($d$) (e.g., 3)
+* Overbought threshold ($\theta$) (e.g., 80)
+
+---
+
+## 13. ADX Trend Decay Exit
+
+Exit when trend strength drops from strong to weak:
+
+$ADX_t < \theta_{weak} \quad \text{AND} \quad \max(ADX_{t-k:t}) > \theta_{strong}$
+
+**Market Data**
+
+* High, Low, Close
+
+**Derived**
+
+* ADX (Average Directional Index)
+
+**User**
+
+* ADX period ($n$) (e.g., 14)
+* Weak threshold ($\theta_{weak}$) (e.g., 20)
+* Strong threshold ($\theta_{strong}$) (e.g., 30)
+* Lookback for recent strength ($k$) (e.g., 10)
+
+---
+
 # SECTION 6 — Volume / Intraday
 
 ---
 
-## 11. VWAP Breakdown
+## 14. VWAP Breakdown
 
 $P_t < VWAP_t$
 
@@ -249,7 +316,7 @@ $P_t < VWAP_t$
 
 ---
 
-## 12. Volume Fade Exit
+## 15. Volume Fade Exit
 
 Exit if:
 $Volume_t < \alpha \cdot AvgVolume$
@@ -269,11 +336,67 @@ $Volume_t < \alpha \cdot AvgVolume$
 
 ---
 
+## 16. Volume Delta Divergence Exit
+
+Exit when price makes a new rolling high but cumulative volume delta is declining (buyers losing conviction):
+
+$P_t \ge \max(P_{t-n:t}) \quad \text{AND} \quad \Delta_{cum,t} < \Delta_{cum,t-n}$
+
+Where $\Delta_{cum}$ is the running sum of per-bar net delta (uptick volume − downtick volume), computed via the inter-bar tick rule on 1-min bars.
+
+**Market Data**
+
+* Close prices (for tick rule direction)
+* Volume (for uptick/downtick assignment)
+
+**Derived**
+
+* Per-bar uptick/downtick volume (inter-bar tick rule)
+* Cumulative volume delta ($\Delta_{cum}$)
+* Rolling price high ($P_{max,n}$)
+
+**State Variables**
+
+* Running cumulative delta
+* Rolling window of delta values
+
+**User**
+
+* Lookback window ($n$) (e.g., 30 bars)
+
+---
+
+## 17. Volume Imbalance Flip Exit
+
+Exit when the rolling volume imbalance ratio flips from bullish to bearish:
+
+$Imbalance_t < -\alpha \quad \text{AND} \quad \max(Imbalance_{t-k:t}) > \alpha$
+
+Where $Imbalance = \frac{uptick\_vol - downtick\_vol}{uptick\_vol + downtick\_vol}$ over a rolling window, computed via the inter-bar tick rule.
+
+**Market Data**
+
+* Close prices
+* Volume
+
+**Derived**
+
+* Per-bar uptick/downtick volume (inter-bar tick rule)
+* Rolling imbalance ratio
+
+**User**
+
+* Rolling window ($n$) (e.g., 30 bars)
+* Imbalance threshold ($\alpha$) (e.g., 0.05)
+* Lookback for recent bullish check ($k$) (e.g., same as $n$)
+
+---
+
 # SECTION 7 — Statistical / Model-Based
 
 ---
 
-## 13. Expected Return Threshold Exit
+## 18. Expected Return Threshold Exit
 
 $E[R_{future} | X_t] < \theta$
 
@@ -296,7 +419,7 @@ $E[R_{future} | X_t] < \theta$
 
 ---
 
-## 14. Max Holding Period
+## 19. Max Holding Period
 
 $t - t_{entry} \ge T$
 
@@ -318,7 +441,7 @@ $t - t_{entry} \ge T$
 
 ---
 
-## 15. Max Daily Loss
+## 20. Max Daily Loss
 
 Exit and halt if:
 $DailyPnL \le -D$
@@ -424,15 +547,80 @@ $ROC = \frac{P_t - P_{t-n}}{P_{t-n}}$
 
 ---
 
+## A8. Stochastic Oscillator
+
+$\%K_{raw} = \frac{P_t - L_n}{H_n - L_n} \times 100$
+
+Where $L_n$ = lowest low and $H_n$ = highest high over the lookback period.
+
+$\%K = SMA_k(\%K_{raw})$
+
+$\%D = SMA_d(\%K)$
+
+**Inputs**
+
+* High, Low, Close
+* Lookback period ($n$), %K smoothing ($k$), %D smoothing ($d$)
+
+---
+
+## A9. ADX (Average Directional Index)
+
+Step 1: Directional Movement
+
+$+DM_t = High_t - High_{t-1}$ (if positive and > $-DM$, else 0)
+
+$-DM_t = Low_{t-1} - Low_t$ (if positive and > $+DM$, else 0)
+
+Step 2: Smoothed directional indicators
+
+$+DI_n = \frac{EMA_n(+DM)}{ATR_n} \times 100$
+
+$-DI_n = \frac{EMA_n(-DM)}{ATR_n} \times 100$
+
+Step 3: ADX
+
+$DX = \frac{|+DI - (-DI)|}{+DI + (-DI)} \times 100$
+
+$ADX_n = EMA_n(DX)$
+
+**Inputs**
+
+* High, Low, Close
+* Period ($n$)
+
+---
+
+## A10. Volume Delta (Inter-bar Tick Rule)
+
+Assigns each bar's entire volume as uptick or downtick based on the bar-to-bar price change:
+
+$\delta_t = \begin{cases} +V_t & \text{if } Close_t > Close_{t-1} \\ -V_t & \text{if } Close_t < Close_{t-1} \\ \delta_{t-1} & \text{if } Close_t = Close_{t-1} \end{cases}$
+
+Cumulative delta:
+
+$\Delta_{cum,t} = \sum_{i=1}^{t} \delta_i$
+
+Imbalance ratio over rolling window of $n$ bars:
+
+$Imbalance_n = \frac{\sum uptick\_vol - \sum downtick\_vol}{\sum uptick\_vol + \sum downtick\_vol}$
+
+**Inputs**
+
+* Close prices (for direction)
+* Volume (for magnitude)
+
+---
+
 # Data Requirements Summary
 
-| Data Type      | Needed For         |
-| -------------- | ------------------ |
-| Tick data      | VWAP               |
-| OHLC bars      | ATR, RSI, MACD     |
-| Volume         | VWAP, volume exits |
-| Timestamp      | Time exits         |
-| Account equity | Risk controls      |
+| Data Type      | Needed For                                    |
+| -------------- | --------------------------------------------- |
+| Tick data      | VWAP                                          |
+| OHLC bars      | ATR, RSI, MACD, Stochastic, ADX, ROC          |
+| Volume         | VWAP, volume exits, volume delta              |
+| Timestamp      | Time exits                                    |
+| Account equity | Risk controls                                 |
 
 ---
 
