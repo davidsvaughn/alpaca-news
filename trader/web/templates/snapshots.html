@@ -475,6 +475,17 @@ function initServerFilters() {
   document.querySelectorAll('.srv-filter').forEach(function(el) {
     var evtName = el.type === 'date' ? 'change' : 'input';
     el.addEventListener(evtName, function() {
+      // Auto-clamp date range: if created_after > created_before, sync the other
+      if (el.type === 'date' && el.value) {
+        var key = el.getAttribute('data-key');
+        if (key === 'created_after') {
+          var before = document.querySelector('.srv-filter[data-key="created_before"]');
+          if (before && before.value && el.value > before.value) before.value = el.value;
+        } else if (key === 'created_before') {
+          var after = document.querySelector('.srv-filter[data-key="created_after"]');
+          if (after && after.value && el.value < after.value) after.value = el.value;
+        }
+      }
       updateFilterXButtons();
       clearTimeout(_srvDebounce);
       _srvDebounce = setTimeout(function() { reloadTable(); }, el.type === 'date' ? 0 : 400);
