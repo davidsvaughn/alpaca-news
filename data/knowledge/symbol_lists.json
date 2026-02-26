@@ -256,12 +256,16 @@
     "CSX",
     "AJG",
     "NUAI",
-    "ZM"
+    "ZM",
+    "BSX",
+    "INSP",
+    "NYXH",
+    "CYCU"
   ],
   "crypto": [],
   "rejected": [
     "BTCUSD",
     "VNP"
   ],
-  "last_updated": "2026-02-26T19:05:26.226251+00:00"
+  "last_updated": "2026-02-26T20:03:28.830899+00:00"
 }
