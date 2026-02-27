@@ -13,6 +13,7 @@ from __future__ import annotations
 import argparse
 import atexit
 import threading
+import time
 from pathlib import Path
 
 import uvicorn
@@ -24,6 +25,7 @@ from trader.knowledge.store import KnowledgeStore
 from trader.online.activity_tracker import Activity, ActivityTracker
 from trader.online.event_bus import EventBus, PipelineEvent
 from trader.online.orchestrator import process_news_file, run_watch_loop
+from trader.online.price_10min import reconcile_missing_price_10min
 from trader.online.x_stream_service import XStreamGuards, XStreamService
 from trader.web.app import create_app
 
@@ -107,6 +109,22 @@ def main() -> None:
         daemon=True,
     )
     t.start()
+
+    # Keep price_10min complete: reconcile missing rows in the background.
+    def _price_10min_maintenance() -> None:
+        while True:
+            try:
+                updated = reconcile_missing_price_10min(
+                    db=db,
+                    delay_minutes=settings.price_delay_minutes,
+                )
+                if updated:
+                    print(f"Price@{settings.price_delay_minutes}: backfilled {updated} snapshot(s).")
+            except Exception as exc:
+                print(f"Price@{settings.price_delay_minutes} maintenance error: {exc}")
+            time.sleep(60)
+
+    threading.Thread(target=_price_10min_maintenance, daemon=True).start()
 
     # Optional: process last N existing files on startup (background thread)
     if settings.backfill_on_start and observer.enabled:

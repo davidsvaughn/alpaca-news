@@ -23,6 +23,7 @@ import os
 import queue
 import threading
 import time
+import traceback
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
@@ -59,6 +60,7 @@ from trader.online.agent_pipeline import (
 from trader.online.triage import TriageDecision, run_triage
 from trader.online.activity_tracker import JobAborted
 from trader.online.event_bus import EventBus, PipelineEvent
+from trader.online.price_10min import capture_price_10min_for_snapshot
 from trader.online.x_stream_service import QualityVerdict, XStreamService, build_rules_for_symbols
 
 DEBUG = os.getenv("DEBUG", "false").lower() in ("true", "1")
@@ -583,17 +585,18 @@ def process_news_file(
             return
         except Exception as e:
             # Pipeline crashed entirely — save what we have
+            tb = traceback.format_exc()
             bus.publish(PipelineEvent(
                 type="exploration_error",
                 payload={
                     "snapshot_id": snap_id,
                     "error": f"{type(e).__name__}: {e}",
+                    "traceback": tb,
                     "symbols": symbols,
                     "headline": trigger.headline,
                 },
             ))
-            if DEBUG:
-                print(f"ERROR: Pipeline crashed: {e}")
+            print(f"ERROR: Pipeline crashed for {snap_id}: {e}\n{tb}")
 
         if pipeline_result is not None:
             # Add all tool traces from the pipeline
@@ -616,8 +619,8 @@ def process_news_file(
 
                 # Build tools_used list from per-type counters set by runners
                 tools_used: list[str] = (
-                    ["web_search"] * int(usage.get("web_search_calls", 0))
-                    + ["x_search"] * int(usage.get("x_search_calls", 0))
+                    ["web_search"] * int(usage.get("web_search_calls") or 0)
+                    + ["x_search"] * int(usage.get("x_search_calls") or 0)
                 )
 
                 try:
@@ -735,17 +738,17 @@ def process_news_file(
     _primary_sym = trigger.symbols[0] if trigger.symbols else None
     _snap_id = snapshot.snapshot_id
     _delay_min = settings.price_delay_minutes
+    _created_at = snapshot.created_at
     if _primary_sym:
         def _capture_price_10min():
-            time.sleep(_delay_min * 60)
             try:
-                from trader.market.data_service import MarketDataService
-                from trader.db.database import update_snapshot_field
-                market = MarketDataService()
-                quote = market.get_quote(_primary_sym)
-                price = quote.get("last_price") if quote else None
-                if price is not None:
-                    update_snapshot_field(db, _snap_id, "price_10min", float(price))
+                capture_price_10min_for_snapshot(
+                    db=db,
+                    snapshot_id=_snap_id,
+                    symbol=_primary_sym,
+                    created_at=_created_at,
+                    delay_minutes=_delay_min,
+                )
             except Exception:
                 pass  # best-effort — price_10min will just stay empty
         threading.Thread(target=_capture_price_10min, daemon=True).start()

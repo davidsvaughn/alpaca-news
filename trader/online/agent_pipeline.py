@@ -779,10 +779,10 @@ async def run_pipeline(
 
             elapsed = round(time.time() - start_time, 1)
 
-            # Accumulate usage
+            # Accumulate usage (coerce None → 0; runners may leave keys as None)
             for key in ("input_tokens", "output_tokens", "total_tokens",
                         "requests", "tool_calls", "reasoning_tokens"):
-                total_usage[key] += agent_result.usage.get(key, 0)
+                total_usage[key] += int(agent_result.usage.get(key) or 0)
 
             # Collect traces — stamp agent name on each
             for _tr in agent_result.tool_traces:
@@ -792,10 +792,10 @@ async def run_pipeline(
             # Estimate per-agent cost (tokens + server-side tool fees)
             agent_cost = _estimate_agent_cost(
                 spec.name, model_name,
-                input_tokens=agent_result.usage.get("input_tokens", 0),
-                output_tokens=agent_result.usage.get("output_tokens", 0),
-                web_search_calls=agent_result.usage.get("web_search_calls", 0),
-                x_search_calls=agent_result.usage.get("x_search_calls", 0),
+                input_tokens=int(agent_result.usage.get("input_tokens") or 0),
+                output_tokens=int(agent_result.usage.get("output_tokens") or 0),
+                web_search_calls=int(agent_result.usage.get("web_search_calls") or 0),
+                x_search_calls=int(agent_result.usage.get("x_search_calls") or 0),
             )
             cumulative_cost += agent_cost
 
@@ -932,6 +932,12 @@ def _estimate_agent_cost(
         estimate_token_cost_gemini,
         estimate_tool_cost,
     )
+
+    # Coerce to int — runners may pass None if API response omits fields
+    input_tokens = int(input_tokens or 0)
+    output_tokens = int(output_tokens or 0)
+    web_search_calls = int(web_search_calls or 0)
+    x_search_calls = int(x_search_calls or 0)
 
     provider, raw_model = _extract_model_for_pricing(agent_name, model_string)
 

@@ -280,10 +280,10 @@ async def run_grok(
     #   {"SERVER_SIDE_TOOL_WEB_SEARCH": 2, "SERVER_SIDE_TOOL_X_SEARCH": 3}
     _sstu = getattr(response, "server_side_tool_usage", None)
     if _sstu and isinstance(_sstu, dict):
-        auth_web = _sstu.get("SERVER_SIDE_TOOL_WEB_SEARCH", 0)
-        auth_x = _sstu.get("SERVER_SIDE_TOOL_X_SEARCH", 0)
-        manual_web = total_usage["web_search_calls"]
-        manual_x = total_usage["x_search_calls"]
+        auth_web = int(_sstu.get("SERVER_SIDE_TOOL_WEB_SEARCH") or 0)
+        auth_x = int(_sstu.get("SERVER_SIDE_TOOL_X_SEARCH") or 0)
+        manual_web = int(total_usage["web_search_calls"] or 0)
+        manual_x = int(total_usage["x_search_calls"] or 0)
         if auth_web > manual_web or auth_x > manual_x:
             if DEBUG:
                 print(
