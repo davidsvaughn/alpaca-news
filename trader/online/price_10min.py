@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import json
+import io
 import time
+from contextlib import redirect_stderr
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -110,7 +112,8 @@ def _get_price_from_history(symbol: str, target: datetime) -> float | None:
 
     for cand in candidates:
         try:
-            df = yf.Ticker(cand).history(start=start, end=end, interval=interval)
+            with redirect_stderr(io.StringIO()):
+                df = yf.Ticker(cand).history(start=start, end=end, interval=interval)
         except Exception:
             continue
 

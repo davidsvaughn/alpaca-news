@@ -270,12 +270,30 @@
     "AMR",
     "BTSG",
     "NIQ",
-    "VNET"
+    "VNET",
+    "JPM",
+    "BCS",
+    "FITB",
+    "DNA",
+    "GSAT",
+    "ENSC",
+    "AAOI",
+    "DELL",
+    "PLUG",
+    "HAS",
+    "XERS",
+    "RRC",
+    "ASUR",
+    "M",
+    "CPNG",
+    "DK",
+    "BVN",
+    "MARA"
   ],
   "crypto": [],
   "rejected": [
     "BTCUSD",
     "VNP"
   ],
-  "last_updated": "2026-02-27T16:47:14.704059+00:00"
+  "last_updated": "2026-02-27T17:57:29.785028+00:00"
 }

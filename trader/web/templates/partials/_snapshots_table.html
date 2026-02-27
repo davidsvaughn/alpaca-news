@@ -8,7 +8,7 @@
       <col data-col="created" style="width:9%">
       <col data-col="headline"><!-- no width: absorbs remaining space -->
       <col data-col="symbols" style="width:6%">
-      <col data-col="signal" style="width:8%">
+      <col data-col="signal" style="width:4%">
       <col data-col="price_10" style="width:6%">
       <col data-col="price" style="width:6%">
       <col data-col="avg_vol" style="width:6%">
@@ -32,8 +32,8 @@
           <div class="fcw">
             <select class="form-select form-select-sm srv-filter" data-key="signal" style="font-size:.7rem;">
               <option value="">All</option>
-              <option value="bull" {% if signal_filter == 'bull' %}selected{% endif %}>bull</option>
-              <option value="bear" {% if signal_filter == 'bear' %}selected{% endif %}>bear</option>
+              <option value="bull" {% if signal_filter == 'bull' %}selected{% endif %}>up</option>
+              <option value="bear" {% if signal_filter == 'bear' %}selected{% endif %}>down</option>
               <option value="neutral" {% if signal_filter == 'neutral' %}selected{% endif %}>neutral</option>
             </select>
             <span class="fx" onclick="clearFilter(this)">&times;</span>
@@ -100,9 +100,9 @@
         </td>
         <td data-sort-val="{{ dir }}">
           {% if dir == 'bullish' %}
-            <span class="text-success">&#9650; bull{% if conf is not none %} ({{ "%.0f"|format(conf * 100) }}%){% endif %}</span>
+            <span class="text-success">&#9650;{% if conf is not none %} {{ "%.0f"|format(conf * 100) }}%{% endif %}</span>
           {% elif dir == 'bearish' %}
-            <span class="text-danger">&#9660; bear{% if conf is not none %} ({{ "%.0f"|format(conf * 100) }}%){% endif %}</span>
+            <span class="text-danger">&#9660;{% if conf is not none %} {{ "%.0f"|format(conf * 100) }}%{% endif %}</span>
           {% elif dir == 'neutral' %}
             <span class="text-muted">&#8212; neutral{% if conf is not none %} ({{ "%.0f"|format(conf * 100) }}%){% endif %}</span>
           {% else %}
@@ -112,13 +112,25 @@
         <td class="small" data-col="price_10" data-sort-val="{{ s.price_10min if s.price_10min is defined and s.price_10min else '' }}">
           {% if s.price_10min is defined and s.price_10min %}
             ${{ "%.2f"|format(s.price_10min) }}
+          {% elif s._price_10_pending %}
+            <span class="text-muted" style="font-size:.72rem;">pending</span>
           {% else %}
             <span class="text-muted">&mdash;</span>
           {% endif %}
         </td>
         <td class="small" data-col="price" data-sort-val="{{ s._price if s._price is not none else '' }}">
           {% if s._price is not none %}
-            {{ s._price_text }}
+            {% if s.price_10min is defined and s.price_10min %}
+              {% if s._price > s.price_10min %}
+                <span class="text-success">{{ s._price_text }}</span>
+              {% elif s._price < s.price_10min %}
+                <span class="text-danger">{{ s._price_text }}</span>
+              {% else %}
+                {{ s._price_text }}
+              {% endif %}
+            {% else %}
+              {{ s._price_text }}
+            {% endif %}
           {% else %}
             <span class="text-muted">&mdash;</span>
           {% endif %}

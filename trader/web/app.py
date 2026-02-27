@@ -6,7 +6,7 @@ import dataclasses
 import json
 import threading
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlencode
@@ -183,6 +183,20 @@ def create_app(
             return float(value)
         except (TypeError, ValueError):
             return None
+
+    def _parse_iso_utc(value: Any) -> datetime | None:
+        if not value:
+            return None
+        s = str(value).strip()
+        if not s:
+            return None
+        try:
+            dt = datetime.fromisoformat(s.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.astimezone(timezone.utc)
 
     def _matches_range(value: float | None, min_val: float | None, max_val: float | None) -> bool:
         if min_val is None and max_val is None:
@@ -413,6 +427,8 @@ def create_app(
 
         symbols = [_primary_symbol(s) for s in base_snaps]
         market_by_symbol = _fetch_market_metrics(symbols) if include_market_metrics else {}
+        now_utc = datetime.now(timezone.utc)
+        price_delay_delta = timedelta(minutes=max(0, settings.price_delay_minutes))
 
         filtered_rows: list[dict[str, Any]] = []
         for snap in base_snaps:
@@ -428,6 +444,13 @@ def create_app(
             row["_avg_vol_text"] = _fmt_volume(row["_avg_vol"])
             row["_mkt_cap_text"] = _fmt_mkt_cap(row["_mkt_cap"])
             row["_pe_text"] = _fmt_pe(row["_pe"])
+            created_at = _parse_iso_utc(row.get("created_at"))
+            has_price_10 = _safe_float(row.get("price_10min")) is not None
+            row["_price_10_pending"] = (
+                not has_price_10
+                and created_at is not None
+                and (created_at + price_delay_delta) > now_utc
+            )
 
             if include_market_metrics:
                 if not _matches_range(row["_price"], price_min_val, price_max_val):
@@ -1295,6 +1318,7 @@ def create_app(
                     db=db,
                     knowledge=knowledge,
                     bus=bus,
+                    tracker=tracker,
                 )
                 bus.publish(PipelineEvent(
                     type="manual_explore_complete",
