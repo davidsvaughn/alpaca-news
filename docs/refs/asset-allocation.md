@@ -3,24 +3,24 @@ Q:
 so, back to this backtesting assumption again (method B): "Capital divided equally among active trades at each moment."
 
 realistically, how would you most closely approximate this in real life?
-if you have new "buy" signals rolling in throughout the day (random, but on average let's say once every 30 minutes)..... 
+if you have new "buy" signals rolling in throughout the day (random, but on average let's say once every 30 minutes).....
 also, you have "sell" signals rolling in (again random, but on average let's say once every 30 minutes)...
 
 then on each event (buy or sell signal) you would have to redistribute by either selling or buying a small fraction of all your other holdings, right? selling a small fraction of each to buy a new stock, or buy a small fraction of each when you sell another stock.... right?  correct me if I'm confused though....
 
-I imagine what people would more realistically do, to reduce transaction costs, is to pick one or two of the least attractive stocks to sell (instead of selling a tiny piece of all)... or pick one or two of the most attractive stocks to buy more of (instead of increasing all holdings by a small amount)... right?  am I missing anything?  other considerations? 
+I imagine what people would more realistically do, to reduce transaction costs, is to pick one or two of the least attractive stocks to sell (instead of selling a tiny piece of all)... or pick one or two of the most attractive stocks to buy more of (instead of increasing all holdings by a small amount)... right?  am I missing anything?  other considerations?
 
 ---
 
 A:
 
-Good — now you’re thinking about *execution realism*, not just math.
+Good — now you're thinking about *execution realism*, not just math.
 
-You’re correct:
+You're correct:
 
 If you strictly enforce
 
-> “capital divided equally among all active trades at each moment”
+> "capital divided equally among all active trades at each moment"
 
 then yes — mathematically you would have to rebalance continuously:
 
@@ -146,25 +146,19 @@ Examples:
 
 ### RSI example
 
-[
-Score_i = RSI_{threshold} - RSI_i
-]
+$Score_i = RSI_{threshold} - RSI_i$
 
 The more oversold → higher score.
 
 ### Breakout system
 
-[
-Score_i = \frac{P_t - High_n}{ATR}
-]
+$Score_i = \frac{P_t - High_n}{ATR}$
 
 The stronger the breakout → higher score.
 
 ### Mean reversion
 
-[
-Score_i = -z\text{-score}(return)
-]
+$Score_i = -z\text{-score}(return)$
 
 Signal magnitude becomes rank.
 
@@ -176,9 +170,7 @@ This is extremely common.
 
 One of the most researched strategies:
 
-[
-Score_i = R_{past,n,months}
-]
+$Score_i = R_{past,n,months}$
 
 Rank by past returns.
 
@@ -196,14 +188,12 @@ Extremely robust historically.
 
 Combine multiple standardized factors:
 
-[
-Score_i =
+$Score_i =
 w_1 Z_{momentum}
 +
 w_2 Z_{meanrev}
 +
-w_3 Z_{quality}
-]
+w_3 Z_{quality}$
 
 Where Z = cross-sectional z-score.
 

@@ -17,7 +17,7 @@ I want to know how to compute an annualized average, or a daily-ized average, or
 
 A:
 
-Since trades **overlap heavily**, you cannot compute a meaningful “annualized return” from trade-level averages alone.
+Since trades **overlap heavily**, you cannot compute a meaningful "annualized return" from trade-level averages alone.
 
 You must move to a **time-based portfolio return** framework.
 
@@ -29,10 +29,8 @@ Anything else assumes infinite capital.
 
 Annualization is fundamentally:
 
-[
-\text{Annualized} =
-\left(\frac{V_{end}}{V_{start}}\right)^{1/T_{years}} - 1
-]
+$\text{Annualized} =
+\left(\frac{V_{end}}{V_{start}}\right)^{1/T_{years}} - 1$
 
 So the only clean way to annualize with overlapping trades is:
 
@@ -50,7 +48,7 @@ From your table:
 * Current/exit price
 * Position size rule (equal weight? fixed $ per trade?)
 
-That’s enough.
+That's enough.
 
 ---
 
@@ -78,17 +76,13 @@ For your case, Option A is fine for a smoothed approximation.
 
 For trade (i):
 
-[
-\ell_i = \ln(1 + r_i)
-]
+$\ell_i = \ln(1 + r_i)$
 
 where
 
-[
-r_i = \frac{P_{exit}}{P_{entry}} - 1
-]
+$r_i = \frac{P_{exit}}{P_{entry}} - 1$
 
-Let ( d_i ) = duration in **trading days** (fractional allowed).
+Let $d_i$ = duration in **trading days** (fractional allowed).
 
 ---
 
@@ -96,10 +90,8 @@ Let ( d_i ) = duration in **trading days** (fractional allowed).
 
 Since trades overlap, the correct normalization is:
 
-[
-\text{DailyLogReturn} =
-\frac{\sum \ell_i}{\sum d_i}
-]
+$\text{DailyLogReturn} =
+\frac{\sum \ell_i}{\sum d_i}$
 
 This gives:
 
@@ -109,10 +101,8 @@ This gives:
 
 # Step 4 — Annualize
 
-[
-\text{Annualized} =
-e^{252 \cdot \text{DailyLogReturn}} - 1
-]
+$\text{Annualized} =
+e^{252 \cdot \text{DailyLogReturn}} - 1$
 
 This is smooth and mathematically consistent.
 
@@ -132,7 +122,7 @@ It assumes:
 * No constraint
 * No rebalancing issues
 
-But as a smoothed approximation, it’s solid.
+But as a smoothed approximation, it's solid.
 
 ---
 
@@ -151,10 +141,8 @@ For each day:
 
 Then:
 
-[
-\text{CAGR} =
-(1 + \bar{r}_{daily})^{252} - 1
-]
+$\text{CAGR} =
+(1 + \bar{r}_{daily})^{252} - 1$
 
 This automatically handles overlapping trades properly.
 
@@ -199,10 +187,9 @@ With overlapping trades:
 You must normalize by time.
 
 The clean approximation:
-[
-\text{Annualized} =
-e^{252 \cdot \frac{\sum \ln(1+r_i)}{\sum d_i}} - 1
-]
+
+$\text{Annualized} =
+e^{252 \cdot \frac{\sum \ln(1+r_i)}{\sum d_i}} - 1$
 
 The correct method:
 Build equity curve through time.
@@ -222,7 +209,7 @@ anyway, I just want to take the same data as input, and estimate/extrapolate a r
 
 A:
 
-Good. Now you’re asking the right question.
+Good. Now you're asking the right question.
 
 Return without volatility is meaningless.
 
@@ -248,17 +235,15 @@ You want:
 
 ## Step 1 — Build Daily Portfolio Returns
 
-For each day ( t ):
+For each day $t$:
 
 * Find all trades active on that day
-* Compute each trade’s daily return contribution
+* Compute each trade's daily return contribution
 * Average them (equal-weight or capital-weighted)
 
 That gives:
 
-[
-r_t
-]
+$r_t$
 
 Now you have a daily time series.
 
@@ -266,17 +251,13 @@ Now you have a daily time series.
 
 ## Step 2 — Compute Volatility
 
-[
-\sigma_{daily} = \text{std}(r_t)
-]
+$\sigma_{daily} = \text{std}(r_t)$
 
 ---
 
 ## Step 3 — Annualize Volatility
 
-[
-\sigma_{annual} = \sigma_{daily} \cdot \sqrt{252}
-]
+$\sigma_{annual} = \sigma_{daily} \cdot \sqrt{252}$
 
 This gives you:
 
@@ -292,29 +273,21 @@ You can approximate from trades:
 
 For each trade:
 
-[
-\ell_i = \ln(1 + r_i)
-]
+$\ell_i = \ln(1 + r_i)$
 
-Let duration in days be ( d_i ).
+Let duration in days be $d_i$.
 
 Compute per-day log return for each trade:
 
-[
-x_i = \frac{\ell_i}{d_i}
-]
+$x_i = \frac{\ell_i}{d_i}$
 
 Now compute:
 
-[
-\sigma_{daily} \approx \text{std}(x_i)
-]
+$\sigma_{daily} \approx \text{std}(x_i)$
 
 Then annualize:
 
-[
-\sigma_{annual} = \sigma_{daily} \cdot \sqrt{252}
-]
+$\sigma_{annual} = \sigma_{daily} \cdot \sqrt{252}$
 
 This is an approximation because:
 
@@ -322,11 +295,11 @@ This is an approximation because:
 * Assumes independence
 * Assumes equal capital per trade
 
-But it’s smooth and often reasonable for research screening.
+But it's smooth and often reasonable for research screening.
 
 ---
 
-# What You Actually Want: “Smoothness”
+# What You Actually Want: "Smoothness"
 
 Two better metrics:
 
@@ -334,14 +307,12 @@ Two better metrics:
 
 ## 1️⃣ Sharpe Ratio
 
-[
-\text{Sharpe} =
-\frac{\mu_{annual}}{\sigma_{annual}}
-]
+$\text{Sharpe} =
+\frac{\mu_{annual}}{\sigma_{annual}}$
 
 This directly measures smoothness of gains.
 
-If your annualized return is 80% but volatility is 200%, it’s garbage.
+If your annualized return is 80% but volatility is 200%, it's garbage.
 
 ---
 
@@ -362,7 +333,7 @@ Drawdown often matters more than volatility.
 
 If your annualized return looks huge and volatility is also huge:
 
-It’s usually noise.
+It's usually noise.
 
 If your annualized return survives:
 
@@ -417,20 +388,15 @@ Given your current table:
 
 That gives:
 
-[
-\mu_{annual} = 252 \cdot \bar{\ell}
-]
-[
-\sigma_{annual} = \sqrt{252} \cdot \sigma
-]
+$\mu_{annual} = 252 \cdot \bar{\ell}$
+
+$\sigma_{annual} = \sqrt{252} \cdot \sigma$
 
 Then:
 
-[
-\text{Sharpe} = \frac{\mu_{annual}}{\sigma_{annual}}
-]
+$\text{Sharpe} = \frac{\mu_{annual}}{\sigma_{annual}}$
 
-That’s your smoothness score.
+That's your smoothness score.
 
 ---
 
