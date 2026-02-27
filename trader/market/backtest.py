@@ -725,17 +725,19 @@ def _compute_volume_delta(df: pd.DataFrame) -> tuple[pd.Series, pd.Series]:
     Returns (uptick_vol, downtick_vol) Series aligned to df index.
     """
     t0 = time.perf_counter()
-    close = df["Close"].values
-    volume = df["Volume"].values
+    close = df["Close"].to_numpy(dtype=float, copy=False)
+    volume = df["Volume"].to_numpy(dtype=float, copy=False)
     n = len(close)
-    direction = np.zeros(n)
-    for i in range(1, n):
-        if close[i] > close[i - 1]:
-            direction[i] = 1
-        elif close[i] < close[i - 1]:
-            direction[i] = -1
-        else:
-            direction[i] = direction[i - 1]
+    direction = np.zeros(n, dtype=float)
+    if n > 1:
+        step = np.sign(np.diff(close))
+        raw = np.empty(n, dtype=float)
+        raw[0] = 0.0
+        raw[1:] = step
+        # Carry forward the previous non-zero sign when close is unchanged.
+        prev_nonzero = np.where(raw != 0.0, np.arange(n), 0)
+        np.maximum.accumulate(prev_nonzero, out=prev_nonzero)
+        direction = raw[prev_nonzero]
     uptick = pd.Series(
         np.where(direction > 0, volume, 0), index=df.index, dtype=float,
     )
@@ -748,6 +750,18 @@ def _compute_volume_delta(df: pd.DataFrame) -> tuple[pd.Series, pd.Series]:
     _trace_inc("indicator_total_calls")
     _trace_inc("indicator_volume_delta_calls")
     return uptick, downtick
+
+
+def _compute_vdd_signal_indices(
+    close: pd.Series, cum_delta: pd.Series, lookback: int,
+) -> np.ndarray:
+    """Return sorted indices where the VDD signal condition is true."""
+    if lookback <= 0 or close.empty:
+        return np.empty(0, dtype=np.int64)
+    prev_roll_max = close.shift(1).rolling(lookback, min_periods=lookback).max()
+    lag_cum_delta = cum_delta.shift(lookback)
+    mask = ((close >= prev_roll_max) & (cum_delta < lag_cum_delta)).fillna(False)
+    return np.flatnonzero(mask.to_numpy(dtype=bool, copy=False)).astype(np.int64)
 
 
 # ---------------------------------------------------------------------------
@@ -1293,27 +1307,46 @@ def _run_volume_delta_divergence(
     uptick, downtick = _get_cached_indicator(
         indicator_cache, ("volume_delta",), lambda: _compute_volume_delta(df),
     )
-    cum_delta = (uptick - downtick).cumsum()
+    cum_delta = _get_cached_indicator(
+        indicator_cache, ("cum_volume_delta",), lambda: (uptick - downtick).cumsum(),
+    )
+    signal_indices = _get_cached_indicator(
+        indicator_cache,
+        ("vdd_signal_indices", lookback),
+        lambda: _compute_vdd_signal_indices(df["Close"], cum_delta, lookback),
+    )
+    close_values = _get_cached_indicator(
+        indicator_cache, ("close_np",), lambda: df["Close"].to_numpy(dtype=float, copy=False),
+    )
     guard_enabled = guard_stop is not None or guard_target is not None
-    for i in range(entry_idx, len(df)):
-        bar = _get_bar(df, i)
-        bars_held = i - entry_idx + 1
-        if guard_enabled:
-            guard_hit = _check_guards(bar, guard_stop, guard_target)
-            if guard_hit is not None:
-                price, reason = guard_hit
-                return price, _fmt_ts(df.index, i), reason, bars_held
-        if (i - entry_idx) < lookback:
-            continue
-        # Price at new rolling high?
-        window_start = max(entry_idx, i - lookback)
-        price_window = df["Close"].iloc[window_start:i]
-        if price_window.empty:
-            continue
-        if bar["Close"] >= price_window.max():
-            # But cumulative delta is lower than lookback bars ago?
-            if cum_delta.iloc[i] < cum_delta.iloc[window_start]:
-                return bar["Close"], _fmt_ts(df.index, i), "signal", bars_held
+    guard_idx = None
+    guard_price = None
+    guard_reason = None
+    if guard_enabled:
+        highs = df["High"].to_numpy(dtype=float, copy=False)
+        lows = df["Low"].to_numpy(dtype=float, copy=False)
+        guard_hit = _first_guard_hit(highs, lows, entry_idx, guard_stop, guard_target)
+        if guard_hit is not None:
+            rel, price, reason = guard_hit
+            guard_idx = entry_idx + rel
+            guard_price = price
+            guard_reason = reason
+
+    signal_idx = None
+    start = max(0, entry_idx + lookback)
+    if start < len(df):
+        t_vec = time.perf_counter()
+        pos = int(np.searchsorted(signal_indices, start))
+        _trace_vector_scan(max(0, len(df) - start), time.perf_counter() - t_vec)
+        if pos < len(signal_indices):
+            signal_idx = int(signal_indices[pos])
+
+    if guard_idx is not None and (signal_idx is None or guard_idx <= signal_idx):
+        bars_held = guard_idx - entry_idx + 1
+        return guard_price, _fmt_ts(df.index, guard_idx), guard_reason, bars_held
+    if signal_idx is not None:
+        bars_held = signal_idx - entry_idx + 1
+        return float(close_values[signal_idx]), _fmt_ts(df.index, signal_idx), "signal", bars_held
     return None, None, "still_open", len(df) - entry_idx
 
 
@@ -1763,6 +1796,7 @@ def run_backtest(
                 sec.get("bar_read_sec", 0.0)
                 + sec.get("guard_check_sec", 0.0)
                 + sec.get("indicator_total_sec", 0.0)
+                + sec.get("vector_scan_sec", 0.0)
             )
             sec["strategy_logic_sec"] = max(0.0, strategy_eval_sec - known_parts)
             pct_detail = {
@@ -1771,9 +1805,12 @@ def run_backtest(
             }
             bar_calls = max(counts_detail.get("bar_read_calls", 0), 1)
             bars_scanned = counts_detail.get("bars_scanned", 0)
+            vector_scan_bars = counts_detail.get("vector_scan_bars", 0)
+            total_scanned = bars_scanned + vector_scan_bars
+            counts_detail["bars_scanned_total"] = total_scanned
             counts_detail["strategy_eval_ms_per_bar"] = round(
-                (strategy_eval_sec * 1000.0 / bars_scanned), 6,
-            ) if bars_scanned > 0 else None
+                (strategy_eval_sec * 1000.0 / total_scanned), 6,
+            ) if total_scanned > 0 else None
             counts_detail["bar_read_us_per_call"] = round(
                 (sec.get("bar_read_sec", 0.0) * 1_000_000.0 / bar_calls), 6,
             )
@@ -1781,6 +1818,7 @@ def run_backtest(
                 "bar_read_sec": sec.get("bar_read_sec", 0.0),
                 "guard_check_sec": sec.get("guard_check_sec", 0.0),
                 "indicator_total_sec": sec.get("indicator_total_sec", 0.0),
+                "vector_scan_sec": sec.get("vector_scan_sec", 0.0),
                 "strategy_logic_sec": sec.get("strategy_logic_sec", 0.0),
             }
             breakdown_pct = {
