@@ -1,6 +1,6 @@
 Q:
 
-so, back to "option B" : "Capital divided equally among active trades at each moment."
+so, back to this backtesting assumption again (method B): "Capital divided equally among active trades at each moment."
 
 realistically, how would you most closely approximate this in real life?
 if you have new "buy" signals rolling in throughout the day (random, but on average let's say once every 30 minutes)..... 
