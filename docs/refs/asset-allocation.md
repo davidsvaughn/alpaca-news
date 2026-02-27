@@ -143,7 +143,7 @@ below are several ranking strategies...
 
 ---
 
-## Signal Strength Ranking (Most Common in Systematic Trading)
+## 1. Signal Strength Ranking (Most Common in Systematic Trading)
 
 If your entry signal has magnitude:
 
@@ -171,7 +171,7 @@ This is extremely common.
 
 ---
 
-## Momentum Ranking (Classic Cross-Sectional)
+## 2. Momentum Ranking (Classic Cross-Sectional)
 
 One of the most researched strategies:
 
@@ -189,7 +189,7 @@ Extremely robust historically.
 
 ---
 
-## Composite Ranking (Used by Many Funds)
+## 3. Composite Ranking (Used by Many Funds)
 
 Combine multiple standardized factors:
 

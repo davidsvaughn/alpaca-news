@@ -231,6 +231,12 @@
             <option value="">-- select --</option>
           </select>
         </div>
+        <div>
+          <label class="bt-ui-label mb-1" for="bt-allocation">Allocation</label>
+          <select id="bt-allocation" class="form-select form-select-sm" onchange="onAllocationChange()">
+            <option value="none">None (Unlimited)</option>
+          </select>
+        </div>
         <div class="btn-group btn-group-sm bt-action-group" role="group" aria-label="backtest actions">
           <button id="bt-run-btn" class="btn btn-primary" onclick="runBacktest()" disabled>Run</button>
           <button id="bt-clear-btn" class="btn btn-outline-secondary d-none" onclick="clearBacktest()">Clear</button>
@@ -243,6 +249,11 @@
       <div class="bt-section bt-section-params">
         <p class="bt-section-title">Strategy Parameters</p>
         <div id="bt-params" class="bt-param-grid"></div>
+      </div>
+
+      <div class="bt-section bt-section-alloc">
+        <p class="bt-section-title">Allocation Parameters</p>
+        <div id="bt-alloc-params" class="bt-param-grid"></div>
       </div>
 
       <div class="bt-section bt-section-session">
@@ -315,6 +326,10 @@
           <span class="bt-metric-label" title="Sharpe ratio (fixed capital split)">Sharpe(B):</span>
           <span id="bt-sharpe-b-val" class="fw-bold"></span>
         </div>
+      </div>
+
+      <div id="bt-alloc-stats" class="bt-metric d-none">
+        <span class="small text-muted" id="bt-alloc-stats-text"></span>
       </div>
     </div>
   </div>
@@ -631,11 +646,15 @@ function clearAllFilters() {
 // Backtest panel
 // =====================================================================
 var _btStrategies = null;  // cached strategy definitions
+var _btAllocations = null; // cached allocation definitions
 var _btResults = {};       // snapshot_id -> result dict
 var _btSummary = null;     // server-computed summary stats
 var _btCurrentStrategy = '';
+var _btCurrentAllocation = 'none';
 var _BT_STRAT_KEY = 'bt_last_strategy';
+var _BT_ALLOC_KEY = 'bt_last_allocation';
 var _SP_KEY = 'strategy_params';
+var _AP_KEY = 'allocation_params';
 var _BT_SETTINGS_KEY = 'bt_settings';
 
 function onExtHoursToggle() {
@@ -703,18 +722,28 @@ function toggleBacktestPanel() {
     btn.setAttribute('aria-expanded', hidden ? 'false' : 'true');
   }
   if (!hidden && !_btStrategies) {
-    // First open: fetch strategy definitions
+    // First open: fetch strategy + allocation definitions
     loadBtSettings();
     fetch('/api/strategies')
       .then(function(r) { return r.json(); })
       .then(function(data) {
         _btStrategies = data;
         _populateStrategyDropdown();
-        // Restore last-used strategy
         var last = localStorage.getItem(_BT_STRAT_KEY);
         if (last && data[last]) {
           document.getElementById('bt-strategy').value = last;
           onStrategyChange();
+        }
+      });
+    fetch('/api/allocations')
+      .then(function(r) { return r.json(); })
+      .then(function(data) {
+        _btAllocations = data;
+        _populateAllocationDropdown();
+        var last = localStorage.getItem(_BT_ALLOC_KEY);
+        if (last && data[last]) {
+          document.getElementById('bt-allocation').value = last;
+          onAllocationChange();
         }
       });
   }
