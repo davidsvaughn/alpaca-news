@@ -67,12 +67,13 @@ def _trace_inc(key: str, n: int = 1) -> None:
 
 @dataclass(frozen=True)
 class ParamDef:
-    type: str  # "float" or "int"
-    default: float
+    type: str  # "float", "int", or "select"
+    default: float | str
     label: str
     min: float | None = None
     max: float | None = None
     step: float | None = None
+    options: list[dict[str, str]] | None = None  # for "select": [{"value": ..., "label": ...}, ...]
 
 
 @dataclass(frozen=True)
@@ -251,6 +252,66 @@ STRATEGIES: dict[str, StrategyDef] = {
         description="Exit after a fixed number of 1-min bars.",
         params={
             "max_bars": ParamDef("int", 390, "Max bars", 1, 3900, 10),
+        },
+    ),
+}
+
+
+# ---------------------------------------------------------------------------
+# Allocation strategy definitions
+# ---------------------------------------------------------------------------
+
+_RANK_OPTIONS = [
+    {"value": "confidence", "label": "Signal Confidence"},
+    {"value": "momentum", "label": "Unrealized P&L"},
+    {"value": "composite", "label": "Composite"},
+]
+
+_WHEN_FULL_OPTIONS = [
+    {"value": "skip", "label": "Skip"},
+    {"value": "replace", "label": "Replace Weakest"},
+]
+
+AllocationDef = StrategyDef  # same shape — reuse the dataclass
+
+ALLOCATIONS: dict[str, AllocationDef] = {
+    "none": AllocationDef(
+        name="None (Unlimited)",
+        key="none",
+        section="Basic",
+        description="No capital constraints. Every signal is traded independently.",
+        params={},
+    ),
+    "fixed_dollar": AllocationDef(
+        name="Fixed Dollar Per Trade",
+        key="fixed_dollar",
+        section="Basic",
+        description="Each trade gets a fixed % of initial capital. Skip when capital exhausted.",
+        params={
+            "alloc_pct": ParamDef("float", 5.0, "Allocation %", 1, 50, 1),
+        },
+    ),
+    "max_positions": AllocationDef(
+        name="Max Positions",
+        key="max_positions",
+        section="Position-Limited",
+        description="Limit concurrent positions. Choose skip or replace when full.",
+        params={
+            "max_pos": ParamDef("int", 10, "Max Positions", 1, 50, 1),
+            "when_full": ParamDef("select", "skip", "When Full", options=_WHEN_FULL_OPTIONS),
+            "rank_method": ParamDef("select", "momentum", "Rank By", options=_RANK_OPTIONS),
+            "composite_weight": ParamDef("float", 0.5, "Confidence Weight", 0, 1, 0.1),
+        },
+    ),
+    "ranking_realloc": AllocationDef(
+        name="Ranking-Based Reallocation",
+        key="ranking_realloc",
+        section="Capital-Limited",
+        description="Each trade gets a fixed % of capital. When full, replace weakest position.",
+        params={
+            "alloc_pct": ParamDef("float", 5.0, "Allocation %", 1, 50, 1),
+            "rank_method": ParamDef("select", "momentum", "Rank By", options=_RANK_OPTIONS),
+            "composite_weight": ParamDef("float", 0.5, "Confidence Weight", 0, 1, 0.1),
         },
     ),
 }
@@ -1870,25 +1931,44 @@ def run_backtest(
     return results
 
 
-def strategies_json() -> dict[str, Any]:
-    """Return strategy definitions as a JSON-serializable dict."""
+def _params_to_json(params: dict[str, ParamDef]) -> dict[str, Any]:
+    """Serialize a params dict for the frontend."""
     out: dict[str, Any] = {}
-    for key, s in STRATEGIES.items():
-        out[key] = {
+    for pk, pv in params.items():
+        d: dict[str, Any] = {
+            "type": pv.type,
+            "default": pv.default,
+            "label": pv.label,
+        }
+        if pv.type == "select":
+            d["options"] = pv.options or []
+        else:
+            d["min"] = pv.min
+            d["max"] = pv.max
+            d["step"] = pv.step
+        out[pk] = d
+    return out
+
+
+def _defs_to_json(defs: dict[str, StrategyDef]) -> dict[str, Any]:
+    """Serialize a strategy/allocation registry for the frontend."""
+    return {
+        key: {
             "name": s.name,
             "key": s.key,
             "section": s.section,
             "description": s.description,
-            "params": {
-                pk: {
-                    "type": pv.type,
-                    "default": pv.default,
-                    "label": pv.label,
-                    "min": pv.min,
-                    "max": pv.max,
-                    "step": pv.step,
-                }
-                for pk, pv in s.params.items()
-            },
+            "params": _params_to_json(s.params),
         }
-    return out
+        for key, s in defs.items()
+    }
+
+
+def strategies_json() -> dict[str, Any]:
+    """Return strategy definitions as a JSON-serializable dict."""
+    return _defs_to_json(STRATEGIES)
+
+
+def allocations_json() -> dict[str, Any]:
+    """Return allocation definitions as a JSON-serializable dict."""
+    return _defs_to_json(ALLOCATIONS)

@@ -657,9 +657,7 @@ Below is the clean way to think about it.
 
 The standard architecture:
 
-[
-Exit = StopLoss ;; \lor ;; ProfitTarget ;; \lor ;; IndicatorSignal ;; \lor ;; TimeExit
-]
+$Exit = StopLoss \lor ProfitTarget \lor IndicatorSignal \lor TimeExit$
 
 In practice:
 
@@ -676,22 +674,18 @@ This is almost always implemented as logical **OR**.
 You already have:
 
 RSI Exit:
-[
-RSI_t \ge 80
-]
+
+$RSI_t \ge 80$
 
 You want to add:
 
 Stop Loss:
-[
-P_t \le P_{entry}(1 - s)
-]
+
+$P_t \le P_{entry}(1 - s)$
 
 Combined:
 
-[
-Exit = (RSI_t \ge 80) ;; \lor ;; (P_t \le P_{entry}(1 - s))
-]
+$Exit = (RSI_t \ge 80) \lor (P_t \le P_{entry}(1 - s))$
 
 This is completely valid and very common.
 
@@ -703,9 +697,7 @@ Almost never for stop losses.
 
 Example AND logic:
 
-[
-Exit = (RSI_t \ge 80) ;; \land ;; (P_t < MA)
-]
+$Exit = (RSI_t \ge 80) \land (P_t < MA)$
 
 This delays exit and increases risk.
 
@@ -797,13 +789,9 @@ Example:
 
 Only activate RSI exit after trade is profitable:
 
-[
-ActivateRSI = P_t > P_{entry}
-]
+$ActivateRSI = P_t > P_{entry}$
 
-[
-Exit = StopLoss \lor (ActivateRSI \land RSIExit)
-]
+$Exit = StopLoss \lor (ActivateRSI \land RSIExit)$
 
 This prevents RSI from closing losing trades prematurely.
 
@@ -813,9 +801,7 @@ This prevents RSI from closing losing trades prematurely.
 
 The cleanest abstraction:
 
-[
-Exit = f(MarketData, State, Params)
-]
+$Exit = f(MarketData, State, Params)$
 
 Where each rule returns:
 
