@@ -576,6 +576,23 @@ def _get_ohlcv_1m(symbol: str, start_date: str, end_date: str | None = None) -> 
 # ---------------------------------------------------------------------------
 
 
+def _get_cached_indicator(
+    indicator_cache: dict[tuple[Any, ...], Any] | None,
+    key: tuple[Any, ...],
+    compute_fn,
+):
+    """Get an indicator from per-symbol cache, computing it once if needed."""
+    if indicator_cache is None:
+        return compute_fn()
+    if key in indicator_cache:
+        _trace_inc("indicator_cache_hits")
+        return indicator_cache[key]
+    _trace_inc("indicator_cache_misses")
+    value = compute_fn()
+    indicator_cache[key] = value
+    return value
+
+
 def _compute_atr(df: pd.DataFrame, period: int) -> pd.Series:
     t0 = time.perf_counter()
     high = df["High"]
@@ -756,12 +773,76 @@ def _get_bar(df: pd.DataFrame, i: int) -> pd.Series:
     return bar
 
 
+def _trace_vector_scan(bars: int, dt: float) -> None:
+    if bars <= 0:
+        return
+    _trace_inc("vector_scan_calls")
+    _trace_inc("vector_scan_bars", bars)
+    _trace_add_sec("vector_scan_sec", max(0.0, dt))
+
+
+def _first_true(mask: np.ndarray) -> int | None:
+    hits = np.flatnonzero(mask)
+    if hits.size == 0:
+        return None
+    return int(hits[0])
+
+
+def _first_guard_hit(
+    highs: np.ndarray,
+    lows: np.ndarray,
+    start: int,
+    guard_stop: float | None,
+    guard_target: float | None,
+    limit_bars: int | None = None,
+) -> tuple[int, float, str] | None:
+    """Return (rel_idx, price, reason) for earliest guard hit from `start`."""
+    if guard_stop is None and guard_target is None:
+        return None
+    if start >= len(lows):
+        return None
+    end = len(lows)
+    if limit_bars is not None:
+        end = min(end, start + max(0, limit_bars))
+    if end <= start:
+        return None
+    low_slice = lows[start:end]
+    high_slice = highs[start:end]
+    t0 = time.perf_counter()
+    _trace_inc("guard_checks", len(low_slice))
+
+    best_idx: int | None = None
+    best_price: float = 0.0
+    best_reason = ""
+
+    if guard_stop is not None:
+        idx = _first_true(low_slice <= guard_stop)
+        if idx is not None:
+            best_idx = idx
+            best_price = float(guard_stop)
+            best_reason = "guard_stop"
+    if guard_target is not None:
+        idx = _first_true(high_slice >= guard_target)
+        if idx is not None and (best_idx is None or idx < best_idx):
+            best_idx = idx
+            best_price = float(guard_target)
+            best_reason = "guard_target"
+
+    _trace_add_sec("guard_check_sec", max(0.0, time.perf_counter() - t0))
+    if best_idx is None:
+        return None
+    _trace_inc("guard_hits")
+    return best_idx, best_price, best_reason
+
+
 def _check_guards(
     bar: pd.Series,
     guard_stop: float | None,
     guard_target: float | None,
 ) -> tuple[float, str] | None:
     """Return guard (price, reason) if either guard triggers on this bar."""
+    if guard_stop is None and guard_target is None:
+        return None
     t0 = time.perf_counter()
     _trace_inc("guard_checks")
     if guard_stop is not None and bar["Low"] <= guard_stop:
@@ -777,61 +858,123 @@ def _check_guards(
 
 
 def _run_fixed_stop_loss(
-    df, entry_idx, entry_price, params, guard_stop=None, guard_target=None,
+    df, entry_idx, entry_price, params, guard_stop=None, guard_target=None, indicator_cache=None,
 ):
     stop = entry_price * (1 - params["stop_pct"] / 100)
-    for i in range(entry_idx, len(df)):
-        bar = _get_bar(df, i)
-        bars_held = i - entry_idx + 1
-        guard_hit = _check_guards(bar, guard_stop, guard_target)
+    lows = df["Low"].to_numpy(dtype=float, copy=False)
+    start = entry_idx
+    if start >= len(lows):
+        return None, None, "still_open", 0
+
+    guard_rel = None
+    guard_price = None
+    guard_reason = None
+    if guard_stop is not None or guard_target is not None:
+        highs = df["High"].to_numpy(dtype=float, copy=False)
+        guard_hit = _first_guard_hit(highs, lows, start, guard_stop, guard_target)
         if guard_hit is not None:
-            price, reason = guard_hit
-            return price, _fmt_ts(df.index, i), reason, bars_held
-        if bar["Low"] <= stop:
-            return stop, _fmt_ts(df.index, i), "stop", bars_held
+            guard_rel, guard_price, guard_reason = guard_hit
+
+    t_vec = time.perf_counter()
+    stop_rel = _first_true(lows[start:] <= stop)
+    _trace_vector_scan(len(lows) - start, time.perf_counter() - t_vec)
+
+    if guard_rel is not None and (stop_rel is None or guard_rel <= stop_rel):
+        i = start + guard_rel
+        bars_held = guard_rel + 1
+        return guard_price, _fmt_ts(df.index, i), guard_reason, bars_held
+    if stop_rel is not None:
+        i = start + stop_rel
+        bars_held = stop_rel + 1
+        return stop, _fmt_ts(df.index, i), "stop", bars_held
     return None, None, "still_open", len(df) - entry_idx
 
 
 def _run_fixed_take_profit(
-    df, entry_idx, entry_price, params, guard_stop=None, guard_target=None,
+    df, entry_idx, entry_price, params, guard_stop=None, guard_target=None, indicator_cache=None,
 ):
     target = entry_price * (1 + params["reward_pct"] / 100)
-    for i in range(entry_idx, len(df)):
-        bar = _get_bar(df, i)
-        bars_held = i - entry_idx + 1
-        guard_hit = _check_guards(bar, guard_stop, guard_target)
+    highs = df["High"].to_numpy(dtype=float, copy=False)
+    start = entry_idx
+    if start >= len(highs):
+        return None, None, "still_open", 0
+
+    guard_rel = None
+    guard_price = None
+    guard_reason = None
+    if guard_stop is not None or guard_target is not None:
+        lows = df["Low"].to_numpy(dtype=float, copy=False)
+        guard_hit = _first_guard_hit(highs, lows, start, guard_stop, guard_target)
         if guard_hit is not None:
-            price, reason = guard_hit
-            return price, _fmt_ts(df.index, i), reason, bars_held
-        if bar["High"] >= target:
-            return target, _fmt_ts(df.index, i), "target", bars_held
+            guard_rel, guard_price, guard_reason = guard_hit
+
+    t_vec = time.perf_counter()
+    target_rel = _first_true(highs[start:] >= target)
+    _trace_vector_scan(len(highs) - start, time.perf_counter() - t_vec)
+
+    if guard_rel is not None and (target_rel is None or guard_rel <= target_rel):
+        i = start + guard_rel
+        bars_held = guard_rel + 1
+        return guard_price, _fmt_ts(df.index, i), guard_reason, bars_held
+    if target_rel is not None:
+        i = start + target_rel
+        bars_held = target_rel + 1
+        return target, _fmt_ts(df.index, i), "target", bars_held
     return None, None, "still_open", len(df) - entry_idx
 
 
 def _run_risk_reward_target(
-    df, entry_idx, entry_price, params, guard_stop=None, guard_target=None,
+    df, entry_idx, entry_price, params, guard_stop=None, guard_target=None, indicator_cache=None,
 ):
     stop_pct = params["stop_pct"]
     k = params["risk_multiple"]
     stop = entry_price * (1 - stop_pct / 100)
     risk = entry_price - stop
     target = entry_price + k * risk
-    for i in range(entry_idx, len(df)):
-        bar = _get_bar(df, i)
-        bars_held = i - entry_idx + 1
-        guard_hit = _check_guards(bar, guard_stop, guard_target)
+    highs = df["High"].to_numpy(dtype=float, copy=False)
+    lows = df["Low"].to_numpy(dtype=float, copy=False)
+    start = entry_idx
+    if start >= len(highs):
+        return None, None, "still_open", 0
+
+    guard_rel = None
+    guard_price = None
+    guard_reason = None
+    if guard_stop is not None or guard_target is not None:
+        guard_hit = _first_guard_hit(highs, lows, start, guard_stop, guard_target)
         if guard_hit is not None:
-            price, reason = guard_hit
-            return price, _fmt_ts(df.index, i), reason, bars_held
-        if bar["Low"] <= stop:
-            return stop, _fmt_ts(df.index, i), "stop", bars_held
-        if bar["High"] >= target:
-            return target, _fmt_ts(df.index, i), "target", bars_held
+            guard_rel, guard_price, guard_reason = guard_hit
+
+    t_vec = time.perf_counter()
+    stop_rel = _first_true(lows[start:] <= stop)
+    target_rel = _first_true(highs[start:] >= target)
+    _trace_vector_scan(len(highs) - start, time.perf_counter() - t_vec)
+
+    strat_rel = None
+    strat_price = None
+    strat_reason = None
+    if stop_rel is not None and (target_rel is None or stop_rel <= target_rel):
+        strat_rel = stop_rel
+        strat_price = stop
+        strat_reason = "stop"
+    elif target_rel is not None:
+        strat_rel = target_rel
+        strat_price = target
+        strat_reason = "target"
+
+    if guard_rel is not None and (strat_rel is None or guard_rel <= strat_rel):
+        i = start + guard_rel
+        bars_held = guard_rel + 1
+        return guard_price, _fmt_ts(df.index, i), guard_reason, bars_held
+    if strat_rel is not None:
+        i = start + strat_rel
+        bars_held = strat_rel + 1
+        return strat_price, _fmt_ts(df.index, i), strat_reason, bars_held
     return None, None, "still_open", len(df) - entry_idx
 
 
 def _run_pct_trailing_stop(
-    df, entry_idx, entry_price, params, guard_stop=None, guard_target=None,
+    df, entry_idx, entry_price, params, guard_stop=None, guard_target=None, indicator_cache=None,
 ):
     trail_pct = params["trail_pct"]
     p_max = entry_price
@@ -851,19 +994,23 @@ def _run_pct_trailing_stop(
 
 
 def _run_atr_trailing_stop(
-    df, entry_idx, entry_price, params, guard_stop=None, guard_target=None,
+    df, entry_idx, entry_price, params, guard_stop=None, guard_target=None, indicator_cache=None,
 ):
     period = int(params["atr_period"])
     k = params["multiplier"]
-    atr = _compute_atr(df, period)
+    atr = _get_cached_indicator(
+        indicator_cache, ("atr", period), lambda: _compute_atr(df, period),
+    )
     p_max = entry_price
+    guard_enabled = guard_stop is not None or guard_target is not None
     for i in range(entry_idx, len(df)):
         bar = _get_bar(df, i)
         bars_held = i - entry_idx + 1
-        guard_hit = _check_guards(bar, guard_stop, guard_target)
-        if guard_hit is not None:
-            price, reason = guard_hit
-            return price, _fmt_ts(df.index, i), reason, bars_held
+        if guard_enabled:
+            guard_hit = _check_guards(bar, guard_stop, guard_target)
+            if guard_hit is not None:
+                price, reason = guard_hit
+                return price, _fmt_ts(df.index, i), reason, bars_held
         if bar["High"] > p_max:
             p_max = bar["High"]
         atr_val = atr.iloc[i]
@@ -876,11 +1023,13 @@ def _run_atr_trailing_stop(
 
 
 def _run_atr_fixed_stop(
-    df, entry_idx, entry_price, params, guard_stop=None, guard_target=None,
+    df, entry_idx, entry_price, params, guard_stop=None, guard_target=None, indicator_cache=None,
 ):
     period = int(params["atr_period"])
     k = params["multiplier"]
-    atr = _compute_atr(df, period)
+    atr = _get_cached_indicator(
+        indicator_cache, ("atr", period), lambda: _compute_atr(df, period),
+    )
     atr_at_entry = atr.iloc[entry_idx] if entry_idx < len(atr) else None
     if atr_at_entry is None or pd.isna(atr_at_entry):
         for j in range(entry_idx, -1, -1):
@@ -890,30 +1039,36 @@ def _run_atr_fixed_stop(
     if atr_at_entry is None or pd.isna(atr_at_entry):
         return None, None, "no_data", 0
     stop = entry_price - k * atr_at_entry
+    guard_enabled = guard_stop is not None or guard_target is not None
     for i in range(entry_idx, len(df)):
         bar = _get_bar(df, i)
         bars_held = i - entry_idx + 1
-        guard_hit = _check_guards(bar, guard_stop, guard_target)
-        if guard_hit is not None:
-            price, reason = guard_hit
-            return price, _fmt_ts(df.index, i), reason, bars_held
+        if guard_enabled:
+            guard_hit = _check_guards(bar, guard_stop, guard_target)
+            if guard_hit is not None:
+                price, reason = guard_hit
+                return price, _fmt_ts(df.index, i), reason, bars_held
         if bar["Low"] <= stop:
             return stop, _fmt_ts(df.index, i), "stop", bars_held
     return None, None, "still_open", len(df) - entry_idx
 
 
 def _run_close_below_ma(
-    df, entry_idx, entry_price, params, guard_stop=None, guard_target=None,
+    df, entry_idx, entry_price, params, guard_stop=None, guard_target=None, indicator_cache=None,
 ):
     period = int(params["ma_period"])
-    sma = _compute_sma(df["Close"], period)
+    sma = _get_cached_indicator(
+        indicator_cache, ("sma", period), lambda: _compute_sma(df["Close"], period),
+    )
+    guard_enabled = guard_stop is not None or guard_target is not None
     for i in range(entry_idx, len(df)):
         bar = _get_bar(df, i)
         bars_held = i - entry_idx + 1
-        guard_hit = _check_guards(bar, guard_stop, guard_target)
-        if guard_hit is not None:
-            price, reason = guard_hit
-            return price, _fmt_ts(df.index, i), reason, bars_held
+        if guard_enabled:
+            guard_hit = _check_guards(bar, guard_stop, guard_target)
+            if guard_hit is not None:
+                price, reason = guard_hit
+                return price, _fmt_ts(df.index, i), reason, bars_held
         ma_val = sma.iloc[i]
         if pd.isna(ma_val):
             continue
@@ -923,20 +1078,26 @@ def _run_close_below_ma(
 
 
 def _run_ma_cross_exit(
-    df, entry_idx, entry_price, params, guard_stop=None, guard_target=None,
+    df, entry_idx, entry_price, params, guard_stop=None, guard_target=None, indicator_cache=None,
 ):
     short_p = int(params["short_period"])
     long_p = int(params["long_period"])
-    sma_short = _compute_sma(df["Close"], short_p)
-    sma_long = _compute_sma(df["Close"], long_p)
+    sma_short = _get_cached_indicator(
+        indicator_cache, ("sma", short_p), lambda: _compute_sma(df["Close"], short_p),
+    )
+    sma_long = _get_cached_indicator(
+        indicator_cache, ("sma", long_p), lambda: _compute_sma(df["Close"], long_p),
+    )
     prev_above = None
+    guard_enabled = guard_stop is not None or guard_target is not None
     for i in range(entry_idx, len(df)):
         bar = _get_bar(df, i)
         bars_held = i - entry_idx + 1
-        guard_hit = _check_guards(bar, guard_stop, guard_target)
-        if guard_hit is not None:
-            price, reason = guard_hit
-            return price, _fmt_ts(df.index, i), reason, bars_held
+        if guard_enabled:
+            guard_hit = _check_guards(bar, guard_stop, guard_target)
+            if guard_hit is not None:
+                price, reason = guard_hit
+                return price, _fmt_ts(df.index, i), reason, bars_held
         sv = sma_short.iloc[i]
         lv = sma_long.iloc[i]
         if pd.isna(sv) or pd.isna(lv):
@@ -949,18 +1110,22 @@ def _run_ma_cross_exit(
 
 
 def _run_rsi_overbought(
-    df, entry_idx, entry_price, params, guard_stop=None, guard_target=None,
+    df, entry_idx, entry_price, params, guard_stop=None, guard_target=None, indicator_cache=None,
 ):
     period = int(params["rsi_period"])
     threshold = params["threshold"]
-    rsi = _compute_rsi(df["Close"], period)
+    rsi = _get_cached_indicator(
+        indicator_cache, ("rsi", period), lambda: _compute_rsi(df["Close"], period),
+    )
+    guard_enabled = guard_stop is not None or guard_target is not None
     for i in range(entry_idx, len(df)):
         bar = _get_bar(df, i)
         bars_held = i - entry_idx + 1
-        guard_hit = _check_guards(bar, guard_stop, guard_target)
-        if guard_hit is not None:
-            price, reason = guard_hit
-            return price, _fmt_ts(df.index, i), reason, bars_held
+        if guard_enabled:
+            guard_hit = _check_guards(bar, guard_stop, guard_target)
+            if guard_hit is not None:
+                price, reason = guard_hit
+                return price, _fmt_ts(df.index, i), reason, bars_held
         rsi_val = rsi.iloc[i]
         if pd.isna(rsi_val):
             continue
@@ -970,20 +1135,26 @@ def _run_rsi_overbought(
 
 
 def _run_macd_bearish_cross(
-    df, entry_idx, entry_price, params, guard_stop=None, guard_target=None,
+    df, entry_idx, entry_price, params, guard_stop=None, guard_target=None, indicator_cache=None,
 ):
     fast = int(params["fast_period"])
     slow = int(params["slow_period"])
     sig = int(params["signal_period"])
-    macd_line, signal_line = _compute_macd(df["Close"], fast, slow, sig)
+    macd_line, signal_line = _get_cached_indicator(
+        indicator_cache,
+        ("macd", fast, slow, sig),
+        lambda: _compute_macd(df["Close"], fast, slow, sig),
+    )
     prev_above = None
+    guard_enabled = guard_stop is not None or guard_target is not None
     for i in range(entry_idx, len(df)):
         bar = _get_bar(df, i)
         bars_held = i - entry_idx + 1
-        guard_hit = _check_guards(bar, guard_stop, guard_target)
-        if guard_hit is not None:
-            price, reason = guard_hit
-            return price, _fmt_ts(df.index, i), reason, bars_held
+        if guard_enabled:
+            guard_hit = _check_guards(bar, guard_stop, guard_target)
+            if guard_hit is not None:
+                price, reason = guard_hit
+                return price, _fmt_ts(df.index, i), reason, bars_held
         m = macd_line.iloc[i]
         s = signal_line.iloc[i]
         if pd.isna(m) or pd.isna(s):
@@ -996,18 +1167,24 @@ def _run_macd_bearish_cross(
 
 
 def _run_volume_fade(
-    df, entry_idx, entry_price, params, guard_stop=None, guard_target=None,
+    df, entry_idx, entry_price, params, guard_stop=None, guard_target=None, indicator_cache=None,
 ):
     lookback = int(params["vol_lookback"])
     alpha = params["multiplier"]
-    avg_vol = df["Volume"].rolling(lookback).mean()
+    avg_vol = _get_cached_indicator(
+        indicator_cache,
+        ("avg_vol", lookback),
+        lambda: df["Volume"].rolling(lookback).mean(),
+    )
+    guard_enabled = guard_stop is not None or guard_target is not None
     for i in range(entry_idx, len(df)):
         bar = _get_bar(df, i)
         bars_held = i - entry_idx + 1
-        guard_hit = _check_guards(bar, guard_stop, guard_target)
-        if guard_hit is not None:
-            price, reason = guard_hit
-            return price, _fmt_ts(df.index, i), reason, bars_held
+        if guard_enabled:
+            guard_hit = _check_guards(bar, guard_stop, guard_target)
+            if guard_hit is not None:
+                price, reason = guard_hit
+                return price, _fmt_ts(df.index, i), reason, bars_held
         av = avg_vol.iloc[i]
         if pd.isna(av):
             continue
@@ -1017,18 +1194,22 @@ def _run_volume_fade(
 
 
 def _run_roc_reversal(
-    df, entry_idx, entry_price, params, guard_stop=None, guard_target=None,
+    df, entry_idx, entry_price, params, guard_stop=None, guard_target=None, indicator_cache=None,
 ):
     period = int(params["roc_period"])
-    roc = _compute_roc(df["Close"], period)
+    roc = _get_cached_indicator(
+        indicator_cache, ("roc", period), lambda: _compute_roc(df["Close"], period),
+    )
     prev_roc = None
+    guard_enabled = guard_stop is not None or guard_target is not None
     for i in range(entry_idx, len(df)):
         bar = _get_bar(df, i)
         bars_held = i - entry_idx + 1
-        guard_hit = _check_guards(bar, guard_stop, guard_target)
-        if guard_hit is not None:
-            price, reason = guard_hit
-            return price, _fmt_ts(df.index, i), reason, bars_held
+        if guard_enabled:
+            guard_hit = _check_guards(bar, guard_stop, guard_target)
+            if guard_hit is not None:
+                price, reason = guard_hit
+                return price, _fmt_ts(df.index, i), reason, bars_held
         r = roc.iloc[i]
         if pd.isna(r):
             continue
@@ -1039,22 +1220,28 @@ def _run_roc_reversal(
 
 
 def _run_stochastic_overbought(
-    df, entry_idx, entry_price, params, guard_stop=None, guard_target=None,
+    df, entry_idx, entry_price, params, guard_stop=None, guard_target=None, indicator_cache=None,
 ):
     n = int(params["stoch_period"])
     k_smooth = int(params["k_smooth"])
     d_smooth = int(params["d_smooth"])
     threshold = params["threshold"]
-    k_line, d_line = _compute_stochastic(df, n, k_smooth, d_smooth)
+    k_line, d_line = _get_cached_indicator(
+        indicator_cache,
+        ("stochastic", n, k_smooth, d_smooth),
+        lambda: _compute_stochastic(df, n, k_smooth, d_smooth),
+    )
     prev_k_above = None
     prev_k = None
+    guard_enabled = guard_stop is not None or guard_target is not None
     for i in range(entry_idx, len(df)):
         bar = _get_bar(df, i)
         bars_held = i - entry_idx + 1
-        guard_hit = _check_guards(bar, guard_stop, guard_target)
-        if guard_hit is not None:
-            price, reason = guard_hit
-            return price, _fmt_ts(df.index, i), reason, bars_held
+        if guard_enabled:
+            guard_hit = _check_guards(bar, guard_stop, guard_target)
+            if guard_hit is not None:
+                price, reason = guard_hit
+                return price, _fmt_ts(df.index, i), reason, bars_held
         k = k_line.iloc[i]
         d = d_line.iloc[i]
         if pd.isna(k) or pd.isna(d):
@@ -1069,20 +1256,24 @@ def _run_stochastic_overbought(
 
 
 def _run_adx_trend_decay(
-    df, entry_idx, entry_price, params, guard_stop=None, guard_target=None,
+    df, entry_idx, entry_price, params, guard_stop=None, guard_target=None, indicator_cache=None,
 ):
     period = int(params["adx_period"])
     weak = params["weak_threshold"]
     strong = params["strong_threshold"]
     lookback = int(params["lookback"])
-    adx = _compute_adx(df, period)
+    adx = _get_cached_indicator(
+        indicator_cache, ("adx", period), lambda: _compute_adx(df, period),
+    )
+    guard_enabled = guard_stop is not None or guard_target is not None
     for i in range(entry_idx, len(df)):
         bar = _get_bar(df, i)
         bars_held = i - entry_idx + 1
-        guard_hit = _check_guards(bar, guard_stop, guard_target)
-        if guard_hit is not None:
-            price, reason = guard_hit
-            return price, _fmt_ts(df.index, i), reason, bars_held
+        if guard_enabled:
+            guard_hit = _check_guards(bar, guard_stop, guard_target)
+            if guard_hit is not None:
+                price, reason = guard_hit
+                return price, _fmt_ts(df.index, i), reason, bars_held
         a = adx.iloc[i]
         if pd.isna(a):
             continue
@@ -1096,18 +1287,22 @@ def _run_adx_trend_decay(
 
 
 def _run_volume_delta_divergence(
-    df, entry_idx, entry_price, params, guard_stop=None, guard_target=None,
+    df, entry_idx, entry_price, params, guard_stop=None, guard_target=None, indicator_cache=None,
 ):
     lookback = int(params["lookback"])
-    uptick, downtick = _compute_volume_delta(df)
+    uptick, downtick = _get_cached_indicator(
+        indicator_cache, ("volume_delta",), lambda: _compute_volume_delta(df),
+    )
     cum_delta = (uptick - downtick).cumsum()
+    guard_enabled = guard_stop is not None or guard_target is not None
     for i in range(entry_idx, len(df)):
         bar = _get_bar(df, i)
         bars_held = i - entry_idx + 1
-        guard_hit = _check_guards(bar, guard_stop, guard_target)
-        if guard_hit is not None:
-            price, reason = guard_hit
-            return price, _fmt_ts(df.index, i), reason, bars_held
+        if guard_enabled:
+            guard_hit = _check_guards(bar, guard_stop, guard_target)
+            if guard_hit is not None:
+                price, reason = guard_hit
+                return price, _fmt_ts(df.index, i), reason, bars_held
         if (i - entry_idx) < lookback:
             continue
         # Price at new rolling high?
@@ -1123,22 +1318,26 @@ def _run_volume_delta_divergence(
 
 
 def _run_volume_imbalance_flip(
-    df, entry_idx, entry_price, params, guard_stop=None, guard_target=None,
+    df, entry_idx, entry_price, params, guard_stop=None, guard_target=None, indicator_cache=None,
 ):
     window = int(params["window"])
     alpha = params["threshold"]
-    uptick, downtick = _compute_volume_delta(df)
+    uptick, downtick = _get_cached_indicator(
+        indicator_cache, ("volume_delta",), lambda: _compute_volume_delta(df),
+    )
     roll_up = uptick.rolling(window).sum()
     roll_dn = downtick.rolling(window).sum()
     roll_total = roll_up + roll_dn
     imbalance = (roll_up - roll_dn) / roll_total.replace(0, np.nan)
+    guard_enabled = guard_stop is not None or guard_target is not None
     for i in range(entry_idx, len(df)):
         bar = _get_bar(df, i)
         bars_held = i - entry_idx + 1
-        guard_hit = _check_guards(bar, guard_stop, guard_target)
-        if guard_hit is not None:
-            price, reason = guard_hit
-            return price, _fmt_ts(df.index, i), reason, bars_held
+        if guard_enabled:
+            guard_hit = _check_guards(bar, guard_stop, guard_target)
+            if guard_hit is not None:
+                price, reason = guard_hit
+                return price, _fmt_ts(df.index, i), reason, bars_held
         imb = imbalance.iloc[i]
         if pd.isna(imb):
             continue
@@ -1152,20 +1351,39 @@ def _run_volume_imbalance_flip(
 
 
 def _run_max_holding_period(
-    df, entry_idx, entry_price, params, guard_stop=None, guard_target=None,
+    df, entry_idx, entry_price, params, guard_stop=None, guard_target=None, indicator_cache=None,
 ):
     max_bars = int(params["max_bars"])
-    for i in range(entry_idx, len(df)):
-        bar = _get_bar(df, i)
-        bars_held = i - entry_idx + 1
-        guard_hit = _check_guards(bar, guard_stop, guard_target)
-        if guard_hit is not None:
-            price, reason = guard_hit
-            return price, _fmt_ts(df.index, i), reason, bars_held
-        # Keep prior timing semantics: fire on index entry_idx + max_bars.
-        if (i - entry_idx) >= max_bars:
-            return bar["Close"], _fmt_ts(df.index, i), "time", max_bars
-    return None, None, "still_open", len(df) - entry_idx
+    n = len(df) - entry_idx
+    if n <= 0:
+        return None, None, "still_open", 0
+
+    # Fast path when guards are disabled.
+    if guard_stop is None and guard_target is None:
+        exit_idx = entry_idx + max_bars
+        if exit_idx >= len(df):
+            return None, None, "still_open", len(df) - entry_idx
+        close = float(df.iloc[exit_idx]["Close"])
+        return close, _fmt_ts(df.index, exit_idx), "time", max_bars
+
+    highs = df["High"].to_numpy(dtype=float, copy=False)
+    lows = df["Low"].to_numpy(dtype=float, copy=False)
+    closes = df["Close"].to_numpy(dtype=float, copy=False)
+    scan_len = min(n, max_bars + 1)
+    guard_hit = _first_guard_hit(
+        highs, lows, entry_idx, guard_stop, guard_target, limit_bars=scan_len,
+    )
+    _trace_vector_scan(scan_len, 0.0)
+    if guard_hit is not None:
+        rel, price, reason = guard_hit
+        i = entry_idx + rel
+        bars_held = rel + 1
+        return price, _fmt_ts(df.index, i), reason, bars_held
+
+    exit_idx = entry_idx + max_bars
+    if exit_idx >= len(df):
+        return None, None, "still_open", len(df) - entry_idx
+    return float(closes[exit_idx]), _fmt_ts(df.index, exit_idx), "time", max_bars
 
 
 _STRATEGY_RUNNERS = {
@@ -1355,6 +1573,8 @@ def run_backtest(
     for symbol, sym_entries in by_symbol.items():
         sym_start = time.perf_counter()
         symbol_entries[symbol] = len(sym_entries)
+        # Reuse indicators across trades for the same symbol/time window.
+        indicator_cache: dict[tuple[Any, ...], Any] = {}
         # Parse all entry times and find the date range we need
         t_parse = time.perf_counter()
         parsed_times: list[tuple[dict, datetime]] = []
@@ -1453,6 +1673,7 @@ def run_backtest(
             exit_price, exit_time, reason, bars_held = base_runner(
                 df, run_idx, entry_price, params,
                 guard_stop=guard_stop, guard_target=guard_target,
+                indicator_cache=indicator_cache,
             )
             _mark("strategy_eval", t_run)
             # Adjust bars_held to include the min_hold period
