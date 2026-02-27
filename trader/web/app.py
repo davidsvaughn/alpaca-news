@@ -907,10 +907,18 @@ def create_app(
         from trader.market.backtest import strategies_json
         return strategies_json()
 
+    @app.get("/api/allocations")
+    async def api_allocations():
+        from trader.market.backtest import allocations_json
+        return allocations_json()
+
     @app.post("/api/strategies/backtest")
     async def api_backtest(request: Request):
         import asyncio
-        from trader.market.backtest import compute_ann_a, compute_ann_b, run_backtest
+        from trader.market.backtest import (
+            apply_allocation, compute_ann_a, compute_ann_b, run_backtest,
+            weight_per_trade_for_allocation,
+        )
 
         api_start = time.perf_counter()
         api_stages: dict[str, float] = {}
@@ -929,6 +937,8 @@ def create_app(
         guard_target_pct = body.get("guard_target_pct", 0)
         cost_bps = body.get("cost_bps", 10)
         trace_enabled = bool(body.get("trace", False))
+        allocation_key = body.get("allocation", "none")
+        allocation_params = body.get("allocation_params", {})
 
         if isinstance(filters, dict):
             t_filter = time.perf_counter()
@@ -976,12 +986,15 @@ def create_app(
                 price = _safe_float(row.get("price_10min")) or 0.0
                 if not sid or not entry_time or not sym:
                     continue
+                pred = row.get("prediction") or {}
+                confidence = _safe_float(pred.get("confidence")) or 0.5
                 entries.append(
                     {
                         "snapshot_id": sid,
                         "symbol": sym,
                         "entry_price": price if price > 0 else 0,
                         "entry_time": entry_time,
+                        "confidence": confidence,
                     }
                 )
             _mark("build_entries", t_entries)
@@ -1011,6 +1024,14 @@ def create_app(
                     r.entry_price *= 1 + cost_frac
         _mark("apply_cost", t_cost)
 
+        # Apply allocation filtering (skip / replace)
+        t_alloc = time.perf_counter()
+        results, alloc_stats = apply_allocation(
+            results, entries, allocation_key, allocation_params,
+        )
+        wpt = weight_per_trade_for_allocation(allocation_key, allocation_params)
+        _mark("apply_allocation", t_alloc)
+
         t_serialize = time.perf_counter()
         trades = [r.to_dict() for r in results]
         _mark("serialize_trades", t_serialize)
@@ -1019,7 +1040,7 @@ def create_app(
         count = len(valid)
         avg_pnl = round(sum(r.pnl_pct for r in valid) / count, 2) if count else None
         stats_a = compute_ann_a(results)
-        stats_b = compute_ann_b(results, res_min)
+        stats_b = compute_ann_b(results, res_min, weight_per_trade=wpt)
         _mark("compute_summary", t_summary)
 
         response = {
@@ -1032,6 +1053,9 @@ def create_app(
                 "sharpe_a": round(stats_a["sharpe"], 2) if stats_a and stats_a["sharpe"] is not None else None,
                 "ann_b": round(stats_b["ann"], 1) if stats_b else None,
                 "sharpe_b": round(stats_b["sharpe"], 2) if stats_b and stats_b["sharpe"] is not None else None,
+                "alloc_taken": alloc_stats.get("taken", 0),
+                "alloc_skipped": alloc_stats.get("skipped", 0),
+                "alloc_replaced": alloc_stats.get("replaced", 0),
             },
         }
         if trace_enabled:

@@ -387,11 +387,16 @@ def compute_ann_a(results: list[BacktestResult]) -> dict[str, float] | None:
 def compute_ann_b(
     results: list[BacktestResult],
     resolution_minutes: int = 60,
+    weight_per_trade: float | None = None,
 ) -> dict[str, float] | None:
     """Annualized stats — fixed capital split (equity curve from real prices).
 
     Uses periodic close prices (at the given resolution) to build a portfolio
-    equity curve with 1/N capital split among active trades.
+    equity curve.  When *weight_per_trade* is None the classic 1/N equal-weight
+    split is used (100 % invested at all times).  When set (e.g. 0.05 for 5 %
+    per trade), each position gets that fixed fraction and any uninvested
+    capital earns 0 % (cash drag).
+
     Returns dict with ann (%), vol (%), sharpe, or None if insufficient data.
     """
     periods_per_year = _TRADING_DAYS_PER_YEAR * _BARS_PER_DAY / resolution_minutes
@@ -423,7 +428,13 @@ def compute_ann_b(
     for ts in sorted_ts:
         active = [tr[ts] for tr in trade_returns_list if ts in tr]
         if active:
-            r_t = sum(active) / len(active)  # 1/N capital split
+            avg_r = sum(active) / len(active)
+            if weight_per_trade is not None:
+                # Fixed allocation: invested fraction may be < 100 %
+                invested = min(len(active) * weight_per_trade, 1.0)
+                r_t = invested * avg_r
+            else:
+                r_t = avg_r  # 1/N capital split (100 % invested)
             portfolio_returns.append(r_t)
             equity *= math.exp(r_t)
 
@@ -441,6 +452,313 @@ def compute_ann_b(
     vol = std_r * math.sqrt(periods_per_year) * 100
     sharpe = (mean_r * periods_per_year) / (std_r * math.sqrt(periods_per_year)) if std_r > 0 else None
     return {"ann": ann, "vol": vol, "sharpe": sharpe}
+
+
+# ---------------------------------------------------------------------------
+# Allocation engine — post-hoc capital / position filtering
+# ---------------------------------------------------------------------------
+
+
+def _price_at_time(result: BacktestResult, target_iso: str) -> float | None:
+    """Look up a position's price at *target_iso* from its periodic_closes.
+
+    Returns the close of the latest snapshot whose timestamp <= target_iso,
+    or None if no periodic data is available.
+    """
+    if not result.periodic_closes:
+        return None
+    best: float | None = None
+    for ts, close in result.periodic_closes:
+        if ts <= target_iso:
+            best = close
+        else:
+            break  # periodic_closes are chronologically ordered
+    return best
+
+
+def _truncate_result(
+    result: BacktestResult, exit_iso: str, exit_price: float,
+) -> BacktestResult:
+    """Return a copy of *result* early-exited at the given time/price."""
+    pnl = round((exit_price - result.entry_price) / result.entry_price * 100, 2) if result.entry_price > 0 else 0.0
+    # Trim periodic_closes to only include data up to exit
+    trimmed_pc = None
+    if result.periodic_closes:
+        trimmed_pc = [(ts, c) for ts, c in result.periodic_closes if ts <= exit_iso]
+    # Approximate hold_minutes from entry_time to exit_iso
+    hold_minutes = result.hold_minutes
+    try:
+        entry_dt = pd.Timestamp(result.entry_time)
+        exit_dt = pd.Timestamp(exit_iso)
+        hold_minutes = max(1, int((exit_dt - entry_dt).total_seconds() / 60))
+    except Exception:
+        pass
+    return BacktestResult(
+        snapshot_id=result.snapshot_id,
+        symbol=result.symbol,
+        entry_price=result.entry_price,
+        entry_time=result.entry_time,
+        exit_price=round(exit_price, 2),
+        exit_time=exit_iso,
+        pnl_pct=pnl,
+        exit_reason="replaced",
+        bars_held=result.bars_held,
+        hold_minutes=hold_minutes,
+        periodic_closes=trimmed_pc,
+    )
+
+
+# ---- ranking helpers -------------------------------------------------------
+
+
+def _rank_confidence(
+    open_positions: dict[str, BacktestResult],
+    entry_confidence: dict[str, float],
+    _target_iso: str,
+) -> dict[str, float]:
+    """Score each open position by its original signal confidence."""
+    return {sid: entry_confidence.get(sid, 0.5) for sid in open_positions}
+
+
+def _rank_momentum(
+    open_positions: dict[str, BacktestResult],
+    _entry_confidence: dict[str, float],
+    target_iso: str,
+) -> dict[str, float]:
+    """Score each open position by unrealised P&L at *target_iso*."""
+    scores: dict[str, float] = {}
+    for sid, r in open_positions.items():
+        cur = _price_at_time(r, target_iso)
+        if cur is not None and r.entry_price > 0:
+            scores[sid] = (cur - r.entry_price) / r.entry_price
+        else:
+            scores[sid] = 0.0
+    return scores
+
+
+def _rank_composite(
+    open_positions: dict[str, BacktestResult],
+    entry_confidence: dict[str, float],
+    target_iso: str,
+    weight: float = 0.5,
+) -> dict[str, float]:
+    """Composite score: w * Z(confidence) + (1-w) * Z(momentum).
+
+    *weight* controls confidence vs momentum (0 = pure momentum, 1 = pure
+    confidence).
+    """
+    conf = _rank_confidence(open_positions, entry_confidence, target_iso)
+    mom = _rank_momentum(open_positions, entry_confidence, target_iso)
+    sids = list(open_positions.keys())
+    if len(sids) < 2:
+        # Can't z-score with < 2 values; fall back to momentum
+        return mom
+
+    def _z(vals: list[float]) -> list[float]:
+        m = sum(vals) / len(vals)
+        v = sum((x - m) ** 2 for x in vals) / (len(vals) - 1)
+        s = math.sqrt(v) if v > 0 else 1.0
+        return [(x - m) / s for x in vals]
+
+    z_conf = _z([conf[s] for s in sids])
+    z_mom = _z([mom[s] for s in sids])
+    return {
+        sid: weight * zc + (1 - weight) * zm
+        for sid, zc, zm in zip(sids, z_conf, z_mom)
+    }
+
+
+def _compute_scores(
+    method: str,
+    open_positions: dict[str, BacktestResult],
+    entry_confidence: dict[str, float],
+    target_iso: str,
+    composite_weight: float = 0.5,
+) -> dict[str, float]:
+    """Dispatch to the appropriate ranking function."""
+    if method == "confidence":
+        return _rank_confidence(open_positions, entry_confidence, target_iso)
+    if method == "composite":
+        return _rank_composite(open_positions, entry_confidence, target_iso, composite_weight)
+    return _rank_momentum(open_positions, entry_confidence, target_iso)
+
+
+def _try_replace(
+    new_sid: str,
+    new_confidence: float,
+    open_positions: dict[str, BacktestResult],
+    entry_confidence: dict[str, float],
+    target_iso: str,
+    rank_method: str,
+    composite_weight: float,
+) -> str | None:
+    """If the new signal outranks the weakest open position, return the
+    snapshot_id of the position to replace.  Otherwise return None."""
+    if not open_positions:
+        return None
+    scores = _compute_scores(
+        rank_method, open_positions, entry_confidence, target_iso, composite_weight,
+    )
+    # Score the incoming signal the same way
+    if rank_method == "confidence":
+        new_score = new_confidence
+    elif rank_method == "momentum":
+        new_score = 0.0  # just entered — no unrealised P&L yet
+    else:
+        # For composite, approximate: confidence component only (momentum=0)
+        new_score = composite_weight * new_confidence
+    worst_sid = min(scores, key=scores.get)  # type: ignore[arg-type]
+    if new_score > scores[worst_sid]:
+        return worst_sid
+    return None
+
+
+# ---- main allocation entry point -------------------------------------------
+
+
+def apply_allocation(
+    results: list[BacktestResult],
+    entries: list[dict[str, Any]],
+    alloc_key: str,
+    alloc_params: dict[str, Any],
+) -> tuple[list[BacktestResult], dict[str, int]]:
+    """Filter / modify *results* according to an allocation strategy.
+
+    Args:
+        results: Full list from ``run_backtest`` (one per entry, same order).
+        entries: Corresponding entry dicts (must include ``confidence``).
+        alloc_key: Key into :data:`ALLOCATIONS`.
+        alloc_params: User-provided parameter values.
+
+    Returns:
+        (filtered_results, stats) where *stats* has counts:
+        ``taken``, ``skipped``, ``replaced``.
+    """
+    if alloc_key == "none" or alloc_key not in ALLOCATIONS:
+        return results, {"taken": len(results), "skipped": 0, "replaced": 0}
+
+    # Build a quick lookup: snapshot_id -> (index, result, entry)
+    by_sid: dict[str, tuple[int, BacktestResult, dict]] = {}
+    for i, (r, e) in enumerate(zip(results, entries)):
+        by_sid[r.snapshot_id] = (i, r, e)
+
+    # Sort entries chronologically for the portfolio walk-forward
+    chrono = sorted(by_sid.values(), key=lambda t: t[2].get("entry_time", ""))
+
+    # Determine capacity rule
+    if alloc_key == "fixed_dollar":
+        alloc_pct = float(alloc_params.get("alloc_pct", 5))
+        max_concurrent = max(1, int(100 / alloc_pct))
+        do_replace = False
+    elif alloc_key == "max_positions":
+        max_concurrent = int(alloc_params.get("max_pos", 10))
+        do_replace = str(alloc_params.get("when_full", "skip")) == "replace"
+    elif alloc_key == "ranking_realloc":
+        alloc_pct = float(alloc_params.get("alloc_pct", 5))
+        max_concurrent = max(1, int(100 / alloc_pct))
+        do_replace = True
+    else:
+        return results, {"taken": len(results), "skipped": 0, "replaced": 0}
+
+    rank_method = str(alloc_params.get("rank_method", "momentum"))
+    composite_weight = float(alloc_params.get("composite_weight", 0.5))
+
+    # Walk forward chronologically
+    open_positions: dict[str, BacktestResult] = {}   # sid -> result
+    entry_confidence: dict[str, float] = {}           # sid -> confidence
+    out: dict[int, BacktestResult] = {}               # original index -> final result
+    stats = {"taken": 0, "skipped": 0, "replaced": 0}
+
+    for orig_idx, result, entry in chrono:
+        sid = result.snapshot_id
+        new_entry_time = entry.get("entry_time", "")
+        new_confidence = float(entry.get("confidence", 0.5))
+
+        # Evict positions that have already exited by this entry's time
+        closed = [
+            s for s, r in open_positions.items()
+            if r.exit_time is not None and r.exit_time <= new_entry_time
+        ]
+        for s in closed:
+            del open_positions[s]
+
+        # Skip trades that had no data / couldn't be evaluated
+        if result.pnl_pct is None and result.exit_reason in ("no_data", "unknown_strategy"):
+            out[orig_idx] = result
+            stats["taken"] += 1
+            continue
+
+        if len(open_positions) < max_concurrent:
+            # Capacity available — take the trade
+            open_positions[sid] = result
+            entry_confidence[sid] = new_confidence
+            out[orig_idx] = result
+            stats["taken"] += 1
+        elif do_replace:
+            # Try to replace weakest
+            victim_sid = _try_replace(
+                sid, new_confidence, open_positions, entry_confidence,
+                new_entry_time, rank_method, composite_weight,
+            )
+            if victim_sid is not None:
+                # Early-exit the victim
+                victim_result = open_positions[victim_sid]
+                exit_price = _price_at_time(victim_result, new_entry_time)
+                if exit_price is None:
+                    exit_price = victim_result.entry_price  # fallback
+                truncated = _truncate_result(victim_result, new_entry_time, exit_price)
+                # Find victim's original index and update
+                victim_orig_idx = next(
+                    i for i, (idx, _, _) in enumerate(chrono)
+                    if chrono[i][1].snapshot_id == victim_sid
+                )
+                out[chrono[victim_orig_idx][0]] = truncated
+                stats["replaced"] += 1
+                # Swap in the new position
+                del open_positions[victim_sid]
+                open_positions[sid] = result
+                entry_confidence[sid] = new_confidence
+                out[orig_idx] = result
+                stats["taken"] += 1
+            else:
+                # New signal doesn't outrank weakest — skip
+                out[orig_idx] = BacktestResult(
+                    snapshot_id=sid,
+                    symbol=result.symbol,
+                    entry_price=result.entry_price,
+                    entry_time=result.entry_time,
+                    exit_reason="skipped",
+                )
+                stats["skipped"] += 1
+        else:
+            # Skip — at capacity
+            out[orig_idx] = BacktestResult(
+                snapshot_id=sid,
+                symbol=result.symbol,
+                entry_price=result.entry_price,
+                entry_time=result.entry_time,
+                exit_reason="skipped",
+            )
+            stats["skipped"] += 1
+
+    # Return results in original order
+    final = [out[i] for i in range(len(results)) if i in out]
+    # Adjust taken count: replaced victims were already counted as taken originally
+    stats["taken"] = stats["taken"] - stats["replaced"]
+    return final, stats
+
+
+def weight_per_trade_for_allocation(
+    alloc_key: str, alloc_params: dict[str, Any],
+) -> float | None:
+    """Return the fixed weight per trade for the equity curve, or None for 1/N."""
+    if alloc_key == "fixed_dollar":
+        return float(alloc_params.get("alloc_pct", 5)) / 100
+    if alloc_key == "ranking_realloc":
+        return float(alloc_params.get("alloc_pct", 5)) / 100
+    if alloc_key == "max_positions":
+        return 1.0 / max(1, int(alloc_params.get("max_pos", 10)))
+    return None
 
 
 # ---------------------------------------------------------------------------

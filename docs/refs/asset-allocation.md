@@ -136,6 +136,11 @@ Equal weight is a theoretical construct, not an execution plan.
 
 # For Methods that Require Ranking all Current Holdings...
 
+- 2️⃣ Max Positions Constraint
+- 4️⃣ Ranking-Based Capital Reallocation
+
+below are several ranking strategies...
+
 ---
 
 ## Signal Strength Ranking (Most Common in Systematic Trading)
