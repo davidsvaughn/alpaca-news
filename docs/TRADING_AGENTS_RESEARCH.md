@@ -135,10 +135,11 @@ quarters of data to see trends.
 
 ### Debate/Memory (Future Consideration)
 
-TradingAgents uses explicit bull/bear debate cycles and semantic memory of past
-decisions. These are interesting but heavyweight — consider for later phases.
-Our sequential pipeline with accumulating context achieves some of the same
-effect (later agents can challenge/refine earlier findings).
+TradingAgents uses explicit bull/bear debate cycles and BM25-based memory of
+past decisions (see detailed sections below). The debate pattern is heavyweight
+but the BM25 memory is cheap and could be adopted independently. Our sequential
+pipeline with accumulating context achieves some of the debate effect (later
+agents can challenge/refine earlier findings).
 
 ---
 
@@ -163,6 +164,90 @@ effect (later agents can challenge/refine earlier findings).
 - All agents share: "FINAL TRANSACTION PROPOSAL: **BUY/HOLD/SELL**"
 - "Do not simply state the trends are mixed, provide detailed and fine-grained
   analysis and insights"
+
+---
+
+## Backtesting & Exit Strategies
+
+**TradingAgents has neither.** The system is a single-point-in-time decision
+engine — `ta.propagate("NVDA", "2024-05-10")` produces one BUY/SELL/HOLD
+signal. There is no:
+
+- Backtesting engine or historical simulation loop
+- Exit strategy logic (no stop-loss, take-profit, trailing stops, time-based exits)
+- Position tracking or portfolio state
+- P&L calculation or performance metrics
+- Position sizing algorithms
+- Order execution or broker integration
+
+**Design intent**: TradingAgents is a research framework for studying LLM
+decision-making quality, not a production trading system. Outcomes are evaluated
+after the fact via the reflection system (see below), not simulated in advance.
+
+**Implication for us**: All backtesting, exit logic, and position management
+must be built from scratch. Nothing to borrow here.
+
+---
+
+## Memory System: BM25 Implementation
+
+The doc above mentions "semantic memory" — here are the implementation details.
+
+**File**: `tradingagents/agents/utils/memory.py`
+
+Each agent type has its own memory bank:
+- `bull_memory`, `bear_memory`, `trader_memory`, `invest_judge_memory`, `risk_manager_memory`
+
+**How it works**:
+1. Each memory entry is a `(situation, recommendation)` tuple — the market
+   context at decision time paired with the agent's recommendation
+2. Retrieval uses **BM25 lexical similarity** (via `rank_bm25` library) — no
+   embeddings, no vector DB, no API calls
+3. At decision time, the current situation is tokenized and matched against
+   stored situations; the top-k most similar past memories are injected into
+   the agent's prompt
+4. Default: 2 most similar past situations retrieved per agent
+
+**Why BM25 over embeddings?**
+- Zero cost (no API calls, no GPU)
+- Works offline
+- Fast enough for real-time use
+- Surprisingly effective for structured financial text where key terms
+  (ticker, sector, indicator names) carry strong signal
+
+**Potential adaptation**: We could use BM25 memory to store past backtest
+scenarios and retrieve similar ones when evaluating new signals — lightweight
+alternative to a full embedding pipeline.
+
+---
+
+## Post-Trade Reflection System
+
+**File**: `tradingagents/graph/reflection.py`
+
+After a trade executes and the actual P&L is known, you call:
+```python
+ta.reflect_and_remember(returns_losses=1000)  # e.g. +$1000
+```
+
+**What happens**:
+1. The reflector LLM receives the original decision context + actual outcome
+2. It analyzes contributing factors:
+   - Which technical indicators were predictive vs misleading
+   - Whether news/sentiment signals were correctly weighted
+   - Whether fundamentals justified the decision
+   - What the agent should do differently next time
+3. Generated lessons are stored as new entries in each agent's BM25 memory
+4. Future decisions retrieve these lessons when facing similar situations
+
+**Key insight**: This creates a feedback loop — decisions improve over time
+as the memory bank accumulates lessons from real outcomes. But it requires
+**actual trade execution and P&L tracking** to feed the loop, which they
+leave to the user.
+
+**Potential adaptation**: After backtests complete, we could run a reflection
+step that analyzes which exit strategy would have been optimal and why,
+storing insights for future signal evaluation.
 
 ---
 

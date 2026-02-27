@@ -94,6 +94,17 @@ def open_sqlite(path: str) -> Database:
     p.parent.mkdir(parents=True, exist_ok=True)
     engine = create_engine(f"sqlite+pysqlite:///{p}")
     metadata.create_all(engine)
+    # Hot query paths in the dashboard/backtest rely on created_at ordering and
+    # symbol filtering. Ensure indexes exist for existing DBs as well.
+    with engine.begin() as conn:
+        conn.execute(text(
+            "CREATE INDEX IF NOT EXISTS idx_snapshots_created_at "
+            "ON snapshots(created_at DESC)"
+        ))
+        conn.execute(text(
+            "CREATE INDEX IF NOT EXISTS idx_snapshots_symbols "
+            "ON snapshots(symbols)"
+        ))
     return Database(engine=engine)
 
 

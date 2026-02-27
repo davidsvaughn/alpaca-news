@@ -5,6 +5,7 @@ from __future__ import annotations
 import dataclasses
 import json
 import threading
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -363,6 +364,7 @@ def create_app(
         pe_max: str | None = None,
         sort_col: str | None = None,
         sort_dir: str | None = None,
+        include_market_metrics: bool = True,
     ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
         explored_only = explored == "1"
         signal_direction = _normalize_signal_filter(signal)
@@ -410,7 +412,7 @@ def create_app(
         )
 
         symbols = [_primary_symbol(s) for s in base_snaps]
-        market_by_symbol = _fetch_market_metrics(symbols)
+        market_by_symbol = _fetch_market_metrics(symbols) if include_market_metrics else {}
 
         filtered_rows: list[dict[str, Any]] = []
         for snap in base_snaps:
@@ -427,14 +429,15 @@ def create_app(
             row["_mkt_cap_text"] = _fmt_mkt_cap(row["_mkt_cap"])
             row["_pe_text"] = _fmt_pe(row["_pe"])
 
-            if not _matches_range(row["_price"], price_min_val, price_max_val):
-                continue
-            if not _matches_range(row["_avg_vol"], avg_vol_min_val, avg_vol_max_val):
-                continue
-            if not _matches_range(row["_mkt_cap"], mkt_cap_min_val, mkt_cap_max_val):
-                continue
-            if not _matches_range(row["_pe"], pe_min_val, pe_max_val):
-                continue
+            if include_market_metrics:
+                if not _matches_range(row["_price"], price_min_val, price_max_val):
+                    continue
+                if not _matches_range(row["_avg_vol"], avg_vol_min_val, avg_vol_max_val):
+                    continue
+                if not _matches_range(row["_mkt_cap"], mkt_cap_min_val, mkt_cap_max_val):
+                    continue
+                if not _matches_range(row["_pe"], pe_min_val, pe_max_val):
+                    continue
 
             filtered_rows.append(row)
 
@@ -909,6 +912,12 @@ def create_app(
         import asyncio
         from trader.market.backtest import compute_ann_a, compute_ann_b, run_backtest
 
+        api_start = time.perf_counter()
+        api_stages: dict[str, float] = {}
+
+        def _mark(stage: str, start: float) -> None:
+            api_stages[stage] = api_stages.get(stage, 0.0) + max(0.0, time.perf_counter() - start)
+
         body = await request.json()
         strategy_key = body.get("strategy", "")
         params = body.get("params", {})
@@ -919,8 +928,22 @@ def create_app(
         guard_stop_pct = body.get("guard_stop_pct", 0)
         guard_target_pct = body.get("guard_target_pct", 0)
         cost_bps = body.get("cost_bps", 10)
+        trace_enabled = bool(body.get("trace", False))
 
         if isinstance(filters, dict):
+            t_filter = time.perf_counter()
+            market_filter_keys = (
+                "price_min", "price_max",
+                "avg_vol_min", "avg_vol_max",
+                "mkt_cap_min", "mkt_cap_max",
+                "pe_min", "pe_max",
+            )
+            needs_market_metric_filter = any(
+                str(filters.get(k) or "").strip() for k in market_filter_keys
+            )
+            sort_col_val = str(filters.get("sort_col") or "").strip().lower()
+            needs_market_metric_sort = sort_col_val in {"price", "avg_vol", "mkt_cap", "pe"}
+            include_market_metrics = needs_market_metric_filter or needs_market_metric_sort
             sorted_rows, _ = _snapshot_rows_for_filters(
                 symbol=(str(filters.get("symbol")).strip() if filters.get("symbol") is not None else None),
                 explored=(str(filters.get("explored")).strip() if filters.get("explored") is not None else None),
@@ -940,7 +963,11 @@ def create_app(
                 pe_max=(str(filters.get("pe_max")).strip() if filters.get("pe_max") is not None else None),
                 sort_col=(str(filters.get("sort_col")).strip() if filters.get("sort_col") is not None else None),
                 sort_dir=(str(filters.get("sort_dir")).strip() if filters.get("sort_dir") is not None else None),
+                include_market_metrics=include_market_metrics,
             )
+            _mark("filter_rows", t_filter)
+
+            t_entries = time.perf_counter()
             entries = []
             for row in sorted_rows:
                 sid = str(row.get("snapshot_id") or "").strip()
@@ -957,16 +984,21 @@ def create_app(
                         "entry_time": entry_time,
                     }
                 )
+            _mark("build_entries", t_entries)
 
         if not entries:
             return []
         res_min = settings.stats_resolution_minutes
+        engine_trace: dict[str, Any] | None = {} if trace_enabled else None
+        t_engine = time.perf_counter()
         results = await asyncio.to_thread(
             run_backtest, strategy_key, params, entries, market_close, min_hold,
             guard_stop_pct, guard_target_pct, settings.price_delay_minutes,
-            res_min,
+            res_min, engine_trace,
         )
+        _mark("run_backtest", t_engine)
         # Apply transaction cost deduction
+        t_cost = time.perf_counter()
         if cost_bps > 0:
             cost_pct = cost_bps / 100  # bps → percentage points
             cost_frac = cost_bps / 10000  # bps → fraction
@@ -977,14 +1009,20 @@ def create_app(
                 # Adjust entry price upward so Method B's equity curve reflects cost
                 if r.entry_price and r.entry_price > 0:
                     r.entry_price *= 1 + cost_frac
+        _mark("apply_cost", t_cost)
 
+        t_serialize = time.perf_counter()
         trades = [r.to_dict() for r in results]
+        _mark("serialize_trades", t_serialize)
+        t_summary = time.perf_counter()
         valid = [r for r in results if r.pnl_pct is not None]
         count = len(valid)
         avg_pnl = round(sum(r.pnl_pct for r in valid) / count, 2) if count else None
         stats_a = compute_ann_a(results)
         stats_b = compute_ann_b(results, res_min)
-        return {
+        _mark("compute_summary", t_summary)
+
+        response = {
             "trades": trades,
             "summary": {
                 "count": count,
@@ -996,6 +1034,24 @@ def create_app(
                 "sharpe_b": round(stats_b["sharpe"], 2) if stats_b and stats_b["sharpe"] is not None else None,
             },
         }
+        if trace_enabled:
+            total_sec = max(0.0, time.perf_counter() - api_start)
+            api_stages["total"] = total_sec
+            stage_pct = {
+                k: (v / total_sec * 100.0) if total_sec > 0 else 0.0
+                for k, v in api_stages.items()
+            }
+            response["trace"] = {
+                "api_stages_sec": {k: round(v, 6) for k, v in sorted(api_stages.items())},
+                "api_stages_pct": {k: round(v, 2) for k, v in sorted(stage_pct.items())},
+                "counts": {
+                    "entries_in": len(entries),
+                    "trades_out": len(results),
+                    "valid_trades": count,
+                },
+                "engine": engine_trace or {},
+            }
+        return response
 
     @app.get("/api/activity-panel", response_class=HTMLResponse)
     async def api_activity_panel(request: Request):
