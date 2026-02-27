@@ -30,7 +30,7 @@ from typing import Any, Callable
 from watchdog.events import FileSystemEventHandler
 from watchdog.observers import Observer
 
-from trader.config import Settings
+from trader.config import Settings, infer_provider_from_model
 from trader.db.database import (
     Database,
     count_holding_watches,
@@ -319,10 +319,11 @@ def process_news_file(
         import concurrent.futures
 
         _triage_pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+        triage_provider = infer_provider_from_model(settings.triage_model)
         _triage_future = _triage_pool.submit(
             run_triage,
             llm=llm,  # type: ignore[arg-type]
-            provider=settings.triage_provider,
+            provider=triage_provider,
             model=settings.triage_model,
             knowledge=knowledge,
             news=news,
@@ -381,7 +382,7 @@ def process_news_file(
     triage_provider = (
         triage.provider
         if getattr(triage, "provider", None)
-        else ("pre-filter" if _was_pre_filter else settings.triage_provider)
+        else ("pre-filter" if _was_pre_filter else infer_provider_from_model(settings.triage_model))
     )
     triage_model = (
         triage.model

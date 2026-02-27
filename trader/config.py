@@ -18,6 +18,27 @@ from dotenv import load_dotenv
 ProviderName = Literal["openai", "grok", "gemini"]
 
 
+def infer_provider_from_model(model: str) -> ProviderName:
+    """Infer provider from model prefix.
+
+    Supported:
+    - gemini* -> gemini
+    - gpt* / o1* / o3* / o4* -> openai
+    - grok* -> grok
+    """
+    m = (model or "").strip().lower()
+    if m.startswith("gemini"):
+        return "gemini"
+    if m.startswith("grok"):
+        return "grok"
+    if m.startswith("gpt") or m.startswith("o1") or m.startswith("o3") or m.startswith("o4"):
+        return "openai"
+    raise ValueError(
+        f"Cannot infer provider from model {model!r}. "
+        "Expected model starting with 'gemini', 'grok', or 'gpt'/'o1'/'o3'/'o4'."
+    )
+
+
 def _env_bool(name: str, default: bool = False) -> bool:
     val = os.getenv(name)
     if val is None:
@@ -67,12 +88,9 @@ class Settings:
     sqlite_path: str
     snapshots_dir: str
 
-    # Models/providers (stage configs)
-    triage_provider: ProviderName
+    # Models (stage configs; providers inferred from model prefixes)
     triage_model: str
-    research_provider: ProviderName
     research_model: str
-    xsearch_provider: ProviderName
     xsearch_model: str
 
     # Budgets/limits
@@ -162,7 +180,6 @@ class Settings:
     # Pattern review (periodic skip-pattern proposals)
     pattern_review_enabled: bool
     pattern_review_interval_s: int
-    pattern_review_provider: ProviderName
     pattern_review_model: str
     pattern_review_lookback_hours: int
 
@@ -197,16 +214,14 @@ def load_settings(*, dotenv_path: str | None = None, override: bool = False) -> 
         data_dir, "snapshots"
     )
 
-    triage_provider = (os.getenv("TRIAGE_PROVIDER") or "grok").strip().lower()  # type: ignore[assignment]
-    research_provider = (os.getenv("RESEARCH_PROVIDER") or "openai").strip().lower()  # type: ignore[assignment]
-    xsearch_provider = (os.getenv("XSEARCH_PROVIDER") or "grok").strip().lower()  # type: ignore[assignment]
-    for p in (triage_provider, research_provider, xsearch_provider):
-        if p not in ("openai", "grok", "gemini"):
-            raise ValueError(f"Unknown provider: {p}")
-
     triage_model = os.getenv("TRIAGE_MODEL") or "grok-4.1-fast-reasoning"
     research_model = os.getenv("RESEARCH_MODEL") or "gpt-5-mini"
     xsearch_model = os.getenv("XSEARCH_MODEL") or "grok-4.1-fast-reasoning"
+
+    # Validate model prefixes early so misconfiguration fails fast.
+    infer_provider_from_model(triage_model)
+    infer_provider_from_model(research_model)
+    infer_provider_from_model(xsearch_model)
 
     max_daily_cost = _env_float("MAX_DAILY_COST", 5.00)
     max_cost_per_news_item = _env_float("MAX_COST_PER_NEWS_ITEM", 0.50)
@@ -285,10 +300,8 @@ def load_settings(*, dotenv_path: str | None = None, override: bool = False) -> 
     # Pattern review
     pattern_review_enabled = _env_bool("PATTERN_REVIEW_ENABLED", False)
     pattern_review_interval_s = _env_int("PATTERN_REVIEW_INTERVAL_S", 10800)
-    pattern_review_provider = (os.getenv("PATTERN_REVIEW_PROVIDER") or "openai").strip().lower()  # type: ignore[assignment]
-    if pattern_review_provider not in ("openai", "grok", "gemini"):
-        raise ValueError(f"Unknown PATTERN_REVIEW_PROVIDER: {pattern_review_provider}")
     pattern_review_model = _env_str("PATTERN_REVIEW_MODEL", "gpt-5.2") or "gpt-5.2"
+    infer_provider_from_model(pattern_review_model)
     pattern_review_lookback_hours = _env_int("PATTERN_REVIEW_LOOKBACK_HOURS", 6)
 
     reflection_model = _env_str("REFLECTION_MODEL", "gemini-3-flash-preview") or "gemini-3-flash-preview"
@@ -302,11 +315,8 @@ def load_settings(*, dotenv_path: str | None = None, override: bool = False) -> 
         data_dir=data_dir,
         sqlite_path=sqlite_path,
         snapshots_dir=snapshots_dir,
-        triage_provider=triage_provider,  # type: ignore[arg-type]
         triage_model=triage_model,
-        research_provider=research_provider,  # type: ignore[arg-type]
         research_model=research_model,
-        xsearch_provider=xsearch_provider,  # type: ignore[arg-type]
         xsearch_model=xsearch_model,
         max_daily_cost=max_daily_cost,
         max_cost_per_news_item=max_cost_per_news_item,
@@ -370,7 +380,6 @@ def load_settings(*, dotenv_path: str | None = None, override: bool = False) -> 
 
         pattern_review_enabled=pattern_review_enabled,
         pattern_review_interval_s=pattern_review_interval_s,
-        pattern_review_provider=pattern_review_provider,  # type: ignore[arg-type]
         pattern_review_model=pattern_review_model,
         pattern_review_lookback_hours=pattern_review_lookback_hours,
 

@@ -13,7 +13,7 @@ import os
 
 import pytest
 
-from trader.config import load_settings
+from trader.config import infer_provider_from_model, load_settings
 
 
 # ---------------------------------------------------------------------------
@@ -76,11 +76,11 @@ class TestConfiguredModelsExist:
 
     def test_triage_model(self, settings):
         """Triage model (grok) must be reachable."""
-        _VALIDATORS[settings.triage_provider](settings.triage_model)
+        _VALIDATORS[infer_provider_from_model(settings.triage_model)](settings.triage_model)
 
     def test_research_model(self, settings):
         """Research model (openai) must be reachable."""
-        _VALIDATORS[settings.research_provider](settings.research_model)
+        _VALIDATORS[infer_provider_from_model(settings.research_model)](settings.research_model)
 
     # --- Auxiliary Gemini models ---
 

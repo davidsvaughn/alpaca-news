@@ -158,7 +158,6 @@ AgentSpec(
 ```bash
 # .env
 OPENAI_API_KEY=<your-key-here>
-RESEARCH_PROVIDER=openai
 RESEARCH_MODEL=gpt-5.1
 ```
 

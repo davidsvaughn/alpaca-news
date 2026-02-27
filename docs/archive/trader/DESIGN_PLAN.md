@@ -116,9 +116,7 @@ class LLMClient:
 
 ```env
 TRIAGE_MODEL=grok-4-1-fast-reasoning          # fast + cheap for filtering
-TRIAGE_PROVIDER=grok
 RESEARCH_MODEL=gpt-5-mini               # strong reasoning for research
-RESEARCH_PROVIDER=openai
 XSEARCH_MODEL=grok-4-1-fast-reasoning         # only Grok has x_search
 SYNTHESIS_MODEL=gemini-3-flash-preview              # strongest reasoning for final decision
 REASONING_LEVEL=medium               # low/medium/high (controls token budget)

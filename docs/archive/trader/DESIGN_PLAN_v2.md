@@ -384,8 +384,8 @@ For the explorer pipeline, agents use PydanticAI's native provider support
 
 Per-stage model configuration via `.env` (subject to change):
 ```env
-TRIAGE_PROVIDER=grok        TRIAGE_MODEL=grok-4-1-fast-reasoning
-RESEARCH_PROVIDER=openai    RESEARCH_MODEL=gpt-5-mini
+TRIAGE_MODEL=grok-4-1-fast-reasoning
+RESEARCH_MODEL=gpt-5-mini
 SYNTHESIS_MODEL=gemini-3-flash-preview
 ```
 

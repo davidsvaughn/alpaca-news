@@ -173,7 +173,6 @@ resp = httpx.post(
 # .env
 XAI_API_KEY=<your-key-here>
 XAI_BASE_URL=https://api.x.ai/v1          # Optional (this is the default)
-XSEARCH_PROVIDER=grok
 XSEARCH_MODEL=grok-4.1-fast-reasoning     # Model for pipeline
 MAX_X_SEARCHES_PER_ITEM=2                  # Budget guard
 MAX_WEB_SEARCHES_PER_ITEM=3               # Budget guard

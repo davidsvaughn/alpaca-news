@@ -1624,11 +1624,11 @@ def _settings_groups(s: Settings) -> list[tuple[str, list[tuple[str, Any]]]]:
         ("Modes", ["learning_mode", "trading_mode", "debug", "observer_mode"]),
         ("Paths", ["alpaca_output_dir", "data_dir", "sqlite_path", "snapshots_dir"]),
         (
-            "Models & Providers",
+            "Models",
             [
-                "triage_provider", "triage_model",
-                "research_provider", "research_model",
-                "xsearch_provider", "xsearch_model",
+                "triage_model",
+                "research_model",
+                "xsearch_model",
             ],
         ),
         (
