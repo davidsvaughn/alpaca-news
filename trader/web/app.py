@@ -1628,7 +1628,6 @@ def _settings_groups(s: Settings) -> list[tuple[str, list[tuple[str, Any]]]]:
             [
                 "triage_provider", "triage_model",
                 "research_provider", "research_model",
-                "sentiment_provider", "sentiment_model",
                 "xsearch_provider", "xsearch_model",
             ],
         ),

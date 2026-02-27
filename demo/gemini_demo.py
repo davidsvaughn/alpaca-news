@@ -44,7 +44,7 @@ def main():
     from google import genai
     from google.genai import types
 
-    model = os.getenv("SENTIMENT_MODEL", "gemini-3-flash-preview")
+    model = os.getenv("SYNTHESIS_MODEL", "gemini-3-flash-preview")
     client = genai.Client(api_key=api_key)
 
     print(f"Google Gemini Demo")

@@ -57,12 +57,9 @@ GROK_PRICING: dict[str, dict[str, float]] = {
 # - "input_high": rate for >200K input tokens
 # - "output": output token rate (flat)
 GEMINI_PRICING: dict[str, dict[str, float]] = {
+    "gemini-3.1-pro-preview": {"input_low": 2.00, "input_high": 4.00, "output": 12.00},
     "gemini-3-pro-preview": {"input_low": 2.00, "input_high": 4.00, "output": 12.00},
     "gemini-3-flash-preview": {"input_low": 0.50, "input_high": 0.50, "output": 3.00},
-    "gemini-2.5-pro": {"input_low": 1.25, "input_high": 2.50, "output": 10.00},
-    "gemini-3-flash-preview": {"input_low": 0.30, "input_high": 0.30, "output": 2.50},
-    "gemini-3-flash-preview-lite": {"input_low": 0.10, "input_high": 0.10, "output": 0.40},
-    "gemini-2.0-flash": {"input_low": 0.10, "input_high": 0.10, "output": 0.40},
     # Placeholder (pricing may not actually be per-call; confirm via Google pricing pages)
     "web_search": {"per_call": 0.01},
 }

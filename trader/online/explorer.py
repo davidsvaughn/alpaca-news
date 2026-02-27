@@ -222,8 +222,6 @@ def explore_two_phase(
     research_model: str,
     xsearch_provider: str,
     xsearch_model: str,
-    sentiment_provider: str,
-    sentiment_model: str,
     # Limits
     max_phase1_actions: int,
     max_phase2_branches: int,
@@ -322,8 +320,8 @@ def explore_two_phase(
             provider = xsearch_provider
             model = xsearch_model
         elif a.tool == ActionTool.GOOGLE_SEARCH:
-            provider = sentiment_provider
-            model = sentiment_model
+            provider = research_provider
+            model = research_model
         else:
             provider = research_provider
             model = research_model
@@ -550,8 +548,8 @@ def explore_two_phase(
             provider = xsearch_provider
             model = xsearch_model
         elif chosen_action.tool == ActionTool.GOOGLE_SEARCH:
-            provider = sentiment_provider
-            model = sentiment_model
+            provider = research_provider
+            model = research_model
         else:
             provider = research_provider
             model = research_model

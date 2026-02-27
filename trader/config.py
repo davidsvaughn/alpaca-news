@@ -72,8 +72,6 @@ class Settings:
     triage_model: str
     research_provider: ProviderName
     research_model: str
-    sentiment_provider: ProviderName
-    sentiment_model: str
     xsearch_provider: ProviderName
     xsearch_model: str
 
@@ -201,15 +199,13 @@ def load_settings(*, dotenv_path: str | None = None, override: bool = False) -> 
 
     triage_provider = (os.getenv("TRIAGE_PROVIDER") or "grok").strip().lower()  # type: ignore[assignment]
     research_provider = (os.getenv("RESEARCH_PROVIDER") or "openai").strip().lower()  # type: ignore[assignment]
-    sentiment_provider = (os.getenv("SENTIMENT_PROVIDER") or "gemini").strip().lower()  # type: ignore[assignment]
     xsearch_provider = (os.getenv("XSEARCH_PROVIDER") or "grok").strip().lower()  # type: ignore[assignment]
-    for p in (triage_provider, research_provider, sentiment_provider, xsearch_provider):
+    for p in (triage_provider, research_provider, xsearch_provider):
         if p not in ("openai", "grok", "gemini"):
             raise ValueError(f"Unknown provider: {p}")
 
     triage_model = os.getenv("TRIAGE_MODEL") or "grok-4.1-fast-reasoning"
     research_model = os.getenv("RESEARCH_MODEL") or "gpt-5-mini"
-    sentiment_model = os.getenv("SENTIMENT_MODEL") or "gemini-3-flash-preview"
     xsearch_model = os.getenv("XSEARCH_MODEL") or "grok-4.1-fast-reasoning"
 
     max_daily_cost = _env_float("MAX_DAILY_COST", 5.00)
@@ -310,8 +306,6 @@ def load_settings(*, dotenv_path: str | None = None, override: bool = False) -> 
         triage_model=triage_model,
         research_provider=research_provider,  # type: ignore[arg-type]
         research_model=research_model,
-        sentiment_provider=sentiment_provider,  # type: ignore[arg-type]
-        sentiment_model=sentiment_model,
         xsearch_provider=xsearch_provider,  # type: ignore[arg-type]
         xsearch_model=xsearch_model,
         max_daily_cost=max_daily_cost,

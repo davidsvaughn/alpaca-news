@@ -386,7 +386,7 @@ Per-stage model configuration via `.env` (subject to change):
 ```env
 TRIAGE_PROVIDER=grok        TRIAGE_MODEL=grok-4-1-fast-reasoning
 RESEARCH_PROVIDER=openai    RESEARCH_MODEL=gpt-5-mini
-DECISION_MODEL=gemini-3-flash-preview
+SYNTHESIS_MODEL=gemini-3-flash-preview
 ```
 
 ### 4b. Schwab Market Data — DONE

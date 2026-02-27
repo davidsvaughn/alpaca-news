@@ -180,7 +180,7 @@ async def test_gemini_with_function_tools(mock_market):
     result = await run_gemini(
         system_prompt=SYSTEM_PROMPT,
         user_message=USER_MESSAGE,
-        model=os.getenv("SENTIMENT_MODEL", "gemini-3-flash-preview"),
+        model=os.getenv("SYNTHESIS_MODEL", "gemini-3-flash-preview"),
         market=mock_market,
         max_turns=5,
         is_final=False,

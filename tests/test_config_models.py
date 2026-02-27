@@ -82,10 +82,6 @@ class TestConfiguredModelsExist:
         """Research model (openai) must be reachable."""
         _VALIDATORS[settings.research_provider](settings.research_model)
 
-    def test_sentiment_model(self, settings):
-        """Sentiment model (gemini) must be reachable."""
-        _VALIDATORS[settings.sentiment_provider](settings.sentiment_model)
-
     # --- Auxiliary Gemini models ---
 
     def test_watch_checkin_model(self, settings):

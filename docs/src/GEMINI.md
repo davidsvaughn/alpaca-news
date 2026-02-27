@@ -192,8 +192,7 @@ Gemini always runs as the final agent regardless of cumulative pipeline cost. Th
 ```bash
 # .env
 GOOGLE_API_KEY=<your-key-here>
-SENTIMENT_PROVIDER=gemini
-SENTIMENT_MODEL=gemini-3-flash-preview
+SYNTHESIS_MODEL=gemini-3-flash-preview
 ```
 
 ---

@@ -260,12 +260,16 @@
     "BSX",
     "INSP",
     "NYXH",
-    "CYCU"
+    "CYCU",
+    "KORE",
+    "NTRA",
+    "IRD",
+    "RUN"
   ],
   "crypto": [],
   "rejected": [
     "BTCUSD",
     "VNP"
   ],
-  "last_updated": "2026-02-26T20:03:28.830899+00:00"
+  "last_updated": "2026-02-27T15:14:42.144629+00:00"
 }
