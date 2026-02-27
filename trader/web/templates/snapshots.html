@@ -251,7 +251,7 @@
         <div id="bt-params" class="bt-param-grid"></div>
       </div>
 
-      <div class="bt-section bt-section-alloc">
+      <div class="bt-section bt-section-alloc" style="display:none;">
         <p class="bt-section-title">Allocation Parameters</p>
         <div id="bt-alloc-params" class="bt-param-grid"></div>
       </div>
@@ -788,37 +788,139 @@ function onStrategyChange() {
   var sp = saved[key] || {};
 
   var strat = _btStrategies[key];
-  Object.keys(strat.params).forEach(function(pk) {
-    var p = strat.params[pk];
-    var val = sp[pk] !== undefined ? sp[pk] : p['default'];
-    var html = '<div class="bt-param-field">'
-      + '<label>' + p.label + ':</label>'
-      + '<input type="number" class="form-control form-control-sm bt-param" data-param="' + pk + '"'
-      + ' value="' + val + '"'
-      + (p.min != null ? ' min="' + p.min + '"' : '')
-      + (p.max != null ? ' max="' + p.max + '"' : '')
-      + (p.step != null ? ' step="' + p.step + '"' : '')
-      + '>'
-      + '</div>';
-    paramsDiv.insertAdjacentHTML('beforeend', html);
+  _renderParamFields(paramsDiv, strat.params, sp, _SP_KEY, key);
+}
+
+function _renderParamFields(container, paramDefs, savedVals, storageKey, defKey) {
+  container.innerHTML = '';
+  Object.keys(paramDefs).forEach(function(pk) {
+    var p = paramDefs[pk];
+    var val = savedVals[pk] !== undefined ? savedVals[pk] : p['default'];
+    var html;
+    if (p.type === 'select' && p.options) {
+      html = '<div class="bt-param-field">'
+        + '<label>' + p.label + ':</label>'
+        + '<select class="form-select form-select-sm bt-param" data-param="' + pk + '">';
+      p.options.forEach(function(opt) {
+        var sel = (String(val) === String(opt.value)) ? ' selected' : '';
+        html += '<option value="' + opt.value + '"' + sel + '>' + opt.label + '</option>';
+      });
+      html += '</select></div>';
+    } else {
+      html = '<div class="bt-param-field">'
+        + '<label>' + p.label + ':</label>'
+        + '<input type="number" class="form-control form-control-sm bt-param" data-param="' + pk + '"'
+        + ' value="' + val + '"'
+        + (p.min != null ? ' min="' + p.min + '"' : '')
+        + (p.max != null ? ' max="' + p.max + '"' : '')
+        + (p.step != null ? ' step="' + p.step + '"' : '')
+        + '>'
+        + '</div>';
+    }
+    container.insertAdjacentHTML('beforeend', html);
   });
 
-  // Auto-save param changes
-  paramsDiv.querySelectorAll('.bt-param').forEach(function(el) {
-    el.addEventListener('input', function() {
-      var allSaved = {};
-      try { allSaved = JSON.parse(localStorage.getItem(_SP_KEY)) || {}; } catch(e) {}
-      if (!allSaved[key]) allSaved[key] = {};
-      allSaved[key][el.getAttribute('data-param')] = parseFloat(el.value);
-      localStorage.setItem(_SP_KEY, JSON.stringify(allSaved));
-    });
+  // Auto-save + conditional visibility on change
+  container.querySelectorAll('.bt-param').forEach(function(el) {
+    el.addEventListener('input', function() { _saveAndRefreshParams(container, storageKey, defKey); });
+    el.addEventListener('change', function() { _saveAndRefreshParams(container, storageKey, defKey); });
+  });
+
+  // Apply conditional visibility rules
+  _applyParamVisibility(container, defKey);
+}
+
+function _saveAndRefreshParams(container, storageKey, defKey) {
+  var allSaved = {};
+  try { allSaved = JSON.parse(localStorage.getItem(storageKey)) || {}; } catch(e) {}
+  if (!allSaved[defKey]) allSaved[defKey] = {};
+  container.querySelectorAll('.bt-param').forEach(function(el) {
+    var pk = el.getAttribute('data-param');
+    var v = el.tagName === 'SELECT' ? el.value : parseFloat(el.value);
+    allSaved[defKey][pk] = v;
+  });
+  localStorage.setItem(storageKey, JSON.stringify(allSaved));
+  _applyParamVisibility(container, defKey);
+}
+
+function _applyParamVisibility(container, defKey) {
+  // Collect current values
+  var vals = {};
+  container.querySelectorAll('.bt-param').forEach(function(el) {
+    vals[el.getAttribute('data-param')] = el.tagName === 'SELECT' ? el.value : el.value;
+  });
+  // Conditional rules for allocation params
+  container.querySelectorAll('.bt-param-field').forEach(function(field) {
+    var param = field.querySelector('.bt-param');
+    if (!param) return;
+    var pk = param.getAttribute('data-param');
+    var show = true;
+    // rank_method: only visible when when_full=replace (for max_positions)
+    if (pk === 'rank_method' && vals['when_full'] === 'skip') show = false;
+    // composite_weight: only visible when rank_method=composite
+    if (pk === 'composite_weight' && vals['rank_method'] !== 'composite') show = false;
+    field.style.display = show ? '' : 'none';
   });
 }
 
+function _populateAllocationDropdown() {
+  var sel = document.getElementById('bt-allocation');
+  // Clear existing options except the first default
+  while (sel.options.length > 1) sel.remove(1);
+  var sections = {};
+  Object.keys(_btAllocations).forEach(function(key) {
+    if (key === 'none') return; // already the default option
+    var a = _btAllocations[key];
+    if (!sections[a.section]) sections[a.section] = [];
+    sections[a.section].push({key: key, name: a.name});
+  });
+  Object.keys(sections).forEach(function(sec) {
+    var og = document.createElement('optgroup');
+    og.label = sec;
+    sections[sec].forEach(function(item) {
+      var opt = document.createElement('option');
+      opt.value = item.key;
+      opt.textContent = item.name;
+      og.appendChild(opt);
+    });
+    sel.appendChild(og);
+  });
+}
+
+function onAllocationChange() {
+  var key = document.getElementById('bt-allocation').value;
+  _btCurrentAllocation = key;
+  var paramsDiv = document.getElementById('bt-alloc-params');
+  var section = paramsDiv.closest('.bt-section');
+
+  if (!key || key === 'none' || !_btAllocations || !_btAllocations[key]) {
+    paramsDiv.innerHTML = '';
+    if (section) section.style.display = 'none';
+    localStorage.setItem(_BT_ALLOC_KEY, key || 'none');
+    return;
+  }
+  if (section) section.style.display = '';
+  localStorage.setItem(_BT_ALLOC_KEY, key);
+
+  var saved = {};
+  try { saved = JSON.parse(localStorage.getItem(_AP_KEY)) || {}; } catch(e) {}
+  var sp = saved[key] || {};
+  _renderParamFields(paramsDiv, _btAllocations[key].params, sp, _AP_KEY, key);
+}
+
 function _collectParams() {
+  return _collectParamsFrom('#bt-params');
+}
+
+function _collectAllocParams() {
+  return _collectParamsFrom('#bt-alloc-params');
+}
+
+function _collectParamsFrom(selector) {
   var params = {};
-  document.querySelectorAll('#bt-params .bt-param').forEach(function(el) {
-    params[el.getAttribute('data-param')] = parseFloat(el.value);
+  document.querySelectorAll(selector + ' .bt-param').forEach(function(el) {
+    var pk = el.getAttribute('data-param');
+    params[pk] = el.tagName === 'SELECT' ? el.value : parseFloat(el.value);
   });
   return params;
 }
@@ -836,6 +938,7 @@ function runBacktest() {
   var strategy = _btCurrentStrategy;
   if (!strategy) return;
   var params = _collectParams();
+  var allocParams = _collectAllocParams();
   var filters = _collectBacktestFilters();
 
   document.getElementById('bt-spinner').classList.remove('d-none');
@@ -849,7 +952,7 @@ function runBacktest() {
   fetch('/api/strategies/backtest', {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({strategy: strategy, params: params, filters: filters, market_close: marketClose, min_hold: minHold, guard_stop_pct: guardStop, guard_target_pct: guardTarget, cost_bps: costBps}),
+    body: JSON.stringify({strategy: strategy, params: params, allocation: _btCurrentAllocation, allocation_params: allocParams, filters: filters, market_close: marketClose, min_hold: minHold, guard_stop_pct: guardStop, guard_target_pct: guardTarget, cost_bps: costBps}),
   })
   .then(function(r) { return r.json(); })
   .then(function(data) {
@@ -900,9 +1003,12 @@ function _displayResults() {
 
     if (!r || r.pnl_pct == null) {
       if (pnlCell) {
-        pnlCell.innerHTML = r ? '<span class="text-muted">N/A</span>' : '<span class="text-muted">&mdash;</span>';
+        var label = '&mdash;';
+        if (r && r.exit_reason === 'skipped') label = '<span class="text-muted" style="font-size:.65rem;">skipped</span>';
+        else if (r) label = '<span class="text-muted">N/A</span>';
+        pnlCell.innerHTML = label;
         pnlCell.setAttribute('data-sort-val', '');
-        pnlCell.title = '';
+        pnlCell.title = r ? r.exit_reason : '';
       }
       if (durCell) {
         durCell.innerHTML = '<span class="text-muted">&mdash;</span>';
@@ -928,7 +1034,9 @@ function _displayResults() {
     var pnl = r.pnl_pct;
     var sign = pnl >= 0 ? '+' : '';
     var cls = pnl >= 0 ? 'text-success' : 'text-danger';
-    var prefix = r.exit_reason === 'still_open' ? '<span class="text-muted" style="font-size:.65rem;">open </span>' : '';
+    var prefix = '';
+    if (r.exit_reason === 'still_open') prefix = '<span class="text-muted" style="font-size:.65rem;">open </span>';
+    else if (r.exit_reason === 'replaced') prefix = '<span class="text-muted" style="font-size:.65rem;">repl </span>';
     if (pnlCell) {
       pnlCell.innerHTML = prefix + '<span class="' + cls + ' fw-semibold">' + sign + pnl.toFixed(1) + '%</span>';
       pnlCell.setAttribute('data-sort-val', String(pnl));
@@ -1019,6 +1127,19 @@ function _updateAvgPnl() {
   _syncMetricPair('bt-pair-a', 'bt-ann-a', 'bt-sharpe-a', 'bt-pair-a-divider');
   _syncMetricPair('bt-pair-b', 'bt-ann-b', 'bt-sharpe-b', 'bt-pair-b-divider');
 
+  // Allocation stats
+  var allocDiv = document.getElementById('bt-alloc-stats');
+  var allocText = document.getElementById('bt-alloc-stats-text');
+  if (s.alloc_skipped > 0 || s.alloc_replaced > 0) {
+    var parts = [s.alloc_taken + ' taken'];
+    if (s.alloc_skipped > 0) parts.push(s.alloc_skipped + ' skipped');
+    if (s.alloc_replaced > 0) parts.push(s.alloc_replaced + ' replaced');
+    allocText.textContent = 'Alloc: ' + parts.join(', ');
+    allocDiv.classList.remove('d-none');
+  } else {
+    allocDiv.classList.add('d-none');
+  }
+
   statsDiv.classList.remove('d-none');
 }
 
@@ -1034,6 +1155,7 @@ function clearBacktest() {
     });
   }
   document.getElementById('bt-stats').classList.add('d-none');
+  document.getElementById('bt-alloc-stats').classList.add('d-none');
   document.getElementById('bt-clear-btn').classList.add('d-none');
 }
 
