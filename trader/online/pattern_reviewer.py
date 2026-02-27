@@ -23,7 +23,7 @@ from typing import Any
 
 from sqlalchemy import text
 
-from trader.config import Settings
+from trader.config import Settings, infer_provider_from_model
 from trader.db.database import Database
 from trader.knowledge.store import KnowledgeStore, validate_skip_pattern
 from trader.llm.client import LLMClient
@@ -197,8 +197,8 @@ class PatternReviewer:
         )
         llm = LLMClient(cost_tracker=cost_tracker)
 
-        provider = self.settings.pattern_review_provider
         model = self.settings.pattern_review_model
+        provider = infer_provider_from_model(model)
 
         try:
             if provider == "openai":
