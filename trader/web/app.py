@@ -153,6 +153,12 @@ def create_app(
         except ValueError:
             return None
 
+    def _parse_optional_scaled_float(value: str | None, scale: float) -> float | None:
+        parsed = _parse_optional_float(value)
+        if parsed is None:
+            return None
+        return parsed * scale
+
     def _normalize_sort(value: str | None, direction: str | None) -> tuple[str, str]:
         allowed = {"created", "headline", "symbols", "signal", "price_10", "price", "avg_vol", "mkt_cap", "pe"}
         col = (value or "created").strip().lower()
@@ -393,10 +399,13 @@ def create_app(
         price_10_max_val = _parse_optional_float(price_10_max)
         price_min_val = _parse_optional_float(price_min)
         price_max_val = _parse_optional_float(price_max)
-        avg_vol_min_val = _parse_optional_float(avg_vol_min)
-        avg_vol_max_val = _parse_optional_float(avg_vol_max)
-        mkt_cap_min_val = _parse_optional_float(mkt_cap_min)
-        mkt_cap_max_val = _parse_optional_float(mkt_cap_max)
+        # UI inputs are unit-scaled:
+        # - AvgVol filters are in millions (M)
+        # - MktCap filters are in billions (B)
+        avg_vol_min_val = _parse_optional_scaled_float(avg_vol_min, 1e6)
+        avg_vol_max_val = _parse_optional_scaled_float(avg_vol_max, 1e6)
+        mkt_cap_min_val = _parse_optional_scaled_float(mkt_cap_min, 1e9)
+        mkt_cap_max_val = _parse_optional_scaled_float(mkt_cap_max, 1e9)
         pe_min_val = _parse_optional_float(pe_min)
         pe_max_val = _parse_optional_float(pe_max)
 

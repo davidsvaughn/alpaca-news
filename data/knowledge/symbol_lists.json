@@ -288,12 +288,15 @@
     "CPNG",
     "DK",
     "BVN",
-    "MARA"
+    "MARA",
+    "ESS",
+    "INVH",
+    "NXRT"
   ],
   "crypto": [],
   "rejected": [
     "BTCUSD",
     "VNP"
   ],
-  "last_updated": "2026-02-27T17:57:29.785028+00:00"
+  "last_updated": "2026-02-27T18:06:08.299581+00:00"
 }
