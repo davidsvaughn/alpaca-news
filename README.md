@@ -25,7 +25,7 @@ uv sync --group ft
 Run scripts inside the env:
 
 ```bash
-uv run python alpaca/news_websocket.py
+uv run python websocket/alpaca_news.py
 ```
 
 Add a dependency (example):
@@ -37,4 +37,4 @@ uv add schwabdev
 # alpaca
 - sign up for free tier Alpaca trading account [here](https://alpaca.markets/)
 - copy `.env.example` to `.env` and fill in your Alpaca API key and secret
-- run `python alpaca/news_websocket.py` to start saving alpaca newsfeed articles to json files
+- run `python websocket/alpaca_news.py` to start saving alpaca newsfeed articles to json files

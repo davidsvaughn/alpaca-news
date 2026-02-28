@@ -1,5 +1,5 @@
 start 
-python alpaca/news_websocket.py
+python websocket/alpaca_news.py
 
 # Kill existing
 pkill -f "trader.main"
