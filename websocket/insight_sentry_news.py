@@ -2,7 +2,7 @@
 Run this file to start a websocket connection to InsightSentry's news data stream.
 It will save incoming news articles to the `output/insight_sentry` directory in JSON format.
 
-uv run python websocket/insight_sentry_news.py
+uv run python -u websocket/insight_sentry_news.py
 
 Make sure to set your InsightSentry API key in a `.env` file with the following content:
     INSIGHT_SENTRY_API_KEY=your_api_key
@@ -37,6 +37,8 @@ def _article_id(title: str) -> str:
 
 # -----------------------------------------------------------------------------
 # websocket
+# TODO: Add ping/pong keepalive (send 'ping' every 20-30s, filter 'pong' responses)
+#       to detect stale connections faster. See: https://insightsentry.com/docs/ws
 # -----------------------------------------------------------------------------
 async def connect_and_listen():
     uri = "wss://realtime.insightsentry.com/newsfeed"
