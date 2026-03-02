@@ -47,7 +47,11 @@ class TriageDecision:
 
 TRIAGE_PROMPT = """You are a financial news triage agent.
 
-Evaluate whether this news item could signal imminent stock price movement (within minutes to hours).
+Evaluate whether this news item could signal stock price movement.
+
+**NEWS AGE**: The `news_age_minutes` field tells you how old this article is (minutes since
+publication). Consider this carefully — a story published hours ago may already be priced in,
+while a story published minutes ago may present an opportunity. Factor age into your confidence.
 
 REJECT if: retrospective/hypothetical articles, generic market commentary, old re-hashed news,
 press releases with no clear price catalyst, clickbait, listicles, recap/roundup articles,

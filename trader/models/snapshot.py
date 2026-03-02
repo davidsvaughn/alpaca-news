@@ -132,6 +132,17 @@ def normalize_news(news: dict[str, Any]) -> dict[str, Any]:
         news.setdefault("symbol_exchanges", {})
         news.setdefault("_news_type", "alpaca_news")
 
+    # Compute news age (minutes since publication) for both formats.
+    # This lets triage and pipeline prompts surface staleness.
+    created_at = news.get("created_at")
+    if created_at and "news_age_minutes" not in news:
+        try:
+            pub_dt = datetime.fromisoformat(str(created_at).replace("Z", "+00:00"))
+            age_min = (datetime.now(timezone.utc) - pub_dt).total_seconds() / 60
+            news["news_age_minutes"] = round(age_min, 1)
+        except (ValueError, TypeError):
+            pass
+
     return news
 
 

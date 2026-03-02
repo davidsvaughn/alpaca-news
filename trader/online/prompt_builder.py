@@ -40,7 +40,20 @@ def build_user_message(
     if news.get("source"):
         event_lines.append(f"**Source:** {news['source']}")
     if news.get("created_at"):
-        event_lines.append(f"**Timestamp:** {news['created_at']}")
+        age_min = news.get("news_age_minutes")
+        if age_min is not None:
+            age_min = float(age_min)
+            if age_min < 2:
+                age_str = "just now"
+            elif age_min < 60:
+                age_str = f"{age_min:.0f} minutes ago"
+            elif age_min < 1440:
+                age_str = f"{age_min / 60:.1f} hours ago"
+            else:
+                age_str = f"{age_min / 1440:.1f} days ago"
+            event_lines.append(f"**Published:** {news['created_at']} ({age_str})")
+        else:
+            event_lines.append(f"**Published:** {news['created_at']}")
     if news.get("url"):
         event_lines.append(f"**URL:** {news['url']}")
     if event_lines:

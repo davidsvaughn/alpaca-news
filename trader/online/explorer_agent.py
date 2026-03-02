@@ -442,7 +442,7 @@ def x_stream_cache(ctx: RunContext[ExplorerDeps], symbol: str, limit: int = 20) 
 # ---------------------------------------------------------------------------
 
 
-EXPLORER_SYSTEM_PROMPT = """You are a financial research analyst investigating a breaking news event.
+EXPLORER_SYSTEM_PROMPT = """You are a financial research analyst investigating a news event.
 
 ## Your tools
 You have access to:

@@ -264,8 +264,13 @@ def _build_system_prompt(
 ) -> str:
     """Build a role-aware system prompt for an agent."""
     parts = [
-        "You are a financial research analyst investigating a breaking news event.",
+        "You are a financial research analyst investigating a news event.",
         f"You are Agent {agent_index + 1} of {total_agents} in a sequential research pipeline.",
+        "",
+        "## News age",
+        "Check the **Published** timestamp and age in the news event below.",
+        "If the article is more than a few minutes old, the market may have already reacted —",
+        "factor this into your analysis and confidence assessment.",
         "",
         "## Your role",
         spec.role_description,
