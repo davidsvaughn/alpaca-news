@@ -366,7 +366,18 @@
     "JAGU",
     "QURE",
     "URGN",
-    "BIXT"
+    "BIXT",
+    "NDAQ",
+    "MGDDY",
+    "TCRT",
+    "SABR",
+    "QSR",
+    "OXY",
+    "FANG",
+    "AROC",
+    "ARES",
+    "ARCC",
+    "NTLA"
   ],
   "crypto": [],
   "rejected": [
@@ -408,7 +419,23 @@
     "AEF",
     "DBG",
     "SYNACT",
-    "SCD"
+    "SCD",
+    "ZURN",
+    "ERF",
+    "DG",
+    "MEKKO",
+    "MELE",
+    "ML",
+    "SPIE",
+    "KPN",
+    "AE",
+    "IPS",
+    "ALVAL",
+    "ICOP",
+    "ING",
+    "QBR.A",
+    "XRPUSD",
+    "IDR"
   ],
-  "last_updated": "2026-03-02T16:40:23.067169+00:00"
+  "last_updated": "2026-03-02T17:19:10.540359+00:00"
 }

@@ -717,7 +717,8 @@ async def run_pipeline(
                 base_message=base_user_message,
             )
 
-            # Determine model name for logging
+            # Determine model name for logging (may be overridden by runner
+            # if a fallback model was used — see below after _dispatch_runner)
             model_name = spec.name
             if isinstance(spec.model, str):
                 model_name = spec.model
@@ -778,6 +779,10 @@ async def run_pipeline(
                 continue
 
             elapsed = round(time.time() - start_time, 1)
+
+            # Override model_name if the runner used a different model (e.g. fallback)
+            if agent_result.model_used:
+                model_name = agent_result.model_used
 
             # Accumulate usage (coerce None → 0; runners may leave keys as None)
             for key in ("input_tokens", "output_tokens", "total_tokens",

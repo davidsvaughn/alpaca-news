@@ -100,6 +100,8 @@ class Settings:
     max_web_searches_per_item: int
     max_x_searches_per_item: int
     triage_symbol_cooldown_minutes: int
+    triage_max_symbols: int              # max symbols to explore per news item
+    triage_web_search: bool              # enable web search during triage LLM call
 
     # Explorer v1 (Phase 2)
     max_phase1_actions: int
@@ -234,6 +236,8 @@ def load_settings(*, dotenv_path: str | None = None, override: bool = False) -> 
     max_web_searches_per_item = _env_int("MAX_WEB_SEARCHES_PER_ITEM", 3)
     max_x_searches_per_item = _env_int("MAX_X_SEARCHES_PER_ITEM", 2)
     triage_symbol_cooldown_minutes = _env_int("TRIAGE_SYMBOL_COOLDOWN_MINUTES", 60)
+    triage_max_symbols = _env_int("TRIAGE_MAX_SYMBOLS", 1)
+    triage_web_search = _env_bool("TRIAGE_WEB_SEARCH", False)
 
     # Phase 2 explorer controls
     max_phase1_actions = _env_int("MAX_PHASE1_ACTIONS", 4)
@@ -329,6 +333,8 @@ def load_settings(*, dotenv_path: str | None = None, override: bool = False) -> 
         max_web_searches_per_item=max_web_searches_per_item,
         max_x_searches_per_item=max_x_searches_per_item,
         triage_symbol_cooldown_minutes=triage_symbol_cooldown_minutes,
+        triage_max_symbols=triage_max_symbols,
+        triage_web_search=triage_web_search,
         max_phase1_actions=max_phase1_actions,
         max_phase2_branches=max_phase2_branches,
         price_delay_minutes=price_delay_minutes,

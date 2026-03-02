@@ -60,17 +60,21 @@ ALWAYS INVESTIGATE (never reject):
 Known skip patterns (headlines matching these are auto-skipped before the LLM is called):
 {skip_keywords}
 
-TICKER VALIDATION: The `symbols` array comes from a third-party feed and may be wrong.
+TICKER VALIDATION & RANKING: The `symbols` array comes from a third-party feed and may be wrong.
 Before returning, verify each ticker is actually a company central to this news story.
 Remove any ticker that is only tangentially related — e.g. an investor, partner, or sector
 proxy for a privately-held company named in the headline. If no relevant public tickers
 remain after pruning, set action to "skip".
 
+**Order the symbols array by exploration promise** — the ticker most likely to show
+significant price movement from this news should be FIRST. Consider: direct impact vs.
+indirect, acquirer vs. target, company named in headline vs. mentioned in body.
+
 Return STRICT JSON with keys:
   action: "investigate"|"skip"
   confidence: number between 0 and 1
   reasoning: short string
-  symbols: array of tickers (strings)
+  symbols: array of tickers (strings), ORDERED by exploration promise (most promising first)
 
 News JSON:
 {news_json}
@@ -188,6 +192,7 @@ def run_triage(
     model: str,
     knowledge: KnowledgeStore,
     news: dict[str, Any],
+    web_search: bool = False,
 ) -> TriageDecision:
     skip = knowledge.load_skip_patterns()
     skip_keywords: list[str] = skip.get("headline_keywords", [])
@@ -211,11 +216,11 @@ def run_triage(
     started = time.time()
 
     if provider == "openai":
-        res = llm.query_openai(model=model, input_text=prompt, stage="triage", purpose="triage")
+        res = llm.query_openai(model=model, input_text=prompt, web_search=web_search, stage="triage", purpose="triage")
     elif provider == "grok":
-        res = llm.query_grok(model=model, input_text=prompt, stage="triage", purpose="triage")
+        res = llm.query_grok(model=model, input_text=prompt, web_search=web_search, stage="triage", purpose="triage")
     elif provider == "gemini":
-        res = llm.query_gemini(model=model, input_text=prompt, stage="triage", purpose="triage")
+        res = llm.query_gemini(model=model, input_text=prompt, google_search=web_search, stage="triage", purpose="triage")
     else:
         raise ValueError(f"Unknown provider: {provider}")
 

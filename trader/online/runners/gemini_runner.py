@@ -128,6 +128,7 @@ async def run_gemini(
         # If we haven't tried the fallback yet, try it now
         if use_model != fallback and fallback and fallback != use_model:
             print(f"Gemini {use_model} failed ({type(primary_err).__name__}), falling back to {fallback}")
+            use_model = fallback
             try:
                 response = await _call(fallback)
             except asyncio.TimeoutError:
@@ -146,10 +147,22 @@ async def run_gemini(
             ) from primary_err
 
     # Accumulate usage
+    # The google-genai SDK exposes both prompt_token_count and input_token_count
+    # (class vs dict flavors); try both to be safe.
     um = getattr(response, "usage_metadata", None)
     if um:
-        total_usage["input_tokens"] += getattr(um, "prompt_token_count", 0) or 0
-        total_usage["output_tokens"] += getattr(um, "candidates_token_count", 0) or 0
+        in_tok = (
+            getattr(um, "prompt_token_count", 0)
+            or getattr(um, "input_token_count", 0)
+            or 0
+        )
+        cached_tok = getattr(um, "cached_content_token_count", 0) or 0
+        total_usage["input_tokens"] += in_tok + cached_tok
+        total_usage["output_tokens"] += (
+            getattr(um, "candidates_token_count", 0)
+            or getattr(um, "output_token_count", 0)
+            or 0
+        )
         total_usage["total_tokens"] += getattr(um, "total_token_count", 0) or 0
         total_usage["reasoning_tokens"] += getattr(um, "thoughts_token_count", 0) or 0
     total_usage["requests"] += 1
@@ -199,6 +212,7 @@ async def run_gemini(
         tool_traces=tool_traces,
         usage=total_usage,
         thinking_summary=thinking_summary,
+        model_used=use_model,
     )
 
 

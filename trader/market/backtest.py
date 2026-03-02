@@ -2044,7 +2044,7 @@ def run_backtest(
 
             # Find the first bar on or after entry_dt
             t_locate = time.perf_counter()
-            entry_ts = pd.Timestamp(entry_dt)
+            entry_ts = pd.Timestamp(entry_dt, tz=df.index.tz).as_unit(df.index.unit)
             entry_idx = df.index.searchsorted(entry_ts)
             if entry_idx >= len(df):
                 results.append(BacktestResult(

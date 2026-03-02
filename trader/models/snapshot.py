@@ -157,6 +157,16 @@ def deterministic_snapshot_id(news: dict[str, Any], source_file: str | None = No
     return uuid.uuid4().hex[:8]
 
 
+def snapshot_id_for_symbol(base_id: str, symbol: str) -> str:
+    """Derive a per-symbol snapshot ID from a base news ID.
+
+    When exploring multiple symbols from the same news item, each
+    exploration needs a unique snapshot_id.  Appends the symbol
+    as a suffix: ``{base_id}_{SYMBOL}``.
+    """
+    return f"{base_id}_{symbol.upper()}"
+
+
 class SnapshotBuilder:
     """Mutable accumulator that produces a sealed Snapshot.
 

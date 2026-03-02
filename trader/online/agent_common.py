@@ -75,6 +75,7 @@ class AgentRunResult:
     })
     thinking_summary: str | None = None
     error: dict[str, str] | None = None
+    model_used: str | None = None            # actual model (may differ from spec after fallback)
 
 
 def build_trace_dict(
