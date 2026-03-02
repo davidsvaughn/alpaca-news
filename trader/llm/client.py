@@ -145,7 +145,7 @@ class LLMClient:
 
         client = genai.Client(
             api_key=api_key,
-            http_options=types.HttpOptions(timeout=LLM_CALL_TIMEOUT),
+            http_options=types.HttpOptions(timeout=int(LLM_CALL_TIMEOUT * 1000)),
         )
         tools = [types.Tool(google_search=types.GoogleSearch())] if google_search else None
 
