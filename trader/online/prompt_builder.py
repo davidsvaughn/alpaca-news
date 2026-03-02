@@ -41,6 +41,7 @@ def build_user_message(
         event_lines.append(f"**Source:** {news['source']}")
     if news.get("created_at"):
         age_min = news.get("news_age_minutes")
+        ts_source = news.get("news_timestamp_source", "")
         if age_min is not None:
             age_min = float(age_min)
             if age_min < 2:
@@ -51,7 +52,16 @@ def build_user_message(
                 age_str = f"{age_min / 60:.1f} hours ago"
             else:
                 age_str = f"{age_min / 1440:.1f} days ago"
-            event_lines.append(f"**Published:** {news['created_at']} ({age_str})")
+            if ts_source == "benzinga_rewrite":
+                # Benzinga rewrites wire stories; their timestamp can lag
+                # the actual event by minutes to hours.
+                event_lines.append(
+                    f"**Published:** {news['created_at']} ({age_str})"
+                    " — NOTE: this is the Benzinga publication time;"
+                    " the underlying event may be older"
+                )
+            else:
+                event_lines.append(f"**Published:** {news['created_at']} ({age_str})")
         else:
             event_lines.append(f"**Published:** {news['created_at']}")
     if news.get("url"):

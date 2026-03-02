@@ -17,9 +17,9 @@ from openai import OpenAI
 
 from trader.llm.cost_tracker import CostTracker
 
-# Hard timeout (seconds) for every LLM API call.  Prevents indefinite hangs
-# when a provider is slow or rate-limiting.
-LLM_CALL_TIMEOUT: float = float(os.getenv("LLM_CALL_TIMEOUT_S", "60"))
+# Hard timeout (seconds) for every LLM API call.  Safety net against truly
+# hung connections — should be ABOVE any operational timeout (e.g. triage_timeout_s).
+LLM_CALL_TIMEOUT: float = float(os.getenv("LLM_CALL_TIMEOUT_S", "180"))
 
 ProviderName = Literal["openai", "grok", "gemini"]
 

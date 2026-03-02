@@ -721,7 +721,7 @@ def process_news_file(
             type="exploration",
             label=trigger.headline[:80] if trigger.headline else path.name,
             symbols=trigger.symbols[:3],
-            progress="triage",
+            progress="queued",
             stage_started_at=datetime.now(tz=timezone.utc).isoformat(),
             detail={"snapshot_id": snap_id},
         ))
@@ -752,6 +752,9 @@ def process_news_file(
         hard_limit = settings.triage_timeout_s  # default 90 s
 
         with sem:
+            if tracker is not None:
+                tracker.update(_act_id, progress="triage",
+                               stage_started_at=datetime.now(tz=timezone.utc).isoformat())
             _triage_pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
             triage_provider = infer_provider_from_model(settings.triage_model)
             _triage_future = _triage_pool.submit(

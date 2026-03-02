@@ -132,8 +132,13 @@ def normalize_news(news: dict[str, Any]) -> dict[str, Any]:
         news.setdefault("symbol_exchanges", {})
         news.setdefault("_news_type", "alpaca_news")
 
-    # Compute news age (minutes since publication) for both formats.
+    # Compute news age (minutes since timestamp) for both formats.
     # This lets triage and pipeline prompts surface staleness.
+    #
+    # IMPORTANT caveat: for Alpaca/Benzinga, created_at is when Benzinga
+    # published their *rewrite* — the underlying event may be hours older.
+    # For InsightSentry, published_at comes from the original source (Reuters,
+    # DJ, etc.) so it's closer to the true event time.
     created_at = news.get("created_at")
     if created_at and "news_age_minutes" not in news:
         try:
@@ -142,6 +147,15 @@ def normalize_news(news: dict[str, Any]) -> dict[str, Any]:
             news["news_age_minutes"] = round(age_min, 1)
         except (ValueError, TypeError):
             pass
+
+    # Flag the timestamp provenance so prompts can qualify the age signal.
+    if "news_timestamp_source" not in news:
+        if news.get("_news_type") == "insight_sentry_news":
+            news["news_timestamp_source"] = "original_publisher"
+        else:
+            # Alpaca feeds Benzinga rewrites; created_at is Benzinga pub time,
+            # which can lag the actual event by minutes to hours.
+            news["news_timestamp_source"] = "benzinga_rewrite"
 
     return news
 

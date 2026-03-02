@@ -50,8 +50,11 @@ TRIAGE_PROMPT = """You are a financial news triage agent.
 Evaluate whether this news item could signal stock price movement.
 
 **NEWS AGE**: The `news_age_minutes` field tells you how old this article is (minutes since
-publication). Consider this carefully — a story published hours ago may already be priced in,
+its timestamp). Consider this carefully — a story published hours ago may already be priced in,
 while a story published minutes ago may present an opportunity. Factor age into your confidence.
+Also check `news_timestamp_source`: if "original_publisher" the age is reliable; if
+"benzinga_rewrite" the actual event may be even older than the timestamp suggests (Benzinga
+rewrites wire stories with a lag of minutes to hours).
 
 REJECT if: retrospective/hypothetical articles, generic market commentary, old re-hashed news,
 press releases with no clear price catalyst, clickbait, listicles, recap/roundup articles,
