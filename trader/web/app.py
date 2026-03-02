@@ -1655,7 +1655,7 @@ def _settings_groups(s: Settings) -> list[tuple[str, list[tuple[str, Any]]]]:
     # Map field names to groups (order matters for display)
     groups_map: list[tuple[str, list[str]]] = [
         ("Modes", ["learning_mode", "trading_mode", "debug", "observer_mode"]),
-        ("Paths", ["alpaca_output_dir", "data_dir", "sqlite_path", "snapshots_dir"]),
+        ("Paths", ["news_watch_dirs", "data_dir", "sqlite_path", "snapshots_dir"]),
         (
             "Models",
             [

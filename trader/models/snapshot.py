@@ -31,13 +31,13 @@ class ExplorationBudget:
 @dataclass(frozen=True)
 class Trigger:
     type: str
-    alpaca_timestamp: str | None
+    timestamp: str | None
     headline: str
     summary: str | None
     source: str | None
     symbols: list[str]
     raw: dict[str, Any] = field(default_factory=dict)
-    source_file: str | None = None  # original alpaca JSON filename
+    source_file: str | None = None  # original news JSON filename
 
 
 @dataclass(frozen=True)
@@ -78,18 +78,83 @@ class Snapshot:
         atomic_write_text(Path(path), self.to_json(indent=2) + "\n")
 
 
-def deterministic_snapshot_id(news: dict[str, Any]) -> str:
+# Known US exchanges — symbols with these prefixes are auto-verified.
+_US_EXCHANGES = {"NYSE", "NASDAQ", "AMEX", "ARCA", "BATS"}
+
+
+def _strip_exchange_prefix(sym: str) -> tuple[str, str | None]:
+    """Strip exchange prefix from symbol. Returns (ticker, exchange_or_None)."""
+    if ":" in sym:
+        exchange, ticker = sym.split(":", 1)
+        return ticker, exchange.upper()
+    return sym, None
+
+
+def normalize_news(news: dict[str, Any]) -> dict[str, Any]:
+    """Normalize a news dict to canonical field names (in-place).
+
+    Detects InsightSentry format (has ``title`` key) vs Alpaca format (has
+    ``headline`` key) and maps fields so downstream code always sees:
+    ``headline``, ``symbols``, ``created_at``, ``url``, ``source``.
+
+    Also populates ``symbol_exchanges`` mapping preserved exchange info.
+    """
+    if "title" in news and "headline" not in news:
+        # InsightSentry format
+        news["headline"] = news.pop("title")
+        news.setdefault("summary", None)
+
+        # Convert unix timestamp → ISO 8601
+        published_at = news.get("published_at")
+        if published_at is not None and "created_at" not in news:
+            news["created_at"] = datetime.fromtimestamp(
+                int(published_at), tz=timezone.utc
+            ).isoformat()
+
+        # Strip exchange prefix from symbols, preserve exchange info
+        raw_symbols = news.pop("related_symbols", []) or []
+        symbols = []
+        exchanges: dict[str, str] = {}
+        for s in raw_symbols:
+            ticker, exchange = _strip_exchange_prefix(str(s))
+            symbols.append(ticker)
+            if exchange:
+                exchanges[ticker] = exchange
+        news["symbols"] = symbols
+        news["symbol_exchanges"] = exchanges
+
+        # Map link → url
+        if "link" in news and "url" not in news:
+            news["url"] = news.pop("link")
+
+        news.setdefault("_news_type", "insight_sentry_news")
+    else:
+        news.setdefault("symbol_exchanges", {})
+        news.setdefault("_news_type", "alpaca_news")
+
+    return news
+
+
+def deterministic_snapshot_id(news: dict[str, Any], source_file: str | None = None) -> str:
     """Derive a snapshot_id from the news article.
 
-    Uses the Alpaca article ``id`` directly if present, otherwise generates
-    a random 8-digit integer (for manual explores).
+    Uses the Alpaca article ``id`` directly if present. For InsightSentry
+    articles, extracts the 8-char hash from the filename. Falls back to a
+    random 8-char hex string for manual explores.
     """
-    alpaca_id = news.get("id")
-    if alpaca_id is not None:
-        return str(alpaca_id)
+    article_id = news.get("id")
+    if article_id is not None:
+        return str(article_id)
 
-    # Manual explore: random 8-digit integer
-    return str(random.randint(10_000_000, 99_999_999))
+    # InsightSentry: extract hash from filename (e.g. "2026-02-28T13-23-20Z_ef8d9e0a.json")
+    if source_file:
+        stem = source_file.rsplit(".", 1)[0]  # strip .json
+        parts = stem.rsplit("_", 1)
+        if len(parts) == 2 and len(parts[1]) == 8:
+            return parts[1]
+
+    # Fallback: random 8-char hex
+    return uuid.uuid4().hex[:8]
 
 
 class SnapshotBuilder:

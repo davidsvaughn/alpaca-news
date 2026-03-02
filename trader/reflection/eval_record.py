@@ -694,7 +694,7 @@ def snapshot_export_to_markdown(
         lines.append("")
     _kv(lines, "Source", trigger.get("source"))
     _kv(lines, "Type", trigger.get("type"))
-    _kv(lines, "Article Time", trigger.get("alpaca_timestamp"))
+    _kv(lines, "Article Time", trigger.get("timestamp") or trigger.get("alpaca_timestamp"))
     _kv(lines, "Source File", trigger.get("source_file"))
     raw = trigger.get("raw") or {}
     if raw.get("url"):

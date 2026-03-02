@@ -565,9 +565,9 @@
           <dd class="col-sm-8">{{ s.trigger.source or 'Unknown' }}</dd>
           <dt class="col-sm-4">Type</dt>
           <dd class="col-sm-8">{{ s.trigger.type }}</dd>
-          {% if s.trigger.alpaca_timestamp %}
+          {% if s.trigger.timestamp or s.trigger.alpaca_timestamp %}
           <dt class="col-sm-4">Article Time</dt>
-          <dd class="col-sm-8">{{ s.trigger.alpaca_timestamp | fmt_dt("full") }}</dd>
+          <dd class="col-sm-8">{{ (s.trigger.timestamp or s.trigger.alpaca_timestamp) | fmt_dt("full") }}</dd>
           {% endif %}
           {% if s.trigger.source_file %}
           <dt class="col-sm-4">File</dt>

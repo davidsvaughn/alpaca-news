@@ -1,6 +1,6 @@
 """Online orchestrator.
 
-Watches ``output/alpaca/*.json`` for new files and produces sealed Snapshots.
+Watches configured news output directories for new files and produces sealed Snapshots.
 
 Design:
 - Watchdog enqueues file paths into a :class:`queue.Queue`.
@@ -8,7 +8,7 @@ Design:
   This prevents blocking the watchdog thread during LLM API calls.
 - Uses :class:`SnapshotBuilder` to accumulate data and ``.seal()`` a frozen
   Snapshot at the end.
-- Snapshot IDs are deterministic (derived from the Alpaca article id) so that
+- Snapshot IDs are deterministic (derived from article id or filename hash) so that
   backfill is idempotent.
 
 Exploration uses the multi-agent PydanticAI pipeline (Grok → OpenAI → Gemini)
@@ -47,7 +47,7 @@ from trader.llm.client import LLMClient
 from trader.llm.cost_tracker import CostTracker
 from trader.llm.mock import MockLLMClient
 from trader.market.data_service import MarketDataService
-from trader.models.snapshot import SnapshotBuilder, Trigger, deterministic_snapshot_id
+from trader.models.snapshot import SnapshotBuilder, Trigger, deterministic_snapshot_id, normalize_news
 from trader.models.watch import WatchBuilder
 from trader.evidence.acquirer import acquire_from_traces
 from trader.online.agent_pipeline import (
@@ -116,11 +116,11 @@ _X_STREAM_MAX_NEWS_AGE_MINUTES = 15
 
 def _news_is_fresh(trigger: "Trigger", max_age_minutes: int = _X_STREAM_MAX_NEWS_AGE_MINUTES) -> bool:
     """Return True if the news trigger is recent enough for live X streaming."""
-    ts = trigger.alpaca_timestamp
+    ts = trigger.timestamp
     if not ts:
         return False  # no timestamp → can't verify freshness → skip stream
     try:
-        # Alpaca timestamps are ISO 8601 (e.g. "2026-02-12T15:30:00Z")
+        # Timestamps are ISO 8601 (e.g. "2026-02-12T15:30:00Z")
         news_dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
         age_minutes = (datetime.now(timezone.utc) - news_dt).total_seconds() / 60
         return age_minutes <= max_age_minutes
@@ -250,9 +250,10 @@ def process_news_file(
     tracker: "ActivityTracker | None" = None,
 ) -> None:
     news = _load_news_json(path)
+    normalize_news(news)
 
     # Deterministic ID → idempotent on re-run
-    snap_id = deterministic_snapshot_id(news)
+    snap_id = deterministic_snapshot_id(news, source_file=path.name)
 
     # Skip if already processed (backfill safety) — but replace mock snapshots
     if snapshot_exists(db, snap_id):
@@ -265,8 +266,8 @@ def process_news_file(
             return
 
     trigger = Trigger(
-        type="alpaca_news",
-        alpaca_timestamp=str(news.get("created_at")) if news.get("created_at") else None,
+        type=news.get("_news_type", "alpaca_news"),
+        timestamp=str(news.get("created_at")) if news.get("created_at") else None,
         headline=str(news.get("headline") or ""),
         summary=str(news.get("summary") or "") if news.get("summary") else None,
         source=str(news.get("source") or "") if news.get("source") else None,
@@ -457,7 +458,7 @@ def process_news_file(
 
         # Symbol-level filtering (blacklist + crypto detection)
         from trader.online.symbol_filter import filter_symbols
-        symbols, filtered = filter_symbols(symbols, settings.data_dir)
+        symbols, filtered = filter_symbols(symbols, settings.data_dir, symbol_exchanges=news.get("symbol_exchanges"))
         if filtered:
             bus.publish(PipelineEvent(type="symbols_filtered", payload={
                 "snapshot_id": snap_id,
@@ -938,8 +939,9 @@ def run_watch_loop(
     """Start watchdog observer + worker threads, block forever."""
     import threading
 
-    watch_dir = Path(settings.alpaca_output_dir)
-    watch_dir.mkdir(parents=True, exist_ok=True)
+    watch_dirs = [Path(d) for d in settings.news_watch_dirs]
+    for d in watch_dirs:
+        d.mkdir(parents=True, exist_ok=True)
 
     work_q: queue.Queue[Path] = queue.Queue()
 
@@ -967,9 +969,10 @@ def run_watch_loop(
 
     handler = _NewsHandler(work_queue=work_q)
     fs_observer = Observer()
-    fs_observer.schedule(handler, str(watch_dir), recursive=False)
+    for d in watch_dirs:
+        fs_observer.schedule(handler, str(d), recursive=False)
     fs_observer.start()
-    bus.publish(PipelineEvent(type="watching", payload={"dir": str(watch_dir)}))
+    bus.publish(PipelineEvent(type="watching", payload={"dir": ", ".join(str(d) for d in watch_dirs)}))
 
     # Monitoring thread for active watches
     if settings.watch_enabled:

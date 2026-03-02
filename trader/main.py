@@ -131,8 +131,10 @@ def main() -> None:
         print("OBSERVER: backfill skipped")
     elif settings.backfill_on_start:
         def _backfill():
-            root = Path(settings.alpaca_output_dir)
-            files = sorted([p for p in root.glob("*.json") if p.is_file()])
+            files: list[Path] = []
+            for _d in settings.news_watch_dirs:
+                files.extend(p for p in Path(_d).glob("*.json") if p.is_file())
+            files.sort()
             targets = files[-settings.backfill_limit :]
             total = len(targets)
             print(f"Backfill: processing {total} files in background...")
@@ -149,7 +151,9 @@ def main() -> None:
                 # Extract symbols from the file for dashboard display
                 try:
                     import json as _json
+                    from trader.models.snapshot import normalize_news as _normalize
                     _news = _json.loads(p.read_text(encoding="utf-8"))
+                    _normalize(_news)
                     _syms = [str(s) for s in (_news.get("symbols") or [])]
                 except Exception:
                     _syms = []

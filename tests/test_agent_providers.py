@@ -362,7 +362,7 @@ async def test_snapshot_captures_rounds_and_modalities(mock_market, monkeypatch)
     # Build a snapshot from pipeline results
     trigger = Trigger(
         type="test",
-        alpaca_timestamp=None,
+        timestamp=None,
         headline="AAPL drops 5%",
         summary="iPhone sales decline",
         source="test",

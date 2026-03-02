@@ -83,7 +83,7 @@ class Settings:
     observer_mode: bool
 
     # Paths
-    alpaca_output_dir: str
+    news_watch_dirs: list[str]
     data_dir: str
     sqlite_path: str
     snapshots_dir: str
@@ -205,7 +205,12 @@ def load_settings(*, dotenv_path: str | None = None, override: bool = False) -> 
     debug = _env_bool("DEBUG", False)
     observer_mode = _env_bool("OBSERVER_MODE", False)
 
-    alpaca_output_dir = _env_str("ALPACA_OUTPUT_DIR", "output/alpaca") or "output/alpaca"
+    # NEWS_WATCH_DIRS (comma-separated) takes priority; fall back to legacy ALPACA_OUTPUT_DIR
+    _watch_dirs_raw = _env_str("NEWS_WATCH_DIRS", "") or ""
+    if _watch_dirs_raw.strip():
+        news_watch_dirs = [d.strip() for d in _watch_dirs_raw.split(",") if d.strip()]
+    else:
+        news_watch_dirs = [_env_str("ALPACA_OUTPUT_DIR", "output/alpaca") or "output/alpaca"]
     data_dir = _env_str("DATA_DIR", "data") or "data"
     sqlite_path = _env_str("SQLITE_PATH", os.path.join(data_dir, "trader.db")) or os.path.join(
         data_dir, "trader.db"
@@ -311,7 +316,7 @@ def load_settings(*, dotenv_path: str | None = None, override: bool = False) -> 
         trading_mode=trading_mode,  # type: ignore[arg-type]
         debug=debug,
         observer_mode=observer_mode,
-        alpaca_output_dir=alpaca_output_dir,
+        news_watch_dirs=news_watch_dirs,
         data_dir=data_dir,
         sqlite_path=sqlite_path,
         snapshots_dir=snapshots_dir,

@@ -21,7 +21,7 @@ def iter_news_files(root: Path) -> list[Path]:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Backfill process existing output/alpaca/*.json into snapshots")
+    parser = argparse.ArgumentParser(description="Backfill process existing news JSON files into snapshots")
     parser.add_argument("--limit", type=int, default=None, help="Process at most N files (default from BACKFILL_LIMIT)")
     args = parser.parse_args()
 
@@ -31,8 +31,10 @@ def main() -> None:
     knowledge.ensure_defaults()
     bus = EventBus()
 
-    root = Path(settings.alpaca_output_dir)
-    files = iter_news_files(root)
+    files: list[Path] = []
+    for d in settings.news_watch_dirs:
+        files.extend(iter_news_files(Path(d)))
+    files.sort()
     limit = args.limit if args.limit is not None else settings.backfill_limit
     for p in files[-limit:]:
         process_news_file(path=p, settings=settings, db=db, knowledge=knowledge, bus=bus)

@@ -32,6 +32,9 @@ _DEFAULT_BLACKLIST = ["SPY", "VIX"]
 _ALLOWED_QUOTE_TYPES = {"EQUITY", "ETF"}
 _ALLOWED_MARKET = "us_market"
 
+# Known US exchanges — symbols tagged with these can be auto-verified.
+_US_EXCHANGES = {"NYSE", "NASDAQ", "AMEX", "ARCA", "BATS"}
+
 _SYMBOL_LISTS_FILENAME = "symbol_lists.json"
 
 
@@ -119,11 +122,16 @@ def _classify_symbol(symbol: str, data_dir: str | Path) -> str:
 def filter_symbols(
     symbols: list[str],
     data_dir: str | Path,
+    symbol_exchanges: dict[str, str] | None = None,
 ) -> tuple[list[str], list[dict[str, str]]]:
     """Filter symbols to only tradeable US equities/ETFs.
 
     Checks in order: blacklist → verified cache → crypto cache → rejected cache
-    → yfinance lookup (result cached for next time).
+    → known US exchange (auto-verify) → yfinance lookup (result cached).
+
+    Args:
+        symbol_exchanges: optional mapping of symbol → exchange (e.g. {"BRK.A": "NYSE"}).
+            Symbols tagged with a known US exchange are auto-verified without yfinance.
 
     Returns:
         (kept_symbols, filtered_reasons) where filtered_reasons is a list of
@@ -134,6 +142,7 @@ def filter_symbols(
     verified = set(s.upper() for s in data.get("verified", []))
     crypto_set = set(s.upper() for s in data.get("crypto", []))
     rejected = set(s.upper() for s in data.get("rejected", []))
+    exchanges = symbol_exchanges or {}
 
     kept: list[str] = []
     filtered: list[dict[str, str]] = []
@@ -161,7 +170,14 @@ def filter_symbols(
             filtered.append({"symbol": s, "reason": "not_us_tradeable"})
             continue
 
-        # 5. Unknown — classify via yfinance
+        # 5. Known US exchange from news source → auto-verify and cache
+        exchange = exchanges.get(s, exchanges.get(sym, "")).upper()
+        if exchange in _US_EXCHANGES:
+            _add_to_list(data_dir, "verified", s)
+            kept.append(sym)
+            continue
+
+        # 6. Unknown — classify via yfinance
         result = _classify_symbol(s, data_dir)
         if result == "verified":
             kept.append(sym)
