@@ -174,6 +174,12 @@ class Settings:
     openai_web_search_limit: int
     # Max concurrent exploration workers. 1 = sequential (no parallelism).
     max_parallel_explores: int
+    # Hard timeout (seconds) for the entire triage phase (LLM call + polling).
+    # If exceeded, triage is treated as a skip.
+    triage_timeout_s: float
+    # Max concurrent triage LLM calls (semaphore).  Prevents thundering-herd
+    # when many news items arrive at once and all workers hit the API together.
+    triage_concurrency: int
 
     # Reasoning / thinking controls
     openai_reasoning_effort: str   # 'low', 'medium', 'high'
@@ -301,6 +307,8 @@ def load_settings(*, dotenv_path: str | None = None, override: bool = False) -> 
     pipeline_include_openai = _env_bool("PIPELINE_INCLUDE_OPENAI", False)
     openai_web_search_limit = _env_int("OPENAI_WEB_SEARCH_LIMIT", 10)
     max_parallel_explores = _env_int("MAX_PARALLEL_EXPLORES", 1)
+    triage_timeout_s = _env_float("TRIAGE_TIMEOUT_S", 90.0)
+    triage_concurrency = _env_int("TRIAGE_CONCURRENCY", 2)
 
     # Reasoning / thinking controls
     openai_reasoning_effort = _env_str("OPENAI_REASONING_EFFORT", "medium") or "medium"
@@ -385,6 +393,8 @@ def load_settings(*, dotenv_path: str | None = None, override: bool = False) -> 
         pipeline_include_openai=pipeline_include_openai,
         openai_web_search_limit=openai_web_search_limit,
         max_parallel_explores=max_parallel_explores,
+        triage_timeout_s=triage_timeout_s,
+        triage_concurrency=triage_concurrency,
 
         openai_reasoning_effort=openai_reasoning_effort,
         gemini_thinking_level=gemini_thinking_level,

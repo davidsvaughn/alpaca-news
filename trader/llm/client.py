@@ -17,6 +17,9 @@ from openai import OpenAI
 
 from trader.llm.cost_tracker import CostTracker
 
+# Hard timeout (seconds) for every LLM API call.  Prevents indefinite hangs
+# when a provider is slow or rate-limiting.
+LLM_CALL_TIMEOUT: float = float(os.getenv("LLM_CALL_TIMEOUT_S", "60"))
 
 ProviderName = Literal["openai", "grok", "gemini"]
 
@@ -34,12 +37,16 @@ class LLMClient:
         self.cost_tracker = cost_tracker
 
         # OpenAI
-        self._openai = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+        self._openai = OpenAI(
+            api_key=os.getenv("OPENAI_API_KEY"),
+            timeout=LLM_CALL_TIMEOUT,
+        )
 
         # Grok (OpenAI-compatible)
         self._grok = OpenAI(
             api_key=os.getenv("XAI_API_KEY") or os.getenv("GROK_API_KEY"),
             base_url=os.getenv("XAI_BASE_URL") or "https://api.x.ai/v1",
+            timeout=LLM_CALL_TIMEOUT,
         )
 
         # Gemini is imported lazily because its import path is slightly different
@@ -136,7 +143,10 @@ class LLMClient:
         if not api_key:
             raise RuntimeError("Missing GEMINI_API_KEY (or GOOGLE_API_KEY) for Gemini provider")
 
-        client = genai.Client(api_key=api_key)
+        client = genai.Client(
+            api_key=api_key,
+            http_options=types.HttpOptions(timeout=LLM_CALL_TIMEOUT),
+        )
         tools = [types.Tool(google_search=types.GoogleSearch())] if google_search else None
 
         resp = client.models.generate_content(

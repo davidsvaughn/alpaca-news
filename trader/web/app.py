@@ -1702,7 +1702,7 @@ def _settings_groups(s: Settings) -> list[tuple[str, list[tuple[str, Any]]]]:
             [
                 "pipeline_request_limit", "pipeline_tool_calls_limit",
                 "pipeline_max_cost_usd", "pipeline_agent_timeout_s",
-                "max_parallel_explores",
+                "max_parallel_explores", "triage_timeout_s", "triage_concurrency",
                 "openai_web_search_limit",
                 "openai_reasoning_effort", "gemini_thinking_level",
             ],

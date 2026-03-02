@@ -377,7 +377,21 @@
     "AROC",
     "ARES",
     "ARCC",
-    "NTLA"
+    "NTLA",
+    "MSBI",
+    "ABBV",
+    "ELV",
+    "MSW",
+    "DRS",
+    "CTRA",
+    "DVN",
+    "INCY",
+    "RDNT",
+    "NOC",
+    "LMT",
+    "MPC",
+    "APA",
+    "VLO"
   ],
   "crypto": [],
   "rejected": [
@@ -435,7 +449,19 @@
     "ING",
     "QBR.A",
     "XRPUSD",
-    "IDR"
+    "IDR",
+    "TMP",
+    "2222",
+    "BRN1!",
+    "1D4",
+    "MFT",
+    "1TMR001E",
+    "TTE",
+    "SHEL",
+    "THEP",
+    "DBAA",
+    "CPINV",
+    "KER"
   ],
-  "last_updated": "2026-03-02T17:19:10.540359+00:00"
+  "last_updated": "2026-03-02T17:57:22.858064+00:00"
 }

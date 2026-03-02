@@ -65,6 +65,10 @@ from trader.online.x_stream_service import QualityVerdict, XStreamService, build
 
 DEBUG = os.getenv("DEBUG", "false").lower() in ("true", "1")
 
+# Semaphore to limit concurrent triage LLM calls.  Initialised by
+# ``run_watch_loop`` before worker threads start.
+_triage_semaphore: threading.Semaphore | None = None
+
 
 def _describe_api_error(e: Exception) -> str:
     """Extract provider, status, and actionable info from API errors."""
@@ -740,28 +744,41 @@ def process_news_file(
 
     # --- Stage 1: Triage ---
     def _run_triage_with_abort_poll() -> TriageDecision:
-        """Run triage in a sub-thread and poll abort every 2s."""
+        """Run triage in a sub-thread, poll abort every 2 s, hard-timeout after ``triage_timeout_s``."""
         import concurrent.futures
+        from contextlib import nullcontext
 
-        _triage_pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
-        triage_provider = infer_provider_from_model(settings.triage_model)
-        _triage_future = _triage_pool.submit(
-            run_triage,
-            llm=llm,  # type: ignore[arg-type]
-            provider=triage_provider,
-            model=settings.triage_model,
-            knowledge=knowledge,
-            news=news,
-            web_search=settings.triage_web_search,
-        )
-        try:
-            while True:
-                try:
-                    return _triage_future.result(timeout=2.0)
-                except concurrent.futures.TimeoutError:
-                    _check_abort()  # raises JobAborted if flagged
-        finally:
-            _triage_pool.shutdown(wait=False)
+        sem = _triage_semaphore or nullcontext()
+        hard_limit = settings.triage_timeout_s  # default 90 s
+
+        with sem:
+            _triage_pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+            triage_provider = infer_provider_from_model(settings.triage_model)
+            _triage_future = _triage_pool.submit(
+                run_triage,
+                llm=llm,  # type: ignore[arg-type]
+                provider=triage_provider,
+                model=settings.triage_model,
+                knowledge=knowledge,
+                news=news,
+                web_search=settings.triage_web_search,
+            )
+            _t0 = time.monotonic()
+            try:
+                while True:
+                    try:
+                        return _triage_future.result(timeout=2.0)
+                    except concurrent.futures.TimeoutError:
+                        _check_abort()  # raises JobAborted if flagged
+                        elapsed = time.monotonic() - _t0
+                        if elapsed > hard_limit:
+                            _triage_future.cancel()
+                            raise TimeoutError(
+                                f"Triage timed out after {elapsed:.0f}s "
+                                f"(limit {hard_limit:.0f}s)"
+                            )
+            finally:
+                _triage_pool.shutdown(wait=False)
 
     triage: TriageDecision
     incoming_symbols = [str(s).strip().upper() for s in (news.get("symbols") or []) if str(s).strip()]
@@ -795,6 +812,13 @@ def process_news_file(
                 if tracker is not None:
                     tracker.finish(_act_id)
                 raise
+            except TimeoutError as exc:
+                print(f"TRIAGE TIMEOUT: {exc} — treating as skip")
+                triage = TriageDecision(
+                    action="skip", confidence=0.0,
+                    reasoning=f"Triage timed out: {exc}",
+                    symbols=trigger.symbols, skip_patterns_learned=[],
+                )
     else:
         try:
             triage = _run_triage_with_abort_poll()
@@ -806,6 +830,15 @@ def process_news_file(
             if tracker is not None:
                 tracker.finish(_act_id)
             raise
+        except (TimeoutError, Exception) as exc:
+            if not isinstance(exc, TimeoutError):
+                raise
+            print(f"TRIAGE TIMEOUT: {exc} — treating as skip")
+            triage = TriageDecision(
+                action="skip", confidence=0.0,
+                reasoning=f"Triage timed out: {exc}",
+                symbols=trigger.symbols, skip_patterns_learned=[],
+            )
     _was_pre_filter = triage.reasoning.startswith("Pre-filter:")
     triage_provider = (
         triage.provider
@@ -1029,6 +1062,10 @@ def run_watch_loop(
 ) -> None:
     """Start watchdog observer + worker threads, block forever."""
     import threading
+
+    # Initialise the triage concurrency limiter before spawning workers.
+    global _triage_semaphore
+    _triage_semaphore = threading.Semaphore(max(1, settings.triage_concurrency))
 
     watch_dirs = [Path(d) for d in settings.news_watch_dirs]
     for d in watch_dirs:
