@@ -259,6 +259,11 @@ def _run_single_exploration(
     llm: object,
 ) -> None:
     """Run one exploration pipeline for a single symbol, producing one snapshot."""
+    # Ensure the primary symbol is first in trigger.symbols so that downstream
+    # code (price backfill, dashboard) correctly identifies it via symbols[0].
+    from dataclasses import replace as _dc_replace
+    trigger = _dc_replace(trigger, symbols=all_symbols)
+
     builder = SnapshotBuilder(trigger=trigger, snapshot_id=snap_id)
     builder.set_triage(triage_dict)
 
@@ -288,6 +293,50 @@ def _run_single_exploration(
         if tracker is not None and tracker.is_aborted(_act_id):
             raise JobAborted(f"Job {_act_id} aborted by user")
 
+    try:
+        _run_single_exploration_body(
+            _act_id=_act_id,
+            _check_abort=_check_abort,
+            symbol=symbol,
+            all_symbols=all_symbols,
+            snap_id=snap_id,
+            news=news,
+            trigger=trigger,
+            triage_dict=triage_dict,
+            settings=settings,
+            db=db,
+            bus=bus,
+            xstream=xstream,
+            tracker=tracker,
+            llm=llm,
+            builder=builder,
+            cost_tracker=cost_tracker,
+        )
+    finally:
+        if tracker is not None:
+            tracker.finish(_act_id)
+
+
+def _run_single_exploration_body(
+    *,
+    _act_id: str,
+    _check_abort: Callable[[], None],
+    symbol: str,
+    all_symbols: list[str],
+    snap_id: str,
+    news: dict[str, Any],
+    trigger: Trigger,
+    triage_dict: dict[str, Any],
+    settings: Settings,
+    db: Database,
+    bus: EventBus,
+    xstream: "XStreamService | None",
+    tracker: "ActivityTracker | None",
+    llm: object,
+    builder: SnapshotBuilder,
+    cost_tracker: CostTracker,
+) -> None:
+    """Inner body of _run_single_exploration, extracted for try/finally cleanup."""
     symbols = all_symbols
     signal = None
 
@@ -731,6 +780,42 @@ def process_news_file(
         if tracker is not None and tracker.is_aborted(_act_id):
             raise JobAborted(f"Job {_act_id} aborted by user")
 
+    # Ensure the activity is always cleaned up, even on unexpected exceptions.
+    # tracker.finish() is idempotent (uses pop(id, None)), so double-finish is safe.
+    try:
+        _process_news_body(
+            _act_id=_act_id,
+            _check_abort=_check_abort,
+            snap_id=snap_id,
+            news=news,
+            trigger=trigger,
+            settings=settings,
+            db=db,
+            knowledge=knowledge,
+            bus=bus,
+            xstream=xstream,
+            tracker=tracker,
+        )
+    finally:
+        if tracker is not None:
+            tracker.finish(_act_id)
+
+
+def _process_news_body(
+    *,
+    _act_id: str,
+    _check_abort: Callable[[], None],
+    snap_id: str,
+    news: dict[str, Any],
+    trigger: Trigger,
+    settings: Settings,
+    db: Database,
+    knowledge: KnowledgeStore,
+    bus: EventBus,
+    xstream: "XStreamService | None" = None,
+    tracker: "ActivityTracker | None" = None,
+) -> None:
+    """Inner body of process_news_file, extracted so the caller can wrap in try/finally."""
     triage_cost_tracker = CostTracker(
         max_daily_cost=settings.max_daily_cost,
         max_cost_per_item=settings.max_cost_per_news_item,

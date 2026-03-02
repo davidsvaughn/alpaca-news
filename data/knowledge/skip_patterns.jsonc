@@ -89,7 +89,8 @@
     "Hosts Segment Titled",
     // "What's Going On With .* Stock",
     "Benzinga Edge (scorecard|signal|rankings)",
-    "Technical Momentum Signals"
+    "Technical Momentum Signals",
+    "Key facts:"
   ],
   "sources_to_skip": [],
   "symbol_contexts": {},

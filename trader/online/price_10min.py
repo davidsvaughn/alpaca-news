@@ -59,9 +59,11 @@ def _yfinance_symbol_candidates(raw_symbol: str) -> list[str]:
 
     cands: list[str] = [raw]
 
-    # Berkshire-style classes: BRK/A -> BRK-A
+    # Berkshire-style classes: BRK/A -> BRK-A, BRK.A -> BRK-A
     if "/" in raw:
         cands.append(raw.replace("/", "-"))
+    if "." in raw and not raw.endswith(".TO"):
+        cands.append(raw.replace(".", "-"))
 
     # TSX feed symbols: TSX:WCP -> WCP.TO
     if ":" in raw:

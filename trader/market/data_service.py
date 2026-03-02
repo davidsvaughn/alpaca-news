@@ -21,6 +21,29 @@ from typing import Any
 DEBUG = os.getenv("DEBUG", "false").lower() in ("true", "1")
 
 
+def _schwab_symbol(raw: str) -> str:
+    """Normalize to Schwab format: BRK.A -> BRK/A, BRK-A -> BRK/A."""
+    s = raw.strip().upper()
+    # Share classes: only transform single-letter suffixes (BRK.A, BRK-A)
+    for sep in (".", "-"):
+        if sep in s:
+            base, suffix = s.rsplit(sep, 1)
+            if len(suffix) == 1 and suffix.isalpha():
+                return f"{base}/{suffix}"
+    return s
+
+
+def _yfinance_symbol(raw: str) -> str:
+    """Normalize to yfinance format: BRK.A -> BRK-A, BRK/A -> BRK-A."""
+    s = raw.strip().upper()
+    for sep in (".", "/"):
+        if sep in s:
+            base, suffix = s.rsplit(sep, 1)
+            if len(suffix) == 1 and suffix.isalpha():
+                return f"{base}-{suffix}"
+    return s
+
+
 class MarketDataService:
     """Unified market data interface with Schwab → yfinance fallback."""
 
@@ -48,7 +71,7 @@ class MarketDataService:
         """
         if self._schwab.available:
             try:
-                result = self._schwab.get_fundamentals(symbol)
+                result = self._schwab.get_fundamentals(_schwab_symbol(symbol))
                 if "error" not in result:
                     result["source"] = "schwab"
                     return result
@@ -57,7 +80,7 @@ class MarketDataService:
                     raise
 
         # Fallback to yfinance
-        result = self._yfinance.get_fundamentals(symbol)
+        result = self._yfinance.get_fundamentals(_yfinance_symbol(symbol))
         result["source"] = "yfinance"
         return result
 
@@ -75,7 +98,7 @@ class MarketDataService:
         # For intraday, prefer Schwab (richer data, extended hours)
         if self._schwab.available and interval in ("1m", "1min", "minute"):
             try:
-                candles = self._schwab.get_intraday_candles(symbol)
+                candles = self._schwab.get_intraday_candles(_schwab_symbol(symbol))
                 if candles:
                     return {
                         "symbol": symbol.upper(),
@@ -95,7 +118,7 @@ class MarketDataService:
                     raise
 
         # Fallback / default: yfinance handles all periods and intervals
-        result = self._yfinance.get_price_history(symbol, period=period, interval=interval)
+        result = self._yfinance.get_price_history(_yfinance_symbol(symbol), period=period, interval=interval)
         result["source"] = "yfinance"
         return result
 
@@ -251,7 +274,7 @@ class MarketDataService:
         """Real-time quote snapshot. Tries Schwab, falls back to yfinance."""
         if self._schwab.available:
             try:
-                quote = self._schwab.get_quote(symbol)
+                quote = self._schwab.get_quote(_schwab_symbol(symbol))
                 if quote:
                     d = quote.to_dict()
                     d["source"] = "schwab"
@@ -260,7 +283,7 @@ class MarketDataService:
                 if DEBUG:
                     raise
         # Fallback to yfinance
-        return self._yfinance.get_quote(symbol)
+        return self._yfinance.get_quote(_yfinance_symbol(symbol))
 
     def get_quotes(self, symbols: list[str]) -> dict[str, dict[str, Any]]:
         """Batch real-time quotes. Tries Schwab batch, falls back to yfinance."""
@@ -269,7 +292,8 @@ class MarketDataService:
             return result
         if self._schwab.available:
             try:
-                schwab_quotes = self._schwab.get_quotes(symbols)
+                schwab_syms = [_schwab_symbol(s) for s in symbols]
+                schwab_quotes = self._schwab.get_quotes(schwab_syms)
                 for sym, qs in schwab_quotes.items():
                     d = qs.to_dict()
                     d["source"] = "schwab"
@@ -282,7 +306,7 @@ class MarketDataService:
         # Fallback: yfinance per-symbol
         for sym in symbols:
             try:
-                q = self._yfinance.get_quote(sym)
+                q = self._yfinance.get_quote(_yfinance_symbol(sym))
                 if q and "error" not in q:
                     result[sym] = q
             except Exception:
@@ -297,7 +321,7 @@ class MarketDataService:
             return {}
         if self._schwab.available:
             try:
-                result = self._schwab.get_quotes_with_fundamentals(symbols)
+                result = self._schwab.get_quotes_with_fundamentals([_schwab_symbol(s) for s in symbols])
                 if result:
                     # Compute market_cap from shares_outstanding * last_price
                     for sym, d in result.items():
@@ -314,8 +338,8 @@ class MarketDataService:
         result: dict[str, dict[str, Any]] = {}
         for sym in symbols:
             try:
-                q = self._yfinance.get_quote(sym)
-                f = self._yfinance.get_fundamentals(sym)
+                q = self._yfinance.get_quote(_yfinance_symbol(sym))
+                f = self._yfinance.get_fundamentals(_yfinance_symbol(sym))
                 if q and "error" not in q:
                     entry = {
                         "last_price": q.get("last_price"),
@@ -333,7 +357,7 @@ class MarketDataService:
 
     def check_options_activity(self, symbol: str) -> dict[str, Any]:
         """Options activity — ATM IV, put/call ratios (Schwab only)."""
-        result = self._schwab.check_options_activity(symbol)
+        result = self._schwab.check_options_activity(_schwab_symbol(symbol))
         result["source"] = "schwab"
         return result
 
@@ -356,13 +380,13 @@ class MarketDataService:
 
     def check_price_spike(self, symbol: str) -> dict[str, Any]:
         """Check for recent price spike (Schwab only — needs intraday candles)."""
-        result = self._schwab.check_price_spike(symbol)
+        result = self._schwab.check_price_spike(_schwab_symbol(symbol))
         result["source"] = "schwab"
         return result
 
     def check_volume_regime(self, symbol: str) -> dict[str, Any]:
         """Check for abnormal volume (Schwab only — needs intraday candles)."""
-        result = self._schwab.check_volume_regime(symbol)
+        result = self._schwab.check_volume_regime(_schwab_symbol(symbol))
         result["source"] = "schwab"
         return result
 
@@ -374,7 +398,7 @@ class MarketDataService:
 
     def build_price_context(self, symbols: list[str]) -> dict[str, Any]:
         """Build per-symbol price context for snapshot."""
-        result = self._schwab.build_price_context(symbols)
+        result = self._schwab.build_price_context([_schwab_symbol(s) for s in symbols])
         result["source"] = "schwab"
         return result
 
@@ -391,7 +415,7 @@ class MarketDataService:
     ) -> dict[str, Any]:
         """Get financial statement data (yfinance only — free)."""
         result = self._yfinance.get_financial_statements(
-            symbol, statement=statement, freq=freq, periods=periods,
+            _yfinance_symbol(symbol), statement=statement, freq=freq, periods=periods,
         )
         result["source"] = "yfinance"
         return result
@@ -403,13 +427,13 @@ class MarketDataService:
         try:
             from trader.market.finnhub_client import get_insider_transactions, _TX_CODE_MAP
 
-            raw = get_insider_transactions(symbol)
+            raw = get_insider_transactions(symbol.upper())
             if raw:
                 # Best-effort title enrichment from yfinance
                 title_map: dict[str, str] = {}
                 try:
                     import yfinance as yf
-                    yf_txns = yf.Ticker(symbol.upper()).insider_transactions
+                    yf_txns = yf.Ticker(_yfinance_symbol(symbol)).insider_transactions
                     if yf_txns is not None and not yf_txns.empty:
                         for _, row in yf_txns.iterrows():
                             name = str(row.get("Insider", "")).strip()
@@ -472,7 +496,7 @@ class MarketDataService:
             pass
 
         # Fallback to yfinance
-        result = self._yfinance.check_insider_activity(symbol)
+        result = self._yfinance.check_insider_activity(_yfinance_symbol(symbol))
         result["source"] = "yfinance"
         return result
 
@@ -482,7 +506,7 @@ class MarketDataService:
         """Recent company news articles (yfinance + Finnhub, merged)."""
         from datetime import datetime as _dt, timezone as _tz
 
-        result = self._yfinance.get_company_news(symbol, max_articles=max_articles)
+        result = self._yfinance.get_company_news(_yfinance_symbol(symbol), max_articles=max_articles)
 
         # Tag yfinance articles
         for a in result.get("articles", []):
@@ -516,7 +540,7 @@ class MarketDataService:
         """Recent company news from Finnhub."""
         from trader.market.finnhub_client import get_company_news as _fh_news
 
-        articles = _fh_news(symbol, days_back=min(days_back, 7))
+        articles = _fh_news(symbol.upper(), days_back=min(days_back, 7))
         articles = articles[:max_articles]
         return {"symbol": symbol, "count": len(articles), "articles": articles, "source": "finnhub"}
 
@@ -528,7 +552,7 @@ class MarketDataService:
     ) -> dict[str, Any]:
         """Technical indicators via stockstats (computed locally from yfinance data)."""
         from trader.market.indicators import get_technical_indicators
-        result = get_technical_indicators(symbol, indicators, lookback_days=lookback_days)
+        result = get_technical_indicators(_yfinance_symbol(symbol), indicators, lookback_days=lookback_days)
         result["source"] = "stockstats"
         return result
 
@@ -539,6 +563,6 @@ class MarketDataService:
     ) -> dict[str, Any]:
         """Quick snapshot of current technical indicator values."""
         from trader.market.indicators import get_current_technicals
-        result = get_current_technicals(symbol, indicators)
+        result = get_current_technicals(_yfinance_symbol(symbol), indicators)
         result["source"] = "stockstats"
         return result

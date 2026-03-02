@@ -137,9 +137,13 @@ def filter_symbols(
 ) -> tuple[list[str], list[dict[str, str]]]:
     """Filter symbols to only tradeable US equities/ETFs.
 
-    Checks in order: blacklist → verified cache → crypto cache → rejected cache
-    → known US exchange (auto-verify) → known non-US exchange (reject)
-    → non-equity format (reject) → yfinance lookup (result cached).
+    Checks in order: blacklist → explicit non-US exchange (reject)
+    → explicit US exchange (auto-verify) → verified cache → crypto cache
+    → rejected cache → non-equity format (reject) → yfinance lookup (result cached).
+
+    Exchange info from the news source takes priority over cached classifications
+    because a bare ticker like "RS" may be verified as a US equity (Reliance Steel)
+    but the *current* article may refer to RS PCL on Thailand's SET exchange.
 
     Args:
         symbol_exchanges: optional mapping of symbol → exchange (e.g. {"BRK.A": "NYSE"}).
@@ -167,41 +171,42 @@ def filter_symbols(
             filtered.append({"symbol": s, "reason": "blacklisted"})
             continue
 
-        # 2. Already verified as tradeable
+        # 2. Explicit exchange from news source — takes priority over caches.
+        #    A bare ticker like "RS" may be cached as verified (Reliance Steel)
+        #    but this article's SET:RS refers to RS PCL in Thailand.
+        exchange = exchanges.get(s, exchanges.get(sym, "")).upper()
+        if exchange:
+            if exchange in _US_EXCHANGES:
+                # Known US exchange → auto-verify and cache
+                _add_to_list(data_dir, "verified", s)
+                kept.append(sym)
+            else:
+                # Non-US exchange → reject immediately (no yfinance call)
+                filtered.append({"symbol": s, "reason": f"non_us_exchange:{exchange}"})
+            continue
+
+        # 3. Already verified as tradeable
         if s in verified:
             kept.append(sym)
             continue
 
-        # 3. Already known crypto
+        # 4. Already known crypto
         if s in crypto_set:
             filtered.append({"symbol": s, "reason": "crypto"})
             continue
 
-        # 4. Already known non-tradeable
+        # 5. Already known non-tradeable
         if s in rejected:
             filtered.append({"symbol": s, "reason": "not_us_tradeable"})
             continue
 
-        # 5. Known US exchange from news source → auto-verify and cache
-        exchange = exchanges.get(s, exchanges.get(sym, "")).upper()
-        if exchange in _US_EXCHANGES:
-            _add_to_list(data_dir, "verified", s)
-            kept.append(sym)
-            continue
-
-        # 5b. Known NON-US exchange → reject immediately (no yfinance call)
-        if exchange:
-            _add_to_list(data_dir, "rejected", s)
-            filtered.append({"symbol": s, "reason": f"non_us_exchange:{exchange}"})
-            continue
-
-        # 5c. Obviously non-equity format (crypto pairs, futures, indices, numeric)
+        # 6. Obviously non-equity format (crypto pairs, futures, indices, numeric)
         if _NON_EQUITY_PATTERN.search(s):
             _add_to_list(data_dir, "rejected", s)
             filtered.append({"symbol": s, "reason": "non_equity_format"})
             continue
 
-        # 6. Unknown — classify via yfinance
+        # 7. Unknown — classify via yfinance
         result = _classify_symbol(s, data_dir)
         if result == "verified":
             kept.append(sym)

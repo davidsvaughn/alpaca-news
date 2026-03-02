@@ -95,7 +95,11 @@
         <td class="text-truncate">{{ s.trigger.headline }}</td>
         <td>
           {% for sym in s.trigger.symbols %}
+          {% if sym == primary_sym %}
+          <span class="badge bg-primary">{{ sym }}</span>
+          {% else %}
           <span class="badge bg-light text-dark border">{{ sym }}</span>
+          {% endif %}
           {% endfor %}
         </td>
         <td data-sort-val="{{ dir }}">

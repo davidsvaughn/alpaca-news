@@ -148,6 +148,23 @@ def _pre_filter(
                     skip_patterns_learned=[],
                 )
 
+    # ── 1b. No symbols and no ticker-like words in text — nothing to investigate ──
+    if not symbols:
+        content = str(news.get("content") or "")
+        combined = f"{text} {content}"
+        # Look for uppercase 2-5 letter words that could be tickers (e.g. "FLD", "AAPL")
+        has_ticker_candidate = bool(re.search(r'\b[A-Z]{2,5}\b', combined))
+        if not has_ticker_candidate:
+            if DEBUG:
+                print("PRE-FILTER skip: no symbols and no ticker-like words")
+            return TriageDecision(
+                action="skip",
+                confidence=0.99,
+                reasoning="Pre-filter: no ticker symbols provided and no ticker-like words in text",
+                symbols=[],
+                skip_patterns_learned=[],
+            )
+
     # ── 2. Learned skip patterns (regex) ──
     skip_compiled = _compile_patterns(skip_keywords)
     for raw, rxp in skip_compiled:
