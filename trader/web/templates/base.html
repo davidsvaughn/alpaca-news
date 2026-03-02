@@ -102,7 +102,9 @@
     // Global SSE connection
     const _es = new EventSource('/events');
     const _ALL_EVENTS = [
-      'watching','news_received','triage_decision','exploration_complete','snapshot_sealed',
+      'watching','news_received','triage_decision',
+      'symbols_filtered','symbols_all_filtered',
+      'exploration_complete','exploration_error','snapshot_sealed',
       'watch_created','watch_checkin','watch_exited','watch_retrospective_started',
       'watch_retrospective_checkin','watch_sealed',
       'x_stream_configured','x_usage','x_burst_start','x_post',

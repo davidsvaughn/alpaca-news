@@ -150,7 +150,9 @@
     observer_mode_changed: 'warning',
     observer_skipped: 'secondary',
     job_aborted: 'danger',
-    exploration_aborted: 'danger'
+    exploration_aborted: 'danger',
+    symbols_filtered: 'secondary',
+    symbols_all_filtered: 'warning'
   };
 
   function snapLink(id, label) {
@@ -167,6 +169,13 @@
       case 'triage_decision':
         return symBadges(p.symbols) + ' \u2192 ' + p.action + ' (' + ((p.confidence||0)*100).toFixed(0) + '%) '
           + '<span class="feed-dim">' + (p.reasoning || '').slice(0, 80) + '</span>';
+      case 'symbols_filtered':
+        var reasons = (p.filtered || []).map(function(f) { return f.symbol + '(' + f.reason + ')'; }).join(', ');
+        return '<span class="feed-dim">' + reasons.slice(0, 120) + '</span>';
+      case 'symbols_all_filtered':
+        return '<span class="text-warning">All symbols filtered</span> '
+          + '<span class="feed-dim">' + (p.headline || '').slice(0, 60) + '</span> '
+          + (p.filtered || []).map(function(f) { return f.symbol + '(' + f.reason + ')'; }).join(', ').slice(0, 80);
       case 'snapshot_sealed':
         return symBadges(p.symbols) + snapLink(p.snapshot_id)
           + (p.direction ? ' \u2192 ' + p.direction + ' (' + ((p.confidence||0)*100).toFixed(0) + '%)' : '')

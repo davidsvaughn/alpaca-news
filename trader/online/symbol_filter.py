@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import threading
 from datetime import datetime, timezone
 from pathlib import Path
@@ -33,7 +34,17 @@ _ALLOWED_QUOTE_TYPES = {"EQUITY", "ETF"}
 _ALLOWED_MARKET = "us_market"
 
 # Known US exchanges — symbols tagged with these can be auto-verified.
-_US_EXCHANGES = {"NYSE", "NASDAQ", "AMEX", "ARCA", "BATS"}
+_US_EXCHANGES = {"NYSE", "NASDAQ", "AMEX", "ARCA", "BATS", "CBOE", "OTC"}
+
+# Regex for symbol formats that are obviously not US equities/ETFs.
+# Matches: crypto pairs (BTCUSD, DOGEUSD), futures (NG1!, CL1!),
+# indices/economics with underscores (SP_IPSA, FED30D), numeric-only (603993).
+_NON_EQUITY_PATTERN = re.compile(
+    r"^[A-Z]{2,10}USD$"   # crypto pair: BTCUSD, ETHUSD, DOGEUSD
+    r"|!$"                 # futures: NG1!, CL1!
+    r"|_"                  # indices/economics: SP_IPSA, FED30D
+    r"|^\d+$"              # numeric-only (Chinese exchanges, etc.)
+)
 
 _SYMBOL_LISTS_FILENAME = "symbol_lists.json"
 
@@ -127,7 +138,8 @@ def filter_symbols(
     """Filter symbols to only tradeable US equities/ETFs.
 
     Checks in order: blacklist → verified cache → crypto cache → rejected cache
-    → known US exchange (auto-verify) → yfinance lookup (result cached).
+    → known US exchange (auto-verify) → known non-US exchange (reject)
+    → non-equity format (reject) → yfinance lookup (result cached).
 
     Args:
         symbol_exchanges: optional mapping of symbol → exchange (e.g. {"BRK.A": "NYSE"}).
@@ -175,6 +187,18 @@ def filter_symbols(
         if exchange in _US_EXCHANGES:
             _add_to_list(data_dir, "verified", s)
             kept.append(sym)
+            continue
+
+        # 5b. Known NON-US exchange → reject immediately (no yfinance call)
+        if exchange:
+            _add_to_list(data_dir, "rejected", s)
+            filtered.append({"symbol": s, "reason": f"non_us_exchange:{exchange}"})
+            continue
+
+        # 5c. Obviously non-equity format (crypto pairs, futures, indices, numeric)
+        if _NON_EQUITY_PATTERN.search(s):
+            _add_to_list(data_dir, "rejected", s)
+            filtered.append({"symbol": s, "reason": "non_equity_format"})
             continue
 
         # 6. Unknown — classify via yfinance

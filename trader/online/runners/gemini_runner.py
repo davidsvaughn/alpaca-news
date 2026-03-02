@@ -26,6 +26,7 @@ _GEMINI_SEARCH_FEE = 0.01
 # Timeout for a single API call (seconds). The google-genai SDK has its own
 # tenacity retries on 503 that can stall for minutes — this caps wall-clock.
 _CALL_TIMEOUT_S = float(os.getenv("RUNNER_CALL_TIMEOUT_S", "90"))
+_PREFLIGHT_TIMEOUT_S = float(os.getenv("RUNNER_PREFLIGHT_TIMEOUT_S", "15"))
 _FALLBACK_MODEL = os.getenv("SYNTHESIS_FALLBACK_MODEL", "")
 
 DEBUG = os.getenv("DEBUG", "false").lower() in ("true", "1")
@@ -76,10 +77,42 @@ async def run_gemini(
     tool_traces: list[dict[str, Any]] = []
     hop_index = 0
 
-    # Single request with Google Search grounding.
-    # Wrapped in to_thread() so the sync SDK call doesn't block the event loop
-    # (allows pipeline timeout/abort to actually interrupt).
-    # On failure, retries once with SYNTHESIS_FALLBACK_MODEL if configured.
+    # ------------------------------------------------------------------
+    # Preflight ping: quick check that the model is responsive before
+    # committing to the expensive synthesis request.
+    # ------------------------------------------------------------------
+    async def _preflight(m: str) -> bool:
+        """Return True if model responds to a tiny request within preflight timeout."""
+        try:
+            await asyncio.wait_for(
+                asyncio.to_thread(
+                    client.models.generate_content,
+                    model=m,
+                    contents="Reply with OK",
+                    config=types.GenerateContentConfig(
+                        max_output_tokens=5,
+                    ),
+                ),
+                timeout=_PREFLIGHT_TIMEOUT_S,
+            )
+            return True
+        except (asyncio.TimeoutError, APIError, Exception) as e:
+            if DEBUG:
+                print(f"  [Gemini] preflight failed for {m}: {type(e).__name__}: {e}")
+            return False
+
+    fallback = _FALLBACK_MODEL
+    use_model = model
+
+    # If there's a fallback configured, preflight the primary model first.
+    if fallback and fallback != model:
+        if not await _preflight(model):
+            print(f"Gemini preflight failed for {model}, switching to fallback {fallback}")
+            use_model = fallback
+
+    # ------------------------------------------------------------------
+    # Main API call (with fallback on error if not already using fallback)
+    # ------------------------------------------------------------------
     async def _call(m: str) -> Any:
         return await asyncio.wait_for(
             asyncio.to_thread(
@@ -90,11 +123,11 @@ async def run_gemini(
         )
 
     try:
-        response = await _call(model)
+        response = await _call(use_model)
     except (asyncio.TimeoutError, APIError) as primary_err:
-        fallback = _FALLBACK_MODEL
-        if fallback and fallback != model:
-            print(f"Gemini primary model failed ({type(primary_err).__name__}), falling back to {fallback}")
+        # If we haven't tried the fallback yet, try it now
+        if use_model != fallback and fallback and fallback != use_model:
+            print(f"Gemini {use_model} failed ({type(primary_err).__name__}), falling back to {fallback}")
             try:
                 response = await _call(fallback)
             except asyncio.TimeoutError:
@@ -106,7 +139,7 @@ async def run_gemini(
                     f"Gemini fallback ({fallback}) API error ({e.status_code}): {e}"
                 ) from primary_err
         elif isinstance(primary_err, asyncio.TimeoutError):
-            raise TimeoutError(f"Gemini API call timed out after {_CALL_TIMEOUT_S}s")
+            raise TimeoutError(f"Gemini API call ({use_model}) timed out after {_CALL_TIMEOUT_S}s")
         else:
             raise RuntimeError(
                 f"Gemini API error ({primary_err.status_code}): {primary_err}"
