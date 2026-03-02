@@ -8,12 +8,13 @@ Uses the ``openai`` Python SDK's ``client.responses.create()`` with:
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import time
 from typing import Any
 
-from openai import OpenAI
+from openai import OpenAI, APIError, APITimeoutError
 
 from trader.market.data_service import MarketDataService
 from trader.online.agent_common import AgentRunResult, TradingSignal, build_trace_dict
@@ -23,6 +24,7 @@ DEBUG = os.getenv("DEBUG", "false").lower() in ("true", "1")
 
 # Maximum tool-calling loop iterations (safety net)
 _DEFAULT_MAX_TURNS = 15
+_CALL_TIMEOUT_S = float(os.getenv("RUNNER_CALL_TIMEOUT_S", "90"))
 
 # Per-call fee for server-side web_search on OpenAI ($10/1k = $0.01 each)
 _OPENAI_WEB_SEARCH_FEE = 0.01
@@ -117,12 +119,15 @@ async def run_openai(
             kwargs["reasoning"]["summary"] = reasoning_summary
 
     # First request
-    response = client.responses.create(
-        model=model,
-        input=conversation,
-        tools=tools,
-        **kwargs,
-    )
+    try:
+        response = await asyncio.wait_for(
+            asyncio.to_thread(client.responses.create, model=model, input=conversation, tools=tools, **kwargs),
+            timeout=_CALL_TIMEOUT_S,
+        )
+    except asyncio.TimeoutError:
+        raise TimeoutError(f"OpenAI API call timed out after {_CALL_TIMEOUT_S}s")
+    except (APIError, APITimeoutError) as e:
+        raise RuntimeError(f"OpenAI API error: {e}") from e
 
     total_usage = {
         "input_tokens": 0, "output_tokens": 0, "total_tokens": 0,
@@ -241,12 +246,15 @@ async def run_openai(
         conversation.extend(response.output)
         conversation.extend(tool_results)
 
-        response = client.responses.create(
-            model=model,
-            input=conversation,
-            tools=tools,
-            **kwargs,
-        )
+        try:
+            response = await asyncio.wait_for(
+                asyncio.to_thread(client.responses.create, model=model, input=conversation, tools=tools, **kwargs),
+                timeout=_CALL_TIMEOUT_S,
+            )
+        except asyncio.TimeoutError:
+            raise TimeoutError(f"OpenAI API call timed out after {_CALL_TIMEOUT_S}s (turn {turn})")
+        except (APIError, APITimeoutError) as e:
+            raise RuntimeError(f"OpenAI API error (turn {turn}): {e}") from e
         _accumulate_usage(response)
         _extract_builtin_traces(response)
 

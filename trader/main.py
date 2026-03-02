@@ -58,6 +58,10 @@ def main() -> None:
 
     tracker = ActivityTracker()
 
+    # Startup health check — validate API keys and provider availability
+    from trader.online.health_check import run_health_checks
+    run_health_checks()
+
     xstream: XStreamService | None = None
     if settings.x_stream_enabled and settings.x_stream_mode != "off":
         # Purge any stale X stream rules left by previous crashes

@@ -9,12 +9,13 @@ Uses the ``openai`` Python SDK pointed at ``https://api.x.ai/v1/`` with:
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import time
 from typing import Any
 
-from openai import OpenAI
+from openai import OpenAI, APIError, APITimeoutError
 
 from trader.market.data_service import MarketDataService
 from trader.online.agent_common import AgentRunResult, TradingSignal, build_trace_dict
@@ -23,6 +24,7 @@ from trader.online.tool_core import TOOL_BY_NAME, TOOL_REGISTRY, ToolDef
 DEBUG = os.getenv("DEBUG", "false").lower() in ("true", "1")
 
 _DEFAULT_MAX_TURNS = 15
+_CALL_TIMEOUT_S = float(os.getenv("RUNNER_CALL_TIMEOUT_S", "90"))
 
 # Per-call fee for server-side x_search and web_search on xAI
 _XAI_PER_CALL_FEE = 0.005
@@ -117,11 +119,15 @@ async def run_grok(
     # store=True (default) so previous_response_id works for stateful
     # continuation — required for server-side tools (x_search, web_search)
     # to retain their results across turns in the tool-calling loop.
-    response = client.responses.create(
-        model=model,
-        input=input_messages,
-        tools=tools,
-    )
+    try:
+        response = await asyncio.wait_for(
+            asyncio.to_thread(client.responses.create, model=model, input=input_messages, tools=tools),
+            timeout=_CALL_TIMEOUT_S,
+        )
+    except asyncio.TimeoutError:
+        raise TimeoutError(f"Grok API call timed out after {_CALL_TIMEOUT_S}s")
+    except (APIError, APITimeoutError) as e:
+        raise RuntimeError(f"Grok API error: {e}") from e
 
     total_usage = {
         "input_tokens": 0, "output_tokens": 0, "total_tokens": 0,
@@ -266,12 +272,19 @@ async def run_grok(
         # Use previous_response_id for stateful continuation —
         # this preserves server-side tool results (x_search, web_search)
         # across turns. Requires store=True (default) on initial request.
-        response = client.responses.create(
-            model=model,
-            input=tool_results,
-            previous_response_id=response.id,
-            tools=tools,
-        )
+        try:
+            response = await asyncio.wait_for(
+                asyncio.to_thread(
+                    client.responses.create,
+                    model=model, input=tool_results,
+                    previous_response_id=response.id, tools=tools,
+                ),
+                timeout=_CALL_TIMEOUT_S,
+            )
+        except asyncio.TimeoutError:
+            raise TimeoutError(f"Grok API call timed out after {_CALL_TIMEOUT_S}s (turn {turn})")
+        except (APIError, APITimeoutError) as e:
+            raise RuntimeError(f"Grok API error (turn {turn}): {e}") from e
         _accumulate_usage(response)
         _extract_builtin_traces(response)
 

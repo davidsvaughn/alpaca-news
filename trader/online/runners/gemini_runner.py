@@ -8,6 +8,7 @@ Uses ``google.genai.Client.models.generate_content()`` with:
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import time
@@ -15,11 +16,17 @@ from typing import Any
 
 from google import genai
 from google.genai import types
+from google.genai.errors import APIError
 
 from trader.online.agent_common import AgentRunResult, TradingSignal, build_trace_dict
 
 # Per-call fee for Google Search grounding (placeholder — confirm via Google pricing)
 _GEMINI_SEARCH_FEE = 0.01
+
+# Timeout for a single API call (seconds). The google-genai SDK has its own
+# tenacity retries on 503 that can stall for minutes — this caps wall-clock.
+_CALL_TIMEOUT_S = float(os.getenv("RUNNER_CALL_TIMEOUT_S", "90"))
+_FALLBACK_MODEL = os.getenv("SYNTHESIS_FALLBACK_MODEL", "")
 
 DEBUG = os.getenv("DEBUG", "false").lower() in ("true", "1")
 
@@ -69,12 +76,41 @@ async def run_gemini(
     tool_traces: list[dict[str, Any]] = []
     hop_index = 0
 
-    # Single request with Google Search grounding
-    response = client.models.generate_content(
-        model=model,
-        contents=contents,
-        config=config,
-    )
+    # Single request with Google Search grounding.
+    # Wrapped in to_thread() so the sync SDK call doesn't block the event loop
+    # (allows pipeline timeout/abort to actually interrupt).
+    # On failure, retries once with SYNTHESIS_FALLBACK_MODEL if configured.
+    async def _call(m: str) -> Any:
+        return await asyncio.wait_for(
+            asyncio.to_thread(
+                client.models.generate_content,
+                model=m, contents=contents, config=config,
+            ),
+            timeout=_CALL_TIMEOUT_S,
+        )
+
+    try:
+        response = await _call(model)
+    except (asyncio.TimeoutError, APIError) as primary_err:
+        fallback = _FALLBACK_MODEL
+        if fallback and fallback != model:
+            print(f"Gemini primary model failed ({type(primary_err).__name__}), falling back to {fallback}")
+            try:
+                response = await _call(fallback)
+            except asyncio.TimeoutError:
+                raise TimeoutError(
+                    f"Gemini fallback ({fallback}) also timed out after {_CALL_TIMEOUT_S}s"
+                ) from primary_err
+            except APIError as e:
+                raise RuntimeError(
+                    f"Gemini fallback ({fallback}) API error ({e.status_code}): {e}"
+                ) from primary_err
+        elif isinstance(primary_err, asyncio.TimeoutError):
+            raise TimeoutError(f"Gemini API call timed out after {_CALL_TIMEOUT_S}s")
+        else:
+            raise RuntimeError(
+                f"Gemini API error ({primary_err.status_code}): {primary_err}"
+            ) from primary_err
 
     # Accumulate usage
     um = getattr(response, "usage_metadata", None)
