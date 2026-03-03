@@ -949,7 +949,8 @@ def create_app(
     async def api_backtest(request: Request):
         import asyncio
         from trader.market.backtest import (
-            apply_allocation, compute_ann_a, compute_ann_b, run_backtest,
+            apply_allocation, compute_ann_a, compute_ann_b,
+            compute_portfolio_sim, run_backtest,
             weight_per_trade_for_allocation,
         )
 
@@ -972,6 +973,8 @@ def create_app(
         trace_enabled = bool(body.get("trace", False))
         allocation_key = body.get("allocation", "none")
         allocation_params = body.get("allocation_params", {})
+        starting_amount = float(body.get("starting_amount", 0))
+        reinvest_delay_minutes = int(body.get("reinvest_delay_minutes", 1))
 
         if isinstance(filters, dict):
             t_filter = time.perf_counter()
@@ -1064,6 +1067,16 @@ def create_app(
         wpt = weight_per_trade_for_allocation(allocation_key, allocation_params)
         _mark("apply_allocation", t_alloc)
 
+        # Portfolio simulation (dollar-denominated)
+        sim_result = None
+        if starting_amount > 0:
+            t_sim = time.perf_counter()
+            sim_result = compute_portfolio_sim(
+                results, allocation_key, allocation_params,
+                starting_amount, reinvest_delay_minutes,
+            )
+            _mark("portfolio_sim", t_sim)
+
         t_serialize = time.perf_counter()
         trades = [r.to_dict() for r in results]
         _mark("serialize_trades", t_serialize)
@@ -1088,6 +1101,12 @@ def create_app(
                 "alloc_taken": alloc_stats.get("taken", 0),
                 "alloc_skipped": alloc_stats.get("skipped", 0),
                 "alloc_replaced": alloc_stats.get("replaced", 0),
+                "sim_starting": sim_result["sim_starting"] if sim_result else None,
+                "sim_ending": sim_result["sim_ending"] if sim_result else None,
+                "sim_return_pct": sim_result["sim_return_pct"] if sim_result else None,
+                "sim_trades": sim_result["sim_trades"] if sim_result else None,
+                "sim_daily_pct": sim_result["sim_daily_pct"] if sim_result else None,
+                "sim_span_days": sim_result["sim_span_days"] if sim_result else None,
             },
         }
         if trace_enabled:

@@ -762,6 +762,168 @@ def weight_per_trade_for_allocation(
 
 
 # ---------------------------------------------------------------------------
+# Portfolio simulation — dollar-denominated walk-forward
+# ---------------------------------------------------------------------------
+
+
+def _add_minutes_iso(iso_str: str, minutes: int) -> str:
+    """Add *minutes* to an ISO timestamp string, return ISO string."""
+    dt = datetime.fromisoformat(iso_str.replace("Z", "+00:00"))
+    return (dt + timedelta(minutes=minutes)).isoformat()
+
+
+def _peak_concurrency(results: list[BacktestResult]) -> int:
+    """Compute maximum number of simultaneously open positions."""
+    events: list[tuple[str, int]] = []
+    for r in results:
+        events.append((r.entry_time, 1))
+        if r.exit_time:
+            events.append((r.exit_time, -1))
+    if not events:
+        return 1
+    events.sort()
+    peak = current = 0
+    for _, delta in events:
+        current += delta
+        peak = max(peak, current)
+    return max(peak, 1)
+
+
+def compute_portfolio_sim(
+    results: list[BacktestResult],
+    alloc_key: str,
+    alloc_params: dict[str, Any],
+    starting_amount: float,
+    reinvest_delay_minutes: int = 1,
+) -> dict[str, Any]:
+    """Dollar-denominated portfolio simulation on already-filtered results.
+
+    Walks forward chronologically through trades that were "taken" by the
+    allocation engine, tracking actual cash, position sizing, and reinvestment
+    delay.  Returns starting/ending balance and return percentage.
+    """
+    # 1. Filter to taken trades only
+    taken = [
+        r for r in results
+        if r.pnl_pct is not None
+        and r.exit_reason not in ("skipped", "no_data", "unknown_strategy")
+    ]
+    if not taken:
+        return {
+            "sim_starting": round(starting_amount, 2),
+            "sim_ending": round(starting_amount, 2),
+            "sim_return_pct": 0.0,
+            "sim_trades": 0,
+        }
+
+    # 2. Sort chronologically
+    taken.sort(key=lambda r: r.entry_time)
+
+    # 3. Derive max concurrent positions
+    if alloc_key == "max_positions":
+        max_concurrent = int(alloc_params.get("max_pos", 10))
+    elif alloc_key in ("fixed_dollar", "ranking_realloc"):
+        alloc_pct = float(alloc_params.get("alloc_pct", 5))
+        max_concurrent = max(1, int(100 / alloc_pct))
+    else:  # "none" or unknown
+        max_concurrent = _peak_concurrency(taken)
+
+    # 4. Walk forward
+    cash = starting_amount
+    # sid -> {invested, exit_time, pnl_pct}
+    active: dict[str, dict[str, Any]] = {}
+    # (available_at_iso, amount)
+    pending_cash: list[tuple[str, float]] = []
+    sim_trades = 0
+    MIN_POSITION = 1.0  # ignore dust
+
+    for r in taken:
+        cur_time = r.entry_time
+
+        # 4a. Evict closed positions → pending cash
+        closed_sids = [
+            sid for sid, pos in active.items()
+            if pos["exit_time"] is not None and pos["exit_time"] <= cur_time
+        ]
+        for sid in closed_sids:
+            pos = active.pop(sid)
+            proceeds = pos["invested"] * (1 + pos["pnl_pct"] / 100)
+            if reinvest_delay_minutes > 0:
+                avail_at = _add_minutes_iso(pos["exit_time"], reinvest_delay_minutes)
+                pending_cash.append((avail_at, proceeds))
+            else:
+                cash += proceeds
+
+        # 4b. Release matured pending cash
+        still_pending: list[tuple[str, float]] = []
+        for avail_at, amount in pending_cash:
+            if avail_at <= cur_time:
+                cash += amount
+            else:
+                still_pending.append((avail_at, amount))
+        pending_cash = still_pending
+
+        # 4c. Try to open position
+        open_slots = max_concurrent - len(active)
+        if open_slots > 0 and cash >= MIN_POSITION:
+            position_size = cash / open_slots
+            cash -= position_size
+            active[r.snapshot_id] = {
+                "invested": position_size,
+                "exit_time": r.exit_time,
+                "pnl_pct": r.pnl_pct,
+            }
+            sim_trades += 1
+
+    # 5. Close remaining positions + collect pending cash
+    for pos in active.values():
+        cash += pos["invested"] * (1 + pos["pnl_pct"] / 100)
+    for _, amount in pending_cash:
+        cash += amount
+
+    ending = cash
+    return_pct = (ending - starting_amount) / starting_amount * 100 if starting_amount > 0 else 0.0
+
+    # Compute CAGR-based daily return over the trading-day span
+    sim_daily_pct: float | None = None
+    sim_span_days: float | None = None
+    if sim_trades > 0 and ending > 0 and starting_amount > 0:
+        first_entry = taken[0].entry_time
+        # Last exit: latest exit_time among taken trades (or entry_time if no exit)
+        last_exit = max(
+            (r.exit_time or r.entry_time) for r in taken
+            if r.pnl_pct is not None
+        )
+        try:
+            dt_start = datetime.fromisoformat(first_entry.replace("Z", "+00:00"))
+            dt_end = datetime.fromisoformat(last_exit.replace("Z", "+00:00"))
+            # Business days between dates (Mon-Fri)
+            bdays = int(np.busday_count(dt_start.date(), dt_end.date()))
+            # Add fractional intraday component
+            if dt_start.date() == dt_end.date():
+                # Same day: fraction of a trading day (390 min = 1 day)
+                minutes = max((dt_end - dt_start).total_seconds() / 60, 1)
+                trading_days = minutes / _BARS_PER_DAY
+            else:
+                trading_days = max(bdays, 1)
+            sim_span_days = round(trading_days, 2)
+            ratio = ending / starting_amount
+            if ratio > 0 and trading_days > 0:
+                sim_daily_pct = round((ratio ** (1 / trading_days) - 1) * 100, 4)
+        except (ValueError, OverflowError):
+            pass
+
+    return {
+        "sim_starting": round(starting_amount, 2),
+        "sim_ending": round(ending, 2),
+        "sim_return_pct": round(return_pct, 2),
+        "sim_trades": sim_trades,
+        "sim_daily_pct": sim_daily_pct,
+        "sim_span_days": sim_span_days,
+    }
+
+
+# ---------------------------------------------------------------------------
 # Persistent OHLCV cache (1-min bars, stored per symbol per date)
 # ---------------------------------------------------------------------------
 

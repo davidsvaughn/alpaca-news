@@ -40,18 +40,35 @@
   margin-right: 0;
 }
 
-.bt-toolbar {
+.bt-panel > .card-body {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0 .7rem;
+}
+
+.bt-toolbar {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: subgrid;
   align-items: end;
-  justify-content: flex-start;
-  gap: .75rem 1rem;
+  gap: .75rem .7rem;
   border-bottom: 1px solid #d8dee8;
   padding-bottom: .8rem;
 }
 
 .bt-strategy-row {
   display: contents;
+}
+
+.bt-toolbar-strategy { grid-column: 1; }
+.bt-toolbar-allocation { grid-column: 2; }
+.bt-toolbar-sim { grid-column: 3; }
+.bt-toolbar-actions {
+  grid-column: 4;
+  display: flex;
+  align-items: end;
+  justify-self: end;
+  gap: .5rem;
 }
 
 .bt-ui-label {
@@ -72,10 +89,19 @@
   min-width: 68px;
 }
 
+.bt-toolbar-sim .bt-ui-label { color: #198754; }
+.bt-toolbar-sim .bt-inline-controls {
+  display: flex;
+  align-items: end;
+  gap: .5rem;
+  flex-wrap: nowrap;
+}
+
 .bt-layout {
-  margin-top: .75rem;
+  grid-column: 1 / -1;
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: subgrid;
+  margin-top: .75rem;
   gap: .7rem;
   align-items: start;
 }
@@ -85,21 +111,13 @@
   border: 1px solid #d9e0ea;
   border-radius: .6rem;
   padding: .65rem .75rem;
-  min-width: 250px;
 }
 .bt-section-params { grid-column: 1; }
 .bt-section-alloc { grid-column: 2; }
 .bt-section-session { grid-column: 3; }
 .bt-section-risk { grid-column: 4; }
 
-.bt-toolbar-strategy { grid-column: 1; }
-.bt-toolbar-allocation { grid-column: 2; }
-.bt-toolbar-actions {
-  grid-column: 3;
-  display: flex;
-  align-items: end;
-  gap: .5rem;
-}
+.bt-stats { grid-column: 1 / -1; }
 
 .bt-section-title {
   margin: 0 0 .45rem;
@@ -212,13 +230,17 @@
   .bt-panel {
     width: 100%;
   }
-  .bt-toolbar {
+  .bt-panel > .card-body {
     grid-template-columns: 1fr;
   }
   .bt-toolbar-strategy,
   .bt-toolbar-allocation,
+  .bt-toolbar-sim,
   .bt-toolbar-actions {
     grid-column: auto;
+  }
+  .bt-toolbar-actions {
+    justify-self: start;
   }
   .bt-action-group {
     width: 100%;
@@ -232,10 +254,6 @@
   #bt-strategy {
     min-width: 0;
     width: 100%;
-  }
-  .bt-layout,
-  .bt-stats {
-    grid-template-columns: 1fr;
   }
   .bt-section-params,
   .bt-section-alloc,
@@ -299,6 +317,25 @@
           <select id="bt-allocation" class="form-select form-select-sm" onchange="onAllocationChange()">
             <option value="none">None (Unlimited)</option>
           </select>
+        </div>
+        <div class="bt-toolbar-sim">
+          <label class="bt-ui-label mb-1">Portfolio Sim</label>
+          <div class="bt-inline-controls">
+            <div class="bt-inline-field">
+              <label class="bt-control-label mb-0" for="bt-sim-start">Starting $</label>
+              <input type="number" id="bt-sim-start" value="10000" min="1" step="100"
+                     class="form-control form-control-sm bt-short-input" style="width:100px;"
+                     onchange="saveBtSettings()">
+            </div>
+            <div class="bt-inline-field">
+              <label class="bt-control-label mb-0" for="bt-sim-delay">Delay</label>
+              <div class="bt-inline-input">
+                <input type="number" id="bt-sim-delay" value="1" min="0" max="1440" step="1"
+                       class="form-control form-control-sm bt-short-input" onchange="saveBtSettings()">
+                <span class="small text-muted">m</span>
+              </div>
+            </div>
+          </div>
         </div>
         <div class="bt-toolbar-actions">
           <div class="btn-group btn-group-sm bt-action-group" role="group" aria-label="backtest actions">
@@ -402,6 +439,17 @@
         <div id="bt-sharpe-b" class="bt-metric-row">
           <span class="bt-metric-label" title="Sharpe ratio (fixed capital split)">Sharpe(B):</span>
           <span id="bt-sharpe-b-val" class="fw-bold"></span>
+        </div>
+      </div>
+
+      <div id="bt-sim-card" class="bt-metric bt-metric-pair d-none" style="grid-column:1/-1;">
+        <div id="bt-sim-result" class="bt-metric-row" style="white-space:nowrap;">
+          <span class="bt-metric-label" title="Dollar-denominated portfolio simulation">Sim:</span>
+          <span id="bt-sim-val" class="fw-bold"></span>
+        </div>
+        <div id="bt-sim-daily" class="bt-metric-row d-none">
+          <span class="bt-metric-label" title="CAGR-based daily return over trading days spanned">Daily:</span>
+          <span id="bt-sim-daily-val" class="fw-bold"></span>
         </div>
       </div>
 
@@ -779,7 +827,9 @@ function saveBtSettings() {
   var guardStop = parseFloat(document.getElementById('bt-guard-stop').value) || 0;
   var guardTarget = parseFloat(document.getElementById('bt-guard-target').value) || 0;
   var costBps = parseFloat(document.getElementById('bt-cost-bps').value) || 0;
-  localStorage.setItem(_BT_SETTINGS_KEY, JSON.stringify({extHours: ext, closeTime: closeTime, minHold: minHold, guardStop: guardStop, guardTarget: guardTarget, costBps: costBps}));
+  var simStart = parseFloat(document.getElementById('bt-sim-start').value) || 10000;
+  var simDelay = parseInt(document.getElementById('bt-sim-delay').value) || 1;
+  localStorage.setItem(_BT_SETTINGS_KEY, JSON.stringify({extHours: ext, closeTime: closeTime, minHold: minHold, guardStop: guardStop, guardTarget: guardTarget, costBps: costBps, simStart: simStart, simDelay: simDelay}));
 }
 
 function loadBtSettings() {
@@ -804,6 +854,12 @@ function loadBtSettings() {
     }
     if (s.costBps != null) {
       document.getElementById('bt-cost-bps').value = s.costBps;
+    }
+    if (s.simStart != null) {
+      document.getElementById('bt-sim-start').value = s.simStart;
+    }
+    if (s.simDelay != null) {
+      document.getElementById('bt-sim-delay').value = s.simDelay;
     }
   } catch(e) {}
 }
@@ -1053,10 +1109,12 @@ function runBacktest() {
   var guardStop = parseFloat(document.getElementById('bt-guard-stop').value) || 0;
   var guardTarget = parseFloat(document.getElementById('bt-guard-target').value) || 0;
   var costBps = parseFloat(document.getElementById('bt-cost-bps').value) || 0;
+  var simStart = parseFloat(document.getElementById('bt-sim-start').value) || 0;
+  var simDelay = parseInt(document.getElementById('bt-sim-delay').value) || 1;
   fetch('/api/strategies/backtest', {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({strategy: strategy, params: params, allocation: _btCurrentAllocation, allocation_params: allocParams, filters: filters, market_close: marketClose, min_hold: minHold, guard_stop_pct: guardStop, guard_target_pct: guardTarget, cost_bps: costBps}),
+    body: JSON.stringify({strategy: strategy, params: params, allocation: _btCurrentAllocation, allocation_params: allocParams, filters: filters, market_close: marketClose, min_hold: minHold, guard_stop_pct: guardStop, guard_target_pct: guardTarget, cost_bps: costBps, starting_amount: simStart, reinvest_delay_minutes: simDelay}),
   })
   .then(function(r) { return r.json(); })
   .then(function(data) {
@@ -1231,6 +1289,38 @@ function _updateAvgPnl() {
   _syncMetricPair('bt-pair-a', 'bt-ann-a', 'bt-sharpe-a', 'bt-pair-a-divider');
   _syncMetricPair('bt-pair-b', 'bt-ann-b', 'bt-sharpe-b', 'bt-pair-b-divider');
 
+  // Portfolio simulation result
+  var simCard = document.getElementById('bt-sim-card');
+  if (s.sim_starting != null && s.sim_ending != null) {
+    var simVal = document.getElementById('bt-sim-val');
+    var simSign = s.sim_return_pct >= 0 ? '+' : '';
+    var simCls = s.sim_return_pct >= 0 ? 'text-success' : 'text-danger';
+    simVal.innerHTML = '$' + Number(s.sim_starting).toLocaleString()
+      + ' &rarr; <span class="' + simCls + '">$' + Number(s.sim_ending).toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2}) + '</span>'
+      + ' <span class="' + simCls + ' small">(' + simSign + s.sim_return_pct.toFixed(1) + '%)</span>'
+      + ' <span class="small text-muted">(' + s.sim_trades + ' trades)</span>';
+    simVal.className = 'fw-bold';
+    // Daily CAGR return
+    var simDailyDiv = document.getElementById('bt-sim-daily');
+    var simDailyVal = document.getElementById('bt-sim-daily-val');
+    if (s.sim_daily_pct != null && s.sim_span_days != null) {
+      var dSign = s.sim_daily_pct >= 0 ? '+' : '';
+      var dCls = s.sim_daily_pct >= 0 ? 'text-success' : 'text-danger';
+      var daysLabel = s.sim_span_days < 1
+        ? (s.sim_span_days * 390).toFixed(0) + ' min'
+        : s.sim_span_days.toFixed(1) + 'd';
+      simDailyVal.innerHTML = '<span class="' + dCls + '">' + dSign + s.sim_daily_pct.toFixed(3) + '%/day</span>'
+        + ' <span class="small text-muted">(' + daysLabel + ' span)</span>';
+      simDailyVal.className = 'fw-bold';
+      simDailyDiv.classList.remove('d-none');
+    } else {
+      simDailyDiv.classList.add('d-none');
+    }
+    simCard.classList.remove('d-none');
+  } else {
+    simCard.classList.add('d-none');
+  }
+
   // Allocation stats
   var allocDiv = document.getElementById('bt-alloc-stats');
   var allocText = document.getElementById('bt-alloc-stats-text');
@@ -1260,6 +1350,7 @@ function clearBacktest() {
   }
   document.getElementById('bt-stats').classList.add('d-none');
   document.getElementById('bt-alloc-stats').classList.add('d-none');
+  document.getElementById('bt-sim-card').classList.add('d-none');
   document.getElementById('bt-clear-btn').classList.add('d-none');
 }
 

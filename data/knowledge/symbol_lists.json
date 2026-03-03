@@ -511,7 +511,19 @@
     "BBAI",
     "WWW",
     "TREE",
-    "CFFI"
+    "CFFI",
+    "SEM",
+    "WFC",
+    "ADV",
+    "KLAR",
+    "SHOP",
+    "GM",
+    "CVNA",
+    "QDEL",
+    "DCYHF",
+    "APLD",
+    "WBS",
+    "SRTA"
   ],
   "crypto": [],
   "rejected": [
@@ -606,5 +618,5 @@
     "POU",
     "PRY"
   ],
-  "last_updated": "2026-03-03T18:26:35.944228+00:00"
+  "last_updated": "2026-03-03T19:44:35.725922+00:00"
 }
