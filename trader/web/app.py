@@ -12,7 +12,7 @@ from typing import Any
 from urllib.parse import urlencode
 
 from fastapi import FastAPI, Form, Request
-from fastapi.responses import HTMLResponse, Response
+from fastapi.responses import HTMLResponse, JSONResponse, Response
 from fastapi.templating import Jinja2Templates
 
 from trader.config import Settings, load_settings
@@ -373,7 +373,6 @@ def create_app(
         headline: str | None = None,
         signal: str | None = None,
         price_10_min: str | None = None,
-        price_10_max: str | None = None,
         price_min: str | None = None,
         price_max: str | None = None,
         avg_vol_min: str | None = None,
@@ -396,7 +395,6 @@ def create_app(
         )
         sort_col_norm, sort_dir_norm = _normalize_sort(sort_col, sort_dir)
         price_10_min_val = _parse_optional_float(price_10_min)
-        price_10_max_val = _parse_optional_float(price_10_max)
         price_min_val = _parse_optional_float(price_min)
         price_max_val = _parse_optional_float(price_max)
         # UI inputs are unit-scaled:
@@ -418,7 +416,6 @@ def create_app(
             headline=headline,
             signal_direction=signal_direction,
             price_10_min=price_10_min_val,
-            price_10_max=price_10_max_val,
         )
         base_snaps = get_all_snapshots(
             db,
@@ -429,7 +426,6 @@ def create_app(
             headline=headline,
             signal_direction=signal_direction,
             price_10_min=price_10_min_val,
-            price_10_max=price_10_max_val,
             limit=max(base_total, 1),
             offset=0,
         )
@@ -437,7 +433,7 @@ def create_app(
         symbols = [_primary_symbol(s) for s in base_snaps]
         market_by_symbol = _fetch_market_metrics(symbols) if include_market_metrics else {}
         now_utc = datetime.now(timezone.utc)
-        price_delay_delta = timedelta(minutes=max(0, settings.price_delay_minutes))
+        price_delay_delta = timedelta(minutes=max(0, app.state.settings.price_delay_minutes))
 
         filtered_rows: list[dict[str, Any]] = []
         for snap in base_snaps:
@@ -484,7 +480,6 @@ def create_app(
             "created_after": created_after or "",
             "created_before": created_before or "",
             "price_10_min_filter": price_10_min or "",
-            "price_10_max_filter": price_10_max or "",
             "price_min_filter": price_min or "",
             "price_max_filter": price_max or "",
             "avg_vol_min_filter": avg_vol_min or "",
@@ -538,7 +533,6 @@ def create_app(
         headline: str | None = None,
         signal: str | None = None,
         price_10_min: str | None = None,
-        price_10_max: str | None = None,
         price_min: str | None = None,
         price_max: str | None = None,
         avg_vol_min: str | None = None,
@@ -560,7 +554,6 @@ def create_app(
         )
         sort_col_norm, sort_dir_norm = _normalize_sort(sort_col, sort_dir)
         price_10_min_val = _parse_optional_float(price_10_min)
-        price_10_max_val = _parse_optional_float(price_10_max)
         total = count_snapshots(
             db,
             symbol=symbol,
@@ -570,7 +563,6 @@ def create_app(
             headline=headline,
             signal_direction=signal_direction,
             price_10_min=price_10_min_val,
-            price_10_max=price_10_max_val,
         )
         return templates.TemplateResponse(
             request=request,
@@ -579,7 +571,6 @@ def create_app(
                      "headline_filter": headline,
                      "signal_filter": signal_filter,
                      "price_10_min_filter": price_10_min or "",
-                     "price_10_max_filter": price_10_max or "",
                      "price_min_filter": price_min or "",
                      "price_max_filter": price_max or "",
                      "avg_vol_min_filter": avg_vol_min or "",
@@ -592,7 +583,7 @@ def create_app(
                      "sort_dir": sort_dir_norm,
                      "explored_only": explored_only, "total": total,
                      "created_after": created_after or "", "created_before": created_before or "",
-                     "price_delay_minutes": settings.price_delay_minutes},
+                     "price_delay_minutes": app.state.settings.price_delay_minutes},
         )
 
     @app.get("/snapshots/{snapshot_id}", response_class=HTMLResponse)
@@ -759,7 +750,6 @@ def create_app(
         headline: str | None = None,
         signal: str | None = None,
         price_10_min: str | None = None,
-        price_10_max: str | None = None,
         price_min: str | None = None,
         price_max: str | None = None,
         avg_vol_min: str | None = None,
@@ -782,7 +772,6 @@ def create_app(
             headline=headline,
             signal=signal,
             price_10_min=price_10_min,
-            price_10_max=price_10_max,
             price_min=price_min,
             price_max=price_max,
             avg_vol_min=avg_vol_min,
@@ -808,7 +797,6 @@ def create_app(
                 "created_before": meta["created_before"],
                 "signal": meta["signal_filter"],
                 "price_10_min": meta["price_10_min_filter"],
-                "price_10_max": meta["price_10_max_filter"],
                 "price_min": meta["price_min_filter"],
                 "price_max": meta["price_max_filter"],
                 "avg_vol_min": meta["avg_vol_min_filter"],
@@ -836,7 +824,6 @@ def create_app(
                 "headline_filter": meta["headline_filter"],
                 "signal_filter": meta["signal_filter"],
                 "price_10_min_filter": meta["price_10_min_filter"],
-                "price_10_max_filter": meta["price_10_max_filter"],
                 "price_min_filter": meta["price_min_filter"],
                 "price_max_filter": meta["price_max_filter"],
                 "avg_vol_min_filter": meta["avg_vol_min_filter"],
@@ -851,7 +838,7 @@ def create_app(
                 "explored_only": meta["explored_only"],
                 "created_after": meta["created_after"],
                 "created_before": meta["created_before"],
-                "price_delay_minutes": settings.price_delay_minutes,
+                "price_delay_minutes": app.state.settings.price_delay_minutes,
             },
         )
 
@@ -862,7 +849,7 @@ def create_app(
         if not ids:
             return {"deleted": 0}
         # Also remove JSON files from disk
-        snap_dir = Path(settings.data_dir) / "snapshots"
+        snap_dir = Path(app.state.settings.data_dir) / "snapshots"
         for sid in ids:
             for f in snap_dir.glob(f"*{sid}*"):
                 f.unlink(missing_ok=True)
@@ -994,7 +981,6 @@ def create_app(
                 headline=(str(filters.get("headline")).strip() if filters.get("headline") is not None else None),
                 signal=(str(filters.get("signal")).strip() if filters.get("signal") is not None else None),
                 price_10_min=(str(filters.get("price_10_min")).strip() if filters.get("price_10_min") is not None else None),
-                price_10_max=(str(filters.get("price_10_max")).strip() if filters.get("price_10_max") is not None else None),
                 price_min=(str(filters.get("price_min")).strip() if filters.get("price_min") is not None else None),
                 price_max=(str(filters.get("price_max")).strip() if filters.get("price_max") is not None else None),
                 avg_vol_min=(str(filters.get("avg_vol_min")).strip() if filters.get("avg_vol_min") is not None else None),
@@ -1033,12 +1019,12 @@ def create_app(
 
         if not entries:
             return []
-        res_min = settings.stats_resolution_minutes
+        res_min = app.state.settings.stats_resolution_minutes
         engine_trace: dict[str, Any] | None = {} if trace_enabled else None
         t_engine = time.perf_counter()
         results = await asyncio.to_thread(
             run_backtest, strategy_key, params, entries, market_close, min_hold,
-            guard_stop_pct, guard_target_pct, settings.price_delay_minutes,
+            guard_stop_pct, guard_target_pct, app.state.settings.price_delay_minutes,
             res_min, engine_trace,
         )
         _mark("run_backtest", t_engine)
@@ -1212,6 +1198,26 @@ def create_app(
             f"{restart_note}"
             "<script>setTimeout(() => location.reload(), 3000)</script>"
         )
+
+    # ------------------------------------------------------------------
+    # Price delay minutes (inline update from snapshots table)
+    # ------------------------------------------------------------------
+
+    @app.post("/api/settings/price-delay")
+    async def api_set_price_delay(request: Request):
+        """Update PRICE_DELAY_MINUTES in .env and reload settings."""
+        body = await request.json()
+        minutes = int(body.get("minutes", 0))
+        if minutes < 1 or minutes > 120:
+            return JSONResponse({"error": "minutes must be 1-120"}, status_code=400)
+
+        from dotenv import set_key
+        env_path = str(Path.cwd() / ".env")
+        set_key(env_path, "PRICE_DELAY_MINUTES", str(minutes))
+
+        new = load_settings(override=True)
+        app.state.settings = new
+        return JSONResponse({"price_delay_minutes": new.price_delay_minutes})
 
     # ------------------------------------------------------------------
     # Observer mode
@@ -1513,7 +1519,7 @@ def create_app(
         )
         wb = WatchBuilder(symbol=primary_symbol, entry=entry)
         watch = wb.to_watch()
-        watch_path = Path(settings.data_dir) / "watches" / f"{watch.watch_id}.json"
+        watch_path = Path(app.state.settings.data_dir) / "watches" / f"{watch.watch_id}.json"
         watch.persist(watch_path)
         insert_watch(db, watch=watch.to_dict())
 

@@ -69,6 +69,11 @@ DEBUG = os.getenv("DEBUG", "false").lower() in ("true", "1")
 # ``run_watch_loop`` before worker threads start.
 _triage_semaphore: threading.Semaphore | None = None
 
+# In-flight symbol tracking — prevents duplicate explorations when multiple
+# articles for the same ticker arrive near-simultaneously.
+_in_flight_symbols: dict[str, str] = {}   # symbol.upper() → snap_id
+_in_flight_lock = threading.Lock()
+
 
 def _describe_api_error(e: Exception) -> str:
     """Extract provider, status, and actionable info from API errors."""
@@ -875,6 +880,9 @@ def _process_news_body(
     recent_symbols: set[str] = set()
     if cooldown_minutes > 0 and incoming_symbols and not manual_explore_source:
         recent_symbols = set(get_recently_explored_symbols(db, lookback_minutes=cooldown_minutes))
+        # Also treat in-flight symbols as "on cooldown"
+        with _in_flight_lock:
+            recent_symbols |= set(_in_flight_symbols.keys())
         not_cooled = [s for s in incoming_symbols if s not in recent_symbols]
         if not not_cooled:
             # ALL symbols on cooldown — skip triage entirely
@@ -1042,33 +1050,44 @@ def _process_news_body(
     # --- Launch top K explorations (sequential) ---
     explore_symbols = symbols[:max(1, settings.triage_max_symbols)]
 
-    for sym in explore_symbols:
-        sym_snap_id = snap_id if len(explore_symbols) == 1 else snapshot_id_for_symbol(snap_id, sym)
+    # Mark symbols as in-flight (prevents duplicate explorations from
+    # near-simultaneous articles for the same ticker).
+    with _in_flight_lock:
+        for sym in explore_symbols:
+            _in_flight_symbols[sym.upper()] = snap_id
 
-        # Per-symbol idempotency check
-        if snapshot_exists(db, sym_snap_id):
-            if not settings.mock_llm and is_mock_snapshot(db, sym_snap_id):
-                delete_snapshot(db, sym_snap_id)
-            else:
-                continue
+    try:
+        for sym in explore_symbols:
+            sym_snap_id = snap_id if len(explore_symbols) == 1 else snapshot_id_for_symbol(snap_id, sym)
 
-        # Primary symbol first, others as context
-        ordered = [sym] + [s for s in symbols if s != sym]
+            # Per-symbol idempotency check
+            if snapshot_exists(db, sym_snap_id):
+                if not settings.mock_llm and is_mock_snapshot(db, sym_snap_id):
+                    delete_snapshot(db, sym_snap_id)
+                else:
+                    continue
 
-        _run_single_exploration(
-            symbol=sym,
-            all_symbols=ordered,
-            snap_id=sym_snap_id,
-            news=news,
-            trigger=trigger,
-            triage_dict=triage_dict,
-            settings=settings,
-            db=db,
-            bus=bus,
-            xstream=xstream,
-            tracker=tracker,
-            llm=llm,
-        )
+            # Primary symbol first, others as context
+            ordered = [sym] + [s for s in symbols if s != sym]
+
+            _run_single_exploration(
+                symbol=sym,
+                all_symbols=ordered,
+                snap_id=sym_snap_id,
+                news=news,
+                trigger=trigger,
+                triage_dict=triage_dict,
+                settings=settings,
+                db=db,
+                bus=bus,
+                xstream=xstream,
+                tracker=tracker,
+                llm=llm,
+            )
+    finally:
+        with _in_flight_lock:
+            for sym in explore_symbols:
+                _in_flight_symbols.pop(sym.upper(), None)
 
 
 # ---------------------------------------------------------------------------

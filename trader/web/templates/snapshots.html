@@ -427,7 +427,7 @@
 // =====================================================================
 var _SRV_KEYS = [
   'symbol', 'created_after', 'created_before', 'headline', 'signal',
-  'price_10_min', 'price_10_max',
+  'price_10_min',
   'price_min', 'price_max', 'avg_vol_min', 'avg_vol_max',
   'mkt_cap_min', 'mkt_cap_max', 'pe_min', 'pe_max',
   'sort_col', 'sort_dir'
@@ -662,6 +662,33 @@ function initServerFilters() {
       var immediate = (el.tagName === 'SELECT' || el.type === 'date');
       _srvDebounce = setTimeout(function() { reloadTable(); }, immediate ? 0 : 400);
     });
+  });
+}
+
+// =====================================================================
+// Price delay minutes (inline setting)
+// =====================================================================
+var _priceDelayDebounce = null;
+
+function initPriceDelayInput() {
+  var el = document.getElementById('price-delay-input');
+  if (!el) return;
+  el.addEventListener('change', function() {
+    var val = parseInt(el.value, 10);
+    if (!val || val < 1 || val > 120) return;
+    clearTimeout(_priceDelayDebounce);
+    _priceDelayDebounce = setTimeout(function() {
+      fetch('/api/settings/price-delay', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({minutes: val})
+      }).then(function(r) { return r.json(); }).then(function(data) {
+        // Update column header label
+        var label = document.querySelector('[data-col="price_10"] .col-label');
+        if (label) label.textContent = 'Price@' + data.price_delay_minutes;
+        reloadTable();
+      });
+    }, 600);
   });
 }
 
@@ -1251,6 +1278,7 @@ document.addEventListener('htmx:afterSwap', function(e) {
     initResizeHandles();
     initSortHandlers();
     initServerFilters();
+    initPriceDelayInput();
     initClientFilters();
     loadFilterState();
     applyClientFilters();

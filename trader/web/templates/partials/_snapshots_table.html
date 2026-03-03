@@ -41,7 +41,7 @@
         </th>
         <th>
           <div class="fcw"><input type="number" class="form-control form-control-sm srv-filter" data-key="price_10_min" value="{{ price_10_min_filter }}" placeholder="Min" step="any" style="font-size:.7rem;"><span class="fx" onclick="clearFilter(this)">&times;</span></div>
-          <div class="fcw" style="margin-top:2px"><input type="number" class="form-control form-control-sm srv-filter" data-key="price_10_max" value="{{ price_10_max_filter }}" placeholder="Max" step="any" style="font-size:.7rem;"><span class="fx" onclick="clearFilter(this)">&times;</span></div>
+          <div class="fcw" style="margin-top:2px"><input type="number" id="price-delay-input" class="form-control form-control-sm" value="{{ price_delay_minutes | default(10) }}" placeholder="Min" step="1" min="1" max="120" title="Delay minutes" style="font-size:.7rem; width:50px;"></div>
         </th>
         <th>
           <div class="fcw"><input type="number" class="form-control form-control-sm srv-filter" data-key="price_min" value="{{ price_min_filter }}" placeholder="Min" step="any" style="font-size:.7rem;"><span class="fx" onclick="clearFilter(this)">&times;</span></div>
