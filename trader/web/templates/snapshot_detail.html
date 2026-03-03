@@ -21,6 +21,8 @@
 .modality-fundamentals { background-color: #198754; color: #fff; }
 .modality-news { background-color: #ffc107; }
 .modality-macro { background-color: #dc3545; color: #fff; }
+.input-chevron { transition: transform 0.2s; transform: rotate(-90deg); }
+[aria-expanded="true"] .input-chevron { transform: rotate(0deg); }
 {% endblock %}
 
 {% block content %}
@@ -239,14 +241,16 @@
   {% set shared_input = first_msg.split(prior_marker, 1)[0] %}
 {% endif %}
 <div class="card mb-4 border-secondary">
-  <div class="card-header d-flex align-items-center">
+  <div class="card-header d-flex align-items-center" role="button" data-bs-toggle="collapse" data-bs-target="#inputPanel" aria-expanded="false" aria-controls="inputPanel" style="cursor:pointer;">
     <strong class="me-auto">Input</strong>
-    <span class="badge bg-light text-dark border">Shared + agent-specific context</span>
+    <span class="badge bg-light text-dark border me-2">Shared + agent-specific context</span>
+    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" fill="currentColor" viewBox="0 0 16 16" class="input-chevron"><path fill-rule="evenodd" d="M1.646 4.646a.5.5 0 0 1 .708 0L8 10.293l5.646-5.647a.5.5 0 0 1 .708.708l-6 6a.5.5 0 0 1-.708 0l-6-6a.5.5 0 0 1 0-.708"/></svg>
   </div>
-  <div class="card-body">
-    <h6 class="mb-2">Shared Base Input (all agents)</h6>
-    <div class="findings-text p-2 bg-light rounded border findings-md mb-0">{{ shared_input }}</div>
-
+  <div class="collapse" id="inputPanel">
+    <div class="card-body">
+      <h6 class="mb-2">Shared Base Input (all agents)</h6>
+      <div class="findings-text p-2 bg-light rounded border findings-md mb-0">{{ shared_input }}</div>
+    </div>
   </div>
 </div>
 {% endif %}
@@ -277,12 +281,12 @@
       {% set triage_usage = triage.get('usage', {}) or {} %}
       <div class="accordion-item">
         <h2 class="accordion-header">
-          <button class="accordion-button py-2" type="button" data-bs-toggle="collapse" data-bs-target="#stage-triage">
+          <button class="accordion-button collapsed py-2" type="button" data-bs-toggle="collapse" data-bs-target="#stage-triage">
             <span class="badge bg-info me-2">triage</span>
             {{ triage.get('action', '?') }} ({{ "%.0f"|format((triage.get('confidence', 0)|float) * 100) }}%)
           </button>
         </h2>
-        <div id="stage-triage" class="accordion-collapse collapse show" data-bs-parent="#pipeline-details-accordion">
+        <div id="stage-triage" class="accordion-collapse collapse" data-bs-parent="#pipeline-details-accordion">
           <div class="accordion-body py-2 px-3" style="font-size: 0.84rem;">
             <dl class="row mb-0">
               <dt class="col-sm-2">action</dt>

@@ -489,7 +489,26 @@
     "DOX",
     "VEON",
     "NDRA",
-    "PACB"
+    "PACB",
+    "MU",
+    "STX",
+    "CCJ",
+    "PINS",
+    "CRDO",
+    "OMC",
+    "WPP",
+    "JHG",
+    "VCTR",
+    "XRX",
+    "MCO",
+    "ROOT",
+    "GLXY",
+    "PET",
+    "NTIP",
+    "SNOW",
+    "KBDC",
+    "MA",
+    "BBAI"
   ],
   "crypto": [],
   "rejected": [
@@ -577,7 +596,12 @@
     "7203",
     "NTGY",
     "MFG",
-    "VTAL"
+    "VTAL",
+    "LASTIK",
+    "ABRA",
+    "WEIR",
+    "POU",
+    "PRY"
   ],
-  "last_updated": "2026-03-03T16:16:33.356811+00:00"
+  "last_updated": "2026-03-03T18:09:37.084899+00:00"
 }

@@ -172,17 +172,17 @@ def _fetch_earnings_context(symbols: list[str]) -> str:
     return "\n## Earnings context (FinnHub)\n" + "\n\n".join(sections)
 
 
-def _period_returns(bars: list[dict[str, Any]], current_price: float) -> str:
+def _period_returns(bars: list[dict[str, Any]], current_price: float) -> list[tuple[str, str]]:
     """Compute percentage returns at standard timeframes from daily OHLCV bars.
 
-    Returns a compact string like: "1W: -2.3% | 1M: +8.1% | 3M: -15.4%"
+    Returns a list of (label, value) pairs, e.g. [("3D", "+1.2%"), ("1W", "-2.3%")].
     """
     if not bars or current_price <= 0:
-        return ""
+        return []
     # bars are chronological (oldest first); find closes at approximate offsets
     n = len(bars)
-    periods = [("1W", 5), ("1M", 21), ("3M", 63), ("6M", 126), ("1Y", 252)]
-    parts = []
+    periods = [("3D", 3), ("1W", 5), ("1M", 21), ("3M", 63), ("1Y", 252)]
+    results = []
     for label, offset in periods:
         idx = n - offset
         if idx < 0:
@@ -190,8 +190,8 @@ def _period_returns(bars: list[dict[str, Any]], current_price: float) -> str:
         old_close = bars[idx].get("c", 0)
         if old_close and old_close > 0:
             ret = (current_price - old_close) / old_close * 100
-            parts.append(f"{label}: {ret:+.1f}%")
-    return " | ".join(parts)
+            results.append((label, f"{ret:+.1f}%"))
+    return results
 
 
 def prefetch_market_data(symbols: list[str], market: MarketDataService) -> str:
@@ -230,19 +230,17 @@ def prefetch_market_data(symbols: list[str], market: MarketDataService) -> str:
                 vol = quote.get("total_volume") or quote.get("totalVolume", "")
                 vol_str = f"{vol:,.0f}" if isinstance(vol, (int, float)) else str(vol)
 
-                line1 = f"Current: ${current_price:.4g}"
-                if change_pct and isinstance(change_pct, (int, float)):
-                    line1 += f" ({change_pct:+.2f}% today)"
+                line1 = f"${current_price:.4g}"
                 if vol:
                     line1 += f" | Vol: {vol_str}"
 
                 # Fetch 1Y daily bars for period returns
-                returns_str = ""
+                returns_pairs: list[tuple[str, str]] = []
                 try:
                     hist = market.get_price_history(sym, period="1y", interval="1d")
                     bars = hist.get("bars", []) if isinstance(hist, dict) else []
                     if bars and current_price > 0:
-                        returns_str = _period_returns(bars, current_price)
+                        returns_pairs = _period_returns(bars, current_price)
                 except Exception:
                     pass
 
@@ -258,19 +256,21 @@ def prefetch_market_data(symbols: list[str], market: MarketDataService) -> str:
                             if rng > 0 and current_price > 0:
                                 pct_of_range = (current_price - w52_low) / rng * 100
                                 pos = "near lows" if pct_of_range < 15 else "near highs" if pct_of_range > 85 else "mid-range"
-                                range_str = f"52-week: ${w52_low:.2f}–${w52_high:.2f} (at {pct_of_range:.0f}% — {pos})"
+                                range_str = f"${w52_low:.2f}–${w52_high:.2f} (at {pct_of_range:.0f}% — {pos})"
                 except Exception:
                     pass
 
                 rows = [
                     "| Metric | Value |",
                     "|--------|-------|",
-                    f"| Current | {line1} |",
+                    f"| Price | {line1} |",
                 ]
-                if returns_str:
-                    rows.append(f"| Returns | {returns_str} |")
+                if change_pct and isinstance(change_pct, (int, float)):
+                    rows.append(f"| 1D | {change_pct:+.2f}% |")
+                for label, val in returns_pairs:
+                    rows.append(f"| {label} | {val} |")
                 if range_str:
-                    rows.append(f"| 52-week | {range_str} |")
+                    rows.append(f"| 52W range | {range_str} |")
                 sym_sections.append(f"### {sym} — Price & Trend\n" + "\n".join(rows))
         except Exception:
             pass
