@@ -350,10 +350,14 @@ def format_earnings_for_prompt(
         lines.append(f"Earnings track record (last {total} quarters): {beats} beats, {misses} misses")
         # Show most recent surprise
         latest = surprises[0]
-        pct = latest.get("surprisePercent", 0)
+        pct = latest.get("surprisePercent") or 0
         direction = "beat" if pct > 0 else "missed"
-        lines.append(f"  Most recent ({latest.get('period', '?')}): {direction} by {abs(pct):.1f}%"
-                      f" (actual ${latest.get('actual', '?'):.2f} vs est ${latest.get('estimate', '?'):.2f})")
+        actual = latest.get("actual")
+        estimate = latest.get("estimate")
+        detail = ""
+        if actual is not None and estimate is not None:
+            detail = f" (actual ${actual:.2f} vs est ${estimate:.2f})"
+        lines.append(f"  Most recent ({latest.get('period', '?')}): {direction} by {abs(pct):.1f}%{detail}")
 
     return "\n".join(lines)
 
