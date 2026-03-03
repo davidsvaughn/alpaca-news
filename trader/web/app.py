@@ -1432,7 +1432,7 @@ def create_app(
         trigger = snap.get("trigger") or {}
         symbols = trigger.get("symbols") or []
         ticker = symbols[0] if symbols else "UNK"
-        short_id = snap.get("snapshot_id", "unknown")
+        short_id = snap.get("snapshot_id", "unknown")[:8]
         return f"snapshot_{ticker}_{short_id}.{ext}"
 
     @app.get("/api/snapshots/{snapshot_id}/export/md")

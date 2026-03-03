@@ -508,7 +508,10 @@
     "SNOW",
     "KBDC",
     "MA",
-    "BBAI"
+    "BBAI",
+    "WWW",
+    "TREE",
+    "CFFI"
   ],
   "crypto": [],
   "rejected": [
@@ -603,5 +606,5 @@
     "POU",
     "PRY"
   ],
-  "last_updated": "2026-03-03T18:09:37.084899+00:00"
+  "last_updated": "2026-03-03T18:26:35.944228+00:00"
 }
