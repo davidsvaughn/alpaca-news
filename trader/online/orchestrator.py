@@ -60,7 +60,7 @@ from trader.online.agent_pipeline import (
 from trader.online.triage import TriageDecision, run_triage
 from trader.online.activity_tracker import JobAborted
 from trader.online.event_bus import EventBus, PipelineEvent
-from trader.online.price_10min import capture_price_10min_for_snapshot
+from trader.online.price_10min import capture_prices_for_snapshot
 from trader.online.x_stream_service import QualityVerdict, XStreamService, build_rules_for_symbols
 
 DEBUG = os.getenv("DEBUG", "false").lower() in ("true", "1")
@@ -602,21 +602,19 @@ def _run_single_exploration_body(
         })
     )
 
-    # Schedule delayed price capture for the snapshots table
-    _delay_min = settings.price_delay_minutes
+    # Schedule delayed price capture at all offsets (5-20 min)
     _created_at = snapshot.created_at
-    def _capture_price_10min():
+    def _capture_prices():
         try:
-            capture_price_10min_for_snapshot(
+            capture_prices_for_snapshot(
                 db=db,
                 snapshot_id=snap_id,
                 symbol=symbol,
                 created_at=_created_at,
-                delay_minutes=_delay_min,
             )
         except Exception:
-            pass  # best-effort — price_10min will just stay empty
-    threading.Thread(target=_capture_price_10min, daemon=True).start()
+            pass  # best-effort — price_at will just stay empty
+    threading.Thread(target=_capture_prices, daemon=True).start()
 
     # Activity complete — cost now in sealed snapshot
     if tracker is not None:

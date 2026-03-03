@@ -41,7 +41,7 @@
         </th>
         <th>
           <div class="fcw"><input type="number" class="form-control form-control-sm srv-filter" data-key="price_10_min" value="{{ price_10_min_filter }}" placeholder="Min" step="any" style="font-size:.7rem;"><span class="fx" onclick="clearFilter(this)">&times;</span></div>
-          <div class="fcw" style="margin-top:2px"><input type="number" id="price-delay-input" class="form-control form-control-sm" value="{{ price_delay_minutes | default(10) }}" placeholder="Min" step="1" min="1" max="120" title="Delay minutes" style="font-size:.7rem; width:50px;"></div>
+          <div class="fcw" style="margin-top:2px"><input type="number" id="price-delay-input" class="form-control form-control-sm" value="{{ price_delay_minutes | default(10) }}" placeholder="Min" step="1" min="5" max="20" title="Delay minutes (5-20)" style="font-size:.7rem; width:50px;"></div>
         </th>
         <th>
           <div class="fcw"><input type="number" class="form-control form-control-sm srv-filter" data-key="price_min" value="{{ price_min_filter }}" placeholder="Min" step="any" style="font-size:.7rem;"><span class="fx" onclick="clearFilter(this)">&times;</span></div>
@@ -87,7 +87,7 @@
       {% set dir = s.prediction.direction if s.prediction and s.prediction.direction else '' %}
       {% set conf = s.prediction.confidence if s.prediction and s.prediction.confidence is defined else None %}
       <tr data-snapshot-id="{{ s.snapshot_id }}"
-          data-entry-price="{{ s.price_10min if s.price_10min is defined and s.price_10min else '' }}"
+          data-entry-price="{{ s._entry_price if s._entry_price is defined and s._entry_price else '' }}"
           data-entry-time="{{ s.created_at if s.created_at else '' }}"
           data-primary-symbol="{{ primary_sym }}">
         <td><input type="checkbox" class="snap-check" value="{{ s.snapshot_id }}" onchange="updateDeleteBtn()"></td>
@@ -113,9 +113,9 @@
             <span class="text-muted">&mdash;</span>
           {% endif %}
         </td>
-        <td class="small" data-col="price_10" data-sort-val="{{ s.price_10min if s.price_10min is defined and s.price_10min else '' }}">
-          {% if s.price_10min is defined and s.price_10min %}
-            ${{ "%.2f"|format(s.price_10min) }}
+        <td class="small" data-col="price_10" data-sort-val="{{ s._entry_price if s._entry_price is defined and s._entry_price else '' }}">
+          {% if s._entry_price is defined and s._entry_price %}
+            ${{ "%.2f"|format(s._entry_price) }}
           {% elif s._price_10_pending %}
             <span class="text-muted" style="font-size:.72rem;">pending</span>
           {% else %}
@@ -124,10 +124,10 @@
         </td>
         <td class="small" data-col="price" data-sort-val="{{ s._price if s._price is not none else '' }}">
           {% if s._price is not none %}
-            {% if s.price_10min is defined and s.price_10min %}
-              {% if s._price > s.price_10min %}
+            {% if s._entry_price is defined and s._entry_price %}
+              {% if s._price > s._entry_price %}
                 <span class="text-success">{{ s._price_text }}</span>
-              {% elif s._price < s.price_10min %}
+              {% elif s._price < s._entry_price %}
                 <span class="text-danger">{{ s._price_text }}</span>
               {% else %}
                 {{ s._price_text }}

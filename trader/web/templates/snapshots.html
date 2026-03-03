@@ -675,7 +675,7 @@ function initPriceDelayInput() {
   if (!el) return;
   el.addEventListener('change', function() {
     var val = parseInt(el.value, 10);
-    if (!val || val < 1 || val > 120) return;
+    if (!val || val < 5 || val > 20) return;
     clearTimeout(_priceDelayDebounce);
     _priceDelayDebounce = setTimeout(function() {
       fetch('/api/settings/price-delay', {

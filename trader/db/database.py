@@ -726,13 +726,24 @@ def count_all_watches(db: Database, *, status: str | None = None) -> int:
     return row[0] if row else 0
 
 
+def _price_expr(price_delay: int = 10) -> str:
+    """Build a COALESCE expression that reads price_at first, then legacy price_10min."""
+    delay_s = str(int(price_delay))
+    return (
+        f"CAST(COALESCE("
+        f"json_extract(snapshot_json, '$.price_at.\"{delay_s}\"'), "
+        f"json_extract(snapshot_json, '$.price_10min')"
+        f") AS REAL)"
+    )
+
+
 def get_all_snapshots(
     db: Database, *, symbol: str | None = None, explored_only: bool = False,
     created_after: str | None = None, created_before: str | None = None,
     headline: str | None = None,
     signal_direction: str | None = None,
     price_10_min: float | None = None,
-    price_10_max: float | None = None,
+    price_delay: int = 10,
     limit: int = 50, offset: int = 0,
 ) -> list[dict[str, Any]]:
     """Fetch snapshots ordered by created_at DESC, with optional filters."""
@@ -756,11 +767,8 @@ def get_all_snapshots(
         clauses.append("LOWER(json_extract(snapshot_json, '$.prediction.direction')) = :signal_direction")
         params["signal_direction"] = signal_direction.lower()
     if price_10_min is not None:
-        clauses.append("CAST(json_extract(snapshot_json, '$.price_10min') AS REAL) >= :price_10_min")
+        clauses.append(f"{_price_expr(price_delay)} >= :price_10_min")
         params["price_10_min"] = float(price_10_min)
-    if price_10_max is not None:
-        clauses.append("CAST(json_extract(snapshot_json, '$.price_10min') AS REAL) <= :price_10_max")
-        params["price_10_max"] = float(price_10_max)
     where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
     sql = f"SELECT snapshot_json FROM snapshots{where} ORDER BY created_at DESC LIMIT :lim OFFSET :off"
     with db.engine.connect() as conn:
@@ -778,7 +786,7 @@ def count_snapshots(
     headline: str | None = None,
     signal_direction: str | None = None,
     price_10_min: float | None = None,
-    price_10_max: float | None = None,
+    price_delay: int = 10,
 ) -> int:
     """Count snapshots, optionally filtered by symbol and/or explored-only."""
     clauses: list[str] = []
@@ -801,11 +809,8 @@ def count_snapshots(
         clauses.append("LOWER(json_extract(snapshot_json, '$.prediction.direction')) = :signal_direction")
         params["signal_direction"] = signal_direction.lower()
     if price_10_min is not None:
-        clauses.append("CAST(json_extract(snapshot_json, '$.price_10min') AS REAL) >= :price_10_min")
+        clauses.append(f"{_price_expr(price_delay)} >= :price_10_min")
         params["price_10_min"] = float(price_10_min)
-    if price_10_max is not None:
-        clauses.append("CAST(json_extract(snapshot_json, '$.price_10min') AS REAL) <= :price_10_max")
-        params["price_10_max"] = float(price_10_max)
     where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
     sql = f"SELECT COUNT(*) FROM snapshots{where}"
     with db.engine.connect() as conn:

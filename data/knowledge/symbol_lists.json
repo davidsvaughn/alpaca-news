@@ -480,7 +480,16 @@
     "SWRD",
     "ELEK",
     "MTN",
-    "BABA"
+    "BABA",
+    "CI",
+    "CB",
+    "NRG",
+    "NEE",
+    "UPLD",
+    "DOX",
+    "VEON",
+    "NDRA",
+    "PACB"
   ],
   "crypto": [],
   "rejected": [
@@ -570,5 +579,5 @@
     "MFG",
     "VTAL"
   ],
-  "last_updated": "2026-03-03T15:46:24.812925+00:00"
+  "last_updated": "2026-03-03T16:16:33.356811+00:00"
 }

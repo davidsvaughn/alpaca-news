@@ -284,6 +284,52 @@ class SchwabMarketClient:
                 raise
             raise RuntimeError(f"get_intraday_candles({symbol}) failed: {e}") from e
 
+    def get_candles_by_date_range(
+        self,
+        symbol: str,
+        *,
+        start: datetime,
+        end: datetime,
+        frequency: int = 1,
+        extended_hours: bool = True,
+    ) -> list[Candle]:
+        """Fetch minute candles for *symbol* within an absolute date range.
+
+        Uses Schwab's startDate/endDate parameters (more accurate than
+        yfinance for recent intraday data).
+        """
+        if not self.available:
+            raise RuntimeError("Schwab client unavailable")
+        try:
+            resp = self._client.price_history(
+                symbol,
+                frequencyType="minute",
+                frequency=frequency,
+                startDate=start,
+                endDate=end,
+                needExtendedHoursData=extended_hours,
+            )
+            data = resp.json()
+            if data.get("empty", True):
+                return []
+            candles: list[Candle] = []
+            for c in data.get("candles", []):
+                ts_ms = c.get("datetime", 0)
+                ts_iso = datetime.fromtimestamp(ts_ms / 1000, tz=timezone.utc).isoformat()
+                candles.append(Candle(
+                    t=ts_iso,
+                    o=float(c.get("open", 0)),
+                    h=float(c.get("high", 0)),
+                    l=float(c.get("low", 0)),
+                    c=float(c.get("close", 0)),
+                    v=int(c.get("volume", 0)),
+                ))
+            return candles
+        except Exception as e:
+            if DEBUG:
+                raise
+            raise RuntimeError(f"get_candles_by_date_range({symbol}) failed: {e}") from e
+
     # ------------------------------------------------------------------
     # Snapshot quote
     # ------------------------------------------------------------------

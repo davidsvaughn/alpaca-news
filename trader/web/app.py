@@ -263,7 +263,7 @@ def create_app(
                 d = str(pred.get("direction") or "").lower()
                 return signal_rank.get(d)
             if sort_col == "price_10":
-                return _safe_float(row.get("price_10min"))
+                return _safe_float(row.get("_entry_price"))
             if sort_col == "price":
                 return _safe_float(row.get("_price"))
             if sort_col == "avg_vol":
@@ -364,6 +364,15 @@ def create_app(
                     result[sym]["pe"] = pe
         return result
 
+    def _get_entry_price(row: dict, delay: int) -> float | None:
+        """Extract the entry price for a given delay from price_at or legacy price_10min."""
+        price_at = row.get("price_at")
+        if isinstance(price_at, dict):
+            val = price_at.get(str(delay))
+            if val is not None:
+                return _safe_float(val)
+        return _safe_float(row.get("price_10min"))
+
     def _snapshot_rows_for_filters(
         *,
         symbol: str | None = None,
@@ -407,6 +416,7 @@ def create_app(
         pe_min_val = _parse_optional_float(pe_min)
         pe_max_val = _parse_optional_float(pe_max)
 
+        delay = app.state.settings.price_delay_minutes
         base_total = count_snapshots(
             db,
             symbol=symbol,
@@ -416,6 +426,7 @@ def create_app(
             headline=headline,
             signal_direction=signal_direction,
             price_10_min=price_10_min_val,
+            price_delay=delay,
         )
         base_snaps = get_all_snapshots(
             db,
@@ -426,6 +437,7 @@ def create_app(
             headline=headline,
             signal_direction=signal_direction,
             price_10_min=price_10_min_val,
+            price_delay=delay,
             limit=max(base_total, 1),
             offset=0,
         )
@@ -449,10 +461,10 @@ def create_app(
             row["_avg_vol_text"] = _fmt_volume(row["_avg_vol"])
             row["_mkt_cap_text"] = _fmt_mkt_cap(row["_mkt_cap"])
             row["_pe_text"] = _fmt_pe(row["_pe"])
+            row["_entry_price"] = _get_entry_price(row, delay)
             created_at = _parse_iso_utc(row.get("created_at"))
-            has_price_10 = _safe_float(row.get("price_10min")) is not None
             row["_price_10_pending"] = (
-                not has_price_10
+                row["_entry_price"] is None
                 and created_at is not None
                 and (created_at + price_delay_delta) > now_utc
             )
@@ -554,6 +566,7 @@ def create_app(
         )
         sort_col_norm, sort_dir_norm = _normalize_sort(sort_col, sort_dir)
         price_10_min_val = _parse_optional_float(price_10_min)
+        delay = app.state.settings.price_delay_minutes
         total = count_snapshots(
             db,
             symbol=symbol,
@@ -563,6 +576,7 @@ def create_app(
             headline=headline,
             signal_direction=signal_direction,
             price_10_min=price_10_min_val,
+            price_delay=delay,
         )
         return templates.TemplateResponse(
             request=request,
@@ -1001,7 +1015,7 @@ def create_app(
                 sid = str(row.get("snapshot_id") or "").strip()
                 entry_time = str(row.get("created_at") or "").strip()
                 sym = str(row.get("_primary_symbol") or "").strip().upper()
-                price = _safe_float(row.get("price_10min")) or 0.0
+                price = _safe_float(row.get("_entry_price")) or 0.0
                 if not sid or not entry_time or not sym:
                     continue
                 pred = row.get("prediction") or {}
@@ -1208,8 +1222,8 @@ def create_app(
         """Update PRICE_DELAY_MINUTES in .env and reload settings."""
         body = await request.json()
         minutes = int(body.get("minutes", 0))
-        if minutes < 1 or minutes > 120:
-            return JSONResponse({"error": "minutes must be 1-120"}, status_code=400)
+        if minutes < 5 or minutes > 20:
+            return JSONResponse({"error": "minutes must be 5-20"}, status_code=400)
 
         from dotenv import set_key
         env_path = str(Path.cwd() / ".env")
