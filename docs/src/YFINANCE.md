@@ -113,7 +113,33 @@ Three statement types via `ticker.get_income_stmt()`, `ticker.get_balance_sheet(
 
 **Note**: yfinance news comes from Yahoo's aggregated feed. Structure is nested: `article.content.title`, `article.content.provider.displayName`, etc.
 
-### 6. Technical Indicators (via `stockstats`)
+### 6. Analyst Price Targets (`ticker.analyst_price_targets`)
+
+**Used directly in**: `prefetch_market_data()` in `prompt_builder.py`
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `mean` / `current` | float | Mean analyst target price |
+| `high` | float | Highest analyst target |
+| `low` | float | Lowest analyst target |
+
+**Computed**: Upside/downside to mean target vs current price.
+
+**Note**: Called directly via `yf.Ticker(sym).analyst_price_targets` in `prompt_builder.py`, not via `YFinanceClient`.
+
+### 7. Ownership Summary (`ticker.major_holders`)
+
+**Used directly in**: `prefetch_market_data()` in `prompt_builder.py`
+
+Returns a DataFrame with rows like:
+- "% of Shares Held by All Insider"
+- "% of Shares Held by Institutions"
+- "% of Float Held by Institutions"
+- "Number of Institutions Holding Shares"
+
+**Note**: Called directly via `yf.Ticker(sym).major_holders` in `prompt_builder.py`, not via `YFinanceClient`.
+
+### 8. Technical Indicators (via `stockstats`)
 
 **Our module**: [`trader/market/indicators.py`](trader/market/indicators.py)
 **Tool**: `get_technical_indicators` (modality: `technicals`)
@@ -199,9 +225,7 @@ This is why we use yfinance as a **fallback** rather than primary source.
 | `ticker.options` | Options expiration dates | Available |
 | `ticker.option_chain(date)` | Full options chain (calls + puts) | We use Schwab for this |
 | `ticker.calendar` | Earnings/dividend calendar | Available |
-| `ticker.analyst_price_targets` | Analyst consensus targets | Useful addition |
 | `ticker.recommendations` | Analyst recommendations | We use Finnhub instead |
-| `ticker.major_holders` | Top institutional holders | Available |
 | `ticker.institutional_holders` | Detailed institutional holdings | Available |
 | `ticker.sustainability` | ESG scores | Available |
 | `yf.Sector` / `yf.Industry` | Sector/industry overviews | Available |
@@ -212,8 +236,7 @@ This is why we use yfinance as a **fallback** rather than primary source.
 
 ### Potential Additions
 
-- **`analyst_price_targets`** — price target consensus would complement Finnhub ratings
-- **`institutional_holders`** — institutional ownership changes as a signal
+- **`institutional_holders`** — detailed institutional ownership changes as a signal
 - **`earnings_dates`** — alternative to Finnhub earnings calendar
 
 ---

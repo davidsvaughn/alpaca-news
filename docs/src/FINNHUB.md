@@ -125,7 +125,17 @@ Fetches 132 financial metrics; we cherry-pick 14 growth, valuation, and quality 
 
 **Usage**: Pre-fetched for every agent prompt (`prefetch_market_data()` → "Growth & Valuation" section). Not available as an on-demand agent tool.
 
-### 6. Insider Transactions (`/stock/insider-transactions`)
+### 6. Company Peers (`/stock/peers`)
+
+**Our function**: `get_company_peers(symbol)`
+
+Fetches a list of peer/competitor tickers for a given symbol (filtered to exclude the symbol itself, max 10).
+
+**Returns**: `list[str]` — peer ticker symbols
+
+**Usage**: Pre-fetched for every agent prompt (`prefetch_market_data()` → "Peers" section, max 8 displayed). Not available as an on-demand agent tool.
+
+### 7. Insider Transactions (`/stock/insider-transactions`)
 
 **Our function**: `get_insider_transactions(symbol)`
 **Tool**: `check_insider_activity` (modality: `fundamentals`) — via `data_service.py`
@@ -169,12 +179,13 @@ Some endpoints use **both**: the data is prefetched into the prompt, AND registe
 
 | Endpoint | Prefetch? | Tool? | In `_PREFETCHED_TOOLS`? |
 |----------|-----------|-------|------------------------|
-| Company News | Yes (`_fetch_finnhub_context`) | Yes (`get_finnhub_news`) | Yes |
+| Company News | Yes (`_fetch_finnhub_context`) | Yes (`get_company_news` via `data_service`) | Yes |
 | Earnings Surprises | Yes (`_fetch_earnings_context`) | No | — |
 | Earnings Calendar | Yes (`_fetch_earnings_context`) | No | — |
 | Recommendation Trends | Yes (`prefetch_market_data`) | Yes (`get_analyst_ratings`) | Yes |
 | Stock Metrics | Yes (`prefetch_market_data`) | No | — |
-| Insider Transactions | Yes (`prefetch_market_data`) | Yes (`check_insider_activity`) | Yes |
+| Company Peers | Yes (`prefetch_market_data`) | No | — |
+| Insider Transactions | Yes (`prefetch_market_data`) | Yes (`check_insider_activity` via `data_service`) | Yes |
 
 ### Low-Level Client (`finnhub_client.py`)
 
@@ -204,6 +215,7 @@ Source: [finnhub.io/pricing](https://finnhub.io/pricing)
 - Analyst recommendations (`/stock/recommendation`) — works
 - Stock metrics (`/stock/metric`) — works (132 metrics, we use 14)
 - Insider transactions (`/stock/insider-transactions`) — works
+- Company peers (`/stock/peers`) — works
 - 60 requests per minute shared across all calls
 
 ### What's Blocked on Free Tier (returns 403)
@@ -238,7 +250,6 @@ This is the most impactful single upgrade for our pipeline, since analyst upgrad
 | `/stock/social-sentiment` | Reddit + Twitter sentiment scores | Paid |
 | `/stock/filings` | SEC filings feed | Paid |
 | `/stock/profile2` | Company profile (sector, industry, etc.) | Free |
-| `/stock/peers` | Similar companies list | Free |
 | `/forex/rates` | Real-time FX rates | Free |
 | `/crypto/candle` | Crypto OHLCV data | Free |
 | `/news` | General market news (not company-specific) | Free |
@@ -248,7 +259,6 @@ This is the most impactful single upgrade for our pipeline, since analyst upgrad
 ### Free Endpoints We Could Add
 
 - `/stock/profile2` — company profile (sector, industry, market cap, IPO date)
-- `/stock/peers` — similar companies for sector context
 
 ---
 
@@ -267,7 +277,7 @@ No other configuration needed. Rate limits enforced server-side (429 responses).
 
 | File | Purpose |
 |------|---------|
-| [`trader/market/finnhub_client.py`](trader/market/finnhub_client.py) | 6 API wrapper functions + 3 formatters |
+| [`trader/market/finnhub_client.py`](trader/market/finnhub_client.py) | 7 API wrapper functions + 3 formatters |
 | [`trader/online/tool_core.py`](trader/online/tool_core.py) | `get_finnhub_news`, `get_analyst_ratings` tools |
 | [`trader/online/prompt_builder.py`](trader/online/prompt_builder.py) | Auto-fetch + format for agent prompts |
 | [`trader/online/explorer_agent.py`](trader/online/explorer_agent.py) | PydanticAI tool wrappers (for watcher) |

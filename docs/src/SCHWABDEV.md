@@ -36,11 +36,18 @@ When Schwab is unavailable or disabled, we fall back to yfinance (see [YFINANCE.
 | `mark` | float | Mark price |
 | `timestamp_ms` | int | Trade time (epoch ms) |
 
-**Used by**: `check_price` tool, `build_price_context()`, `check_price_spike()`
+**Used by**: `check_price` tool, `build_price_context()`, `check_price_spike()`, `prefetch_market_data()` Price & Trend section
 
-### 2. Intraday Price Candles (`client.price_history()`)
+### 2. Price History / Candles (`client.price_history()`)
 
-**Our method**: `SchwabMarketClient.get_intraday_candles(symbol)`
+Two methods wrap this endpoint:
+
+**`SchwabMarketClient.get_intraday_candles(symbol)`** — 1-day of 1-minute bars
+**Default params**: `periodType="day"`, `period=1`, `frequencyType="minute"`, `frequency=1`, `needExtendedHoursData=True`
+
+**`SchwabMarketClient.get_candles_by_date_range(symbol, start, end, freq_type, freq)`** — arbitrary date range
+**Used by**: `price_10min.py` for backtesting 10-minute candles
+
 **Returns**: `list[Candle]`
 
 | Field | Type | Description |
@@ -49,9 +56,7 @@ When Schwab is unavailable or disabled, we fall back to yfinance (see [YFINANCE.
 | `o`, `h`, `l`, `c` | float | OHLC |
 | `v` | int | Volume |
 
-**Default params**: `periodType="day"`, `period=1`, `frequencyType="minute"`, `frequency=1`, `needExtendedHoursData=True`
-
-**Used by**: `check_price_spike()`, `check_volume_regime()`, `compute_volume_delta()`, `get_price_history` tool
+**Used by**: `check_price_spike()`, `check_volume_regime()`, `compute_volume_delta()`, `get_price_history` tool, `price_10min.py`
 
 ### 3. Option Chains (`client.option_chains()`)
 
@@ -78,24 +83,31 @@ When Schwab is unavailable or disabled, we fall back to yfinance (see [YFINANCE.
 **Our method**: `SchwabMarketClient.get_fundamentals(symbol)`
 **Returns**: `SchwabFundamentals` dataclass
 
-| Field | Type | Description |
-|-------|------|-------------|
-| `market_cap` | float | Market capitalization |
-| `pe_ratio` / `forward_pe` | float | P/E ratios |
-| `eps` | float | Earnings per share (TTM) |
-| `dividend_yield` / `dividend_amount` | float | Dividend info |
-| `beta` | float | Beta coefficient |
-| `week_52_high` / `week_52_low` | float | 52-week range |
-| `avg_10d_volume` / `avg_1y_volume` | float | Volume averages |
-| `pb_ratio` | float | Price-to-book |
-| `net_profit_margin` | float | Net profit margin (TTM) |
-| `return_on_equity` | float | ROE |
-| `revenue` | float | Revenue (TTM) |
-| `shares_outstanding` | float | Shares outstanding |
+| Field | Type | Schwab Key | Description |
+|-------|------|-----------|-------------|
+| `market_cap` | float | `marketCap` | Market capitalization |
+| `pe_ratio` / `forward_pe` | float | `peRatio` / `forwardPeRatio` | P/E ratios |
+| `eps` | float | `epsTTM` | Earnings per share (TTM) |
+| `dividend_yield` / `dividend_amount` | float | `dividendYield` / `dividendAmount` | Dividend info |
+| `beta` | float | `beta` | Beta coefficient |
+| `week_52_high` / `week_52_low` | float | `high52` / `low52` | 52-week range |
+| `avg_10d_volume` / `avg_1y_volume` | float | `vol10DayAvg` / `vol1YrAvg` | Volume averages |
+| `pb_ratio` | float | `pbRatio` | Price-to-book |
+| `net_profit_margin` | float | `netProfitMarginTTM` | Net profit margin (TTM) |
+| `return_on_equity` | float | `returnOnEquity` | ROE |
+| `revenue` | float | `revenueTTM` | Revenue (TTM) |
+| `shares_outstanding` | float | `sharesOutstanding` | Shares outstanding |
+| `debt_to_equity` | float | `totalDebtToEquity` | Total debt-to-equity ratio |
+| `short_int_to_float` | float | `shortIntToFloat` | Short interest as % of float |
+| `short_int_days_to_cover` | float | `shortIntDayToCover` | Days to cover short interest |
+| `eps_change_pct_ttm` | float | `epsChangePercentTTM` | EPS growth rate (TTM YoY) |
+| `rev_change_pct_ttm` | float | `revChangeTTM` | Revenue growth rate (TTM) |
 
 **Note**: Schwab doesn't provide `sector`/`industry` — these are backfilled from yfinance.
 
-**Used by**: `get_fundamentals` tool (with yfinance fallback)
+**Displayed in prompt** (via `prompt_builder.py` fundamentals field_map): Market Cap, P/E, P/B, EPS, Beta, Div Yield, Net Margin, ROE, Debt/Equity, EPS Growth, Rev Growth, Short % Float, Short Days, Sector, Industry.
+
+**Used by**: `get_fundamentals` tool (with yfinance fallback), `prefetch_market_data()` Price & Trend section (52W range), fundamentals section
 
 ### 5. Market Movers (`client.movers()`)
 
@@ -158,13 +170,14 @@ Streams real-time tick-by-tick updates:
 
 Built on top of raw Schwab data:
 
-| Method | Description | Source Data |
-|--------|-------------|-------------|
-| `check_price_spike()` | Detects >0.5% moves in last 5 min | Intraday candles |
-| `check_volume_regime()` | Detects volume >2x session average | Intraday candles |
-| `compute_volume_delta()` | Uptick/downtick volume using inter-bar tick rule | Intraday 1-min candles |
-| `build_price_context()` | Quotes + recent candles per symbol | Quotes + candles |
-| `build_market_context()` | SPY, VIX, session info | Multiple quotes + market hours |
+| Method | Description | Source Data | Used By |
+|--------|-------------|-------------|---------|
+| `check_price_spike()` | Detects >0.5% moves in last 5 min | Intraday candles | `check_price_spike` tool, prefetch |
+| `check_volume_regime()` | Detects volume >2x session average | Intraday candles | `check_volume_regime` tool, prefetch |
+| `compute_volume_delta()` | Uptick/downtick volume using inter-bar tick rule | Intraday 1-min candles | `compute_volume_delta` tool, prefetch |
+| `build_price_context()` | Quotes + recent candles per symbol | Quotes + candles | Snapshot builder (`orchestrator.py`) |
+| `build_market_context()` | SPY, VIX, session info | Multiple quotes + market hours | `prefetch_market_data()`, `check_market_context` tool |
+| `get_quotes_with_fundamentals()` | Batch quotes + fundamentals in one API call | `client.quotes(fields="all")` | Available but not actively used |
 
 ---
 
@@ -237,10 +250,10 @@ There are **no monthly fees, no per-call charges, and no minimum account balance
 ### Limitations
 
 - No historical options pricing data
-- No level-2 (depth of market) data
 - Some data feeds may have 15-minute delays
 - OAuth token refresh requires periodic re-authentication
 - No sector/industry in fundamental data projection (we backfill from yfinance)
+- Short interest data (`shortIntToFloat`, `shortIntDayToCover`) may be stale or zero for some symbols
 
 ---
 
@@ -252,9 +265,10 @@ There are **no monthly fees, no per-call charges, and no minimum account balance
 | `orders()` | Place/manage orders | Available (trading) |
 | `transactions()` | Transaction history | Available |
 | `instruments()` with `search` | Instrument search by name | Available |
-| Level-2 data | Depth of market | Not available via API |
-| Options streaming | Real-time options quotes | Available |
+| Level-2 streaming | NYSE/NASDAQ order book depth | Available (WebSocket) |
+| Options streaming | Real-time options quotes | Available (WebSocket) |
 | Futures data | Futures quotes/history | Available |
+| Screener streaming | Real-time screener updates | Available (WebSocket) |
 
 ### Potential Additions
 
