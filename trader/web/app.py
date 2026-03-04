@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import dataclasses
 import json
+import logging
 import threading
 import time
+import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -61,6 +63,9 @@ def create_app(
     app = FastAPI(title="alpaca-news dashboard")
     app.state.settings = settings  # mutable ref for hot-reload
     app.state.observer = observer
+
+    # In-memory backtest job store: {job_id: {status, result, error, created_at, strategy}}
+    _backtest_jobs: dict[str, dict[str, Any]] = {}
 
     # Market data service + fundamentals cache for snapshot enrichment
     from trader.market.data_service import MarketDataService
@@ -956,18 +961,12 @@ def create_app(
             weight_per_trade_for_allocation,
         )
 
-        api_start = time.perf_counter()
-        api_stages: dict[str, float] = {}
-
-        def _mark(stage: str, start: float) -> None:
-            api_stages[stage] = api_stages.get(stage, 0.0) + max(0.0, time.perf_counter() - start)
-
         body = await request.json()
         strategy_key = body.get("strategy", "")
         params = body.get("params", {})
         entries = body.get("entries", [])
         filters = body.get("filters")
-        market_close = body.get("market_close", "16:00")  # None = extended hours
+        market_close = body.get("market_close", "16:00")
         min_hold = body.get("min_hold", 5)
         guard_stop_pct = body.get("guard_stop_pct", 0)
         guard_target_pct = body.get("guard_target_pct", 0)
@@ -978,8 +977,8 @@ def create_app(
         starting_amount = float(body.get("starting_amount", 0))
         reinvest_delay_minutes = int(body.get("reinvest_delay_minutes", 1))
 
+        # Build entries from filters (must happen on main thread — reads DB)
         if isinstance(filters, dict):
-            t_filter = time.perf_counter()
             market_filter_keys = (
                 "price_min", "price_max",
                 "avg_vol_min", "avg_vol_max",
@@ -1012,9 +1011,6 @@ def create_app(
                 sort_dir=(str(filters.get("sort_dir")).strip() if filters.get("sort_dir") is not None else None),
                 include_market_metrics=include_market_metrics,
             )
-            _mark("filter_rows", t_filter)
-
-            t_entries = time.perf_counter()
             entries = []
             for row in sorted_rows:
                 sid = str(row.get("snapshot_id") or "").strip()
@@ -1034,101 +1030,183 @@ def create_app(
                         "confidence": confidence,
                     }
                 )
-            _mark("build_entries", t_entries)
 
         if not entries:
-            return []
-        res_min = app.state.settings.stats_resolution_minutes
-        engine_trace: dict[str, Any] | None = {} if trace_enabled else None
-        t_engine = time.perf_counter()
-        results = await asyncio.to_thread(
-            run_backtest, strategy_key, params, entries, market_close, min_hold,
-            guard_stop_pct, guard_target_pct, app.state.settings.price_delay_minutes,
-            res_min, engine_trace,
-        )
-        _mark("run_backtest", t_engine)
-        # Apply transaction cost deduction
-        t_cost = time.perf_counter()
-        if cost_bps > 0:
-            cost_pct = cost_bps / 100  # bps → percentage points
-            cost_frac = cost_bps / 10000  # bps → fraction
-            for r in results:
-                if r.pnl_pct is not None:
-                    r.pnl_pct -= cost_pct
-                    r.pnl_pct = round(r.pnl_pct, 4)
-                # Adjust entry price upward so Method B's equity curve reflects cost
-                if r.entry_price and r.entry_price > 0:
-                    r.entry_price *= 1 + cost_frac
-        _mark("apply_cost", t_cost)
+            return {"job_id": None, "error": "No snapshots match the current filters."}
 
-        # Apply allocation filtering (skip / replace)
-        t_alloc = time.perf_counter()
-        results, alloc_stats = apply_allocation(
-            results, entries, allocation_key, allocation_params,
-        )
-        wpt = weight_per_trade_for_allocation(allocation_key, allocation_params)
-        _mark("apply_allocation", t_alloc)
-
-        # Portfolio simulation (dollar-denominated)
-        sim_result = None
-        if starting_amount > 0:
-            t_sim = time.perf_counter()
-            sim_result = compute_portfolio_sim(
-                results, allocation_key, allocation_params,
-                starting_amount, reinvest_delay_minutes,
-            )
-            _mark("portfolio_sim", t_sim)
-
-        t_serialize = time.perf_counter()
-        trades = [r.to_dict() for r in results]
-        _mark("serialize_trades", t_serialize)
-        t_summary = time.perf_counter()
-        valid = [r for r in results if r.pnl_pct is not None]
-        count = len(valid)
-        avg_pnl = round(sum(r.pnl_pct for r in valid) / count, 2) if count else None
-        stats_a = compute_ann_a(results)
-        stats_b = compute_ann_b(results, res_min, weight_per_trade=wpt)
-        _mark("compute_summary", t_summary)
-
-        response = {
-            "trades": trades,
-            "summary": {
-                "count": count,
-                "avg_pnl": avg_pnl,
-                "daily_pnl": round(stats_a["daily_pnl"], 3) if stats_a else None,
-                "ann_a": round(stats_a["ann"], 1) if stats_a else None,
-                "sharpe_a": round(stats_a["sharpe"], 2) if stats_a and stats_a["sharpe"] is not None else None,
-                "ann_b": round(stats_b["ann"], 1) if stats_b else None,
-                "sharpe_b": round(stats_b["sharpe"], 2) if stats_b and stats_b["sharpe"] is not None else None,
-                "alloc_taken": alloc_stats.get("taken", 0),
-                "alloc_skipped": alloc_stats.get("skipped", 0),
-                "alloc_replaced": alloc_stats.get("replaced", 0),
-                "sim_starting": sim_result["sim_starting"] if sim_result else None,
-                "sim_ending": sim_result["sim_ending"] if sim_result else None,
-                "sim_return_pct": sim_result["sim_return_pct"] if sim_result else None,
-                "sim_trades": sim_result["sim_trades"] if sim_result else None,
-                "sim_daily_pct": sim_result["sim_daily_pct"] if sim_result else None,
-                "sim_span_days": sim_result["sim_span_days"] if sim_result else None,
-            },
+        # Create job and return immediately
+        job_id = str(uuid.uuid4())
+        _backtest_jobs[job_id] = {
+            "status": "running",
+            "created_at": time.time(),
+            "strategy": strategy_key,
+            "result": None,
+            "error": None,
+            "task": None,  # will hold asyncio.Task for cancellation
         }
-        if trace_enabled:
-            total_sec = max(0.0, time.perf_counter() - api_start)
-            api_stages["total"] = total_sec
-            stage_pct = {
-                k: (v / total_sec * 100.0) if total_sec > 0 else 0.0
-                for k, v in api_stages.items()
-            }
-            response["trace"] = {
-                "api_stages_sec": {k: round(v, 6) for k, v in sorted(api_stages.items())},
-                "api_stages_pct": {k: round(v, 2) for k, v in sorted(stage_pct.items())},
-                "counts": {
-                    "entries_in": len(entries),
-                    "trades_out": len(results),
-                    "valid_trades": count,
-                },
-                "engine": engine_trace or {},
-            }
-        return response
+
+        # Prune jobs older than 1 hour
+        cutoff = time.time() - 3600
+        stale = [k for k, v in _backtest_jobs.items() if v["created_at"] < cutoff]
+        for k in stale:
+            del _backtest_jobs[k]
+
+        bus.publish(PipelineEvent(
+            type="backtest_started",
+            payload={"job_id": job_id, "strategy": strategy_key},
+        ))
+
+        # Capture settings values needed by background task
+        res_min = app.state.settings.stats_resolution_minutes
+        price_delay_minutes = app.state.settings.price_delay_minutes
+
+        async def _run_backtest_job() -> None:
+            log = logging.getLogger("backtest_job")
+            try:
+                api_start = time.perf_counter()
+                api_stages: dict[str, float] = {}
+
+                def _mark(stage: str, start: float) -> None:
+                    api_stages[stage] = api_stages.get(stage, 0.0) + max(0.0, time.perf_counter() - start)
+
+                engine_trace: dict[str, Any] | None = {} if trace_enabled else None
+                t_engine = time.perf_counter()
+                results = await asyncio.to_thread(
+                    run_backtest, strategy_key, params, entries, market_close, min_hold,
+                    guard_stop_pct, guard_target_pct, price_delay_minutes,
+                    res_min, engine_trace,
+                )
+                _mark("run_backtest", t_engine)
+
+                # Apply transaction cost deduction
+                t_cost = time.perf_counter()
+                if cost_bps > 0:
+                    cost_pct = cost_bps / 100
+                    cost_frac = cost_bps / 10000
+                    for r in results:
+                        if r.pnl_pct is not None:
+                            r.pnl_pct -= cost_pct
+                            r.pnl_pct = round(r.pnl_pct, 4)
+                        if r.entry_price and r.entry_price > 0:
+                            r.entry_price *= 1 + cost_frac
+                _mark("apply_cost", t_cost)
+
+                # Apply allocation filtering
+                t_alloc = time.perf_counter()
+                results, alloc_stats = apply_allocation(
+                    results, entries, allocation_key, allocation_params,
+                )
+                wpt = weight_per_trade_for_allocation(allocation_key, allocation_params)
+                _mark("apply_allocation", t_alloc)
+
+                # Portfolio simulation
+                sim_result = None
+                if starting_amount > 0:
+                    t_sim = time.perf_counter()
+                    sim_result = compute_portfolio_sim(
+                        results, allocation_key, allocation_params,
+                        starting_amount, reinvest_delay_minutes,
+                    )
+                    _mark("portfolio_sim", t_sim)
+
+                t_serialize = time.perf_counter()
+                trades = [r.to_dict() for r in results]
+                _mark("serialize_trades", t_serialize)
+                t_summary = time.perf_counter()
+                valid = [r for r in results if r.pnl_pct is not None]
+                count = len(valid)
+                avg_pnl = round(sum(r.pnl_pct for r in valid) / count, 2) if count else None
+                stats_a = compute_ann_a(results)
+                stats_b = compute_ann_b(results, res_min, weight_per_trade=wpt)
+                _mark("compute_summary", t_summary)
+
+                response = {
+                    "trades": trades,
+                    "summary": {
+                        "count": count,
+                        "avg_pnl": avg_pnl,
+                        "daily_pnl": round(stats_a["daily_pnl"], 3) if stats_a else None,
+                        "ann_a": round(stats_a["ann"], 1) if stats_a else None,
+                        "sharpe_a": round(stats_a["sharpe"], 2) if stats_a and stats_a["sharpe"] is not None else None,
+                        "ann_b": round(stats_b["ann"], 1) if stats_b else None,
+                        "sharpe_b": round(stats_b["sharpe"], 2) if stats_b and stats_b["sharpe"] is not None else None,
+                        "alloc_taken": alloc_stats.get("taken", 0),
+                        "alloc_skipped": alloc_stats.get("skipped", 0),
+                        "alloc_replaced": alloc_stats.get("replaced", 0),
+                        "sim_starting": sim_result["sim_starting"] if sim_result else None,
+                        "sim_ending": sim_result["sim_ending"] if sim_result else None,
+                        "sim_return_pct": sim_result["sim_return_pct"] if sim_result else None,
+                        "sim_trades": sim_result["sim_trades"] if sim_result else None,
+                        "sim_daily_pct": sim_result["sim_daily_pct"] if sim_result else None,
+                        "sim_span_days": sim_result["sim_span_days"] if sim_result else None,
+                    },
+                }
+                if trace_enabled:
+                    total_sec = max(0.0, time.perf_counter() - api_start)
+                    api_stages["total"] = total_sec
+                    stage_pct = {
+                        k: (v / total_sec * 100.0) if total_sec > 0 else 0.0
+                        for k, v in api_stages.items()
+                    }
+                    response["trace"] = {
+                        "api_stages_sec": {k: round(v, 6) for k, v in sorted(api_stages.items())},
+                        "api_stages_pct": {k: round(v, 2) for k, v in sorted(stage_pct.items())},
+                        "counts": {
+                            "entries_in": len(entries),
+                            "trades_out": len(results),
+                            "valid_trades": count,
+                        },
+                        "engine": engine_trace or {},
+                    }
+
+                _backtest_jobs[job_id]["status"] = "complete"
+                _backtest_jobs[job_id]["result"] = response
+                bus.publish(PipelineEvent(
+                    type="backtest_complete",
+                    payload={"job_id": job_id},
+                ))
+            except asyncio.CancelledError:
+                log.info("Backtest job %s aborted", job_id)
+                _backtest_jobs[job_id]["status"] = "aborted"
+                bus.publish(PipelineEvent(
+                    type="backtest_aborted",
+                    payload={"job_id": job_id},
+                ))
+            except Exception as exc:
+                log.exception("Backtest job %s failed", job_id)
+                _backtest_jobs[job_id]["status"] = "error"
+                _backtest_jobs[job_id]["error"] = str(exc)
+                bus.publish(PipelineEvent(
+                    type="backtest_error",
+                    payload={"job_id": job_id, "error": str(exc)},
+                ))
+
+        _backtest_jobs[job_id]["task"] = asyncio.create_task(_run_backtest_job())
+        return JSONResponse({"job_id": job_id}, status_code=202)
+
+    @app.get("/api/strategies/backtest/{job_id}")
+    async def api_backtest_status(job_id: str):
+        job = _backtest_jobs.get(job_id)
+        if not job:
+            return JSONResponse({"status": "not_found"}, status_code=404)
+        return {
+            "status": job["status"],
+            "strategy": job["strategy"],
+            "result": job["result"],
+            "error": job["error"],
+        }
+
+    @app.post("/api/strategies/backtest/{job_id}/abort")
+    async def api_backtest_abort(job_id: str):
+        job = _backtest_jobs.get(job_id)
+        if not job:
+            return JSONResponse({"status": "not_found"}, status_code=404)
+        if job["status"] != "running":
+            return {"status": job["status"]}
+        task = job.get("task")
+        if task and not task.done():
+            task.cancel()
+        return {"status": "aborted"}
 
     @app.get("/api/activity-panel", response_class=HTMLResponse)
     async def api_activity_panel(request: Request):

@@ -132,7 +132,8 @@
     ['manual_explore_started','manual_explore_complete','manual_explore_error','knowledge_updated',
      'backfill_started','backfill_progress','backfill_complete',
      'follow_up_collection','follow_up_complete','follow_up_created',
-     'observer_mode_changed','observer_skipped'].forEach(function(name) {
+     'observer_mode_changed','observer_skipped',
+     'backtest_started','backtest_complete','backtest_error','backtest_aborted'].forEach(function(name) {
       _es.addEventListener(name, function(e) {
         var data = JSON.parse(e.data);
         document.body.dispatchEvent(new CustomEvent('sse:' + name, {bubbles: true, detail: data}));

@@ -132,7 +132,7 @@ async def run_openai(
     total_usage = {
         "input_tokens": 0, "output_tokens": 0, "total_tokens": 0,
         "requests": 0, "tool_calls": 0, "reasoning_tokens": 0,
-        "web_search_calls": 0,
+        "web_search_calls": 0, "cached_tokens": 0,
     }
 
     def _accumulate_usage(resp: Any) -> None:
@@ -144,6 +144,10 @@ async def run_openai(
             details = getattr(resp.usage, "output_tokens_details", None)
             if details:
                 total_usage["reasoning_tokens"] += getattr(details, "reasoning_tokens", 0) or 0
+            # Cached input tokens (90% discount on GPT-5 family)
+            input_details = getattr(resp.usage, "input_tokens_details", None)
+            if input_details:
+                total_usage["cached_tokens"] += getattr(input_details, "cached_tokens", 0) or 0
         total_usage["requests"] += 1
 
     _accumulate_usage(response)

@@ -70,49 +70,71 @@ class CostTracker:
         stage: str,
         purpose: str,
     ) -> float:
-        """Estimate and add cost. Returns cost_usd.
+        """Record cost for an LLM call. Returns cost_usd.
 
-        Usage is expected to have optional input_tokens/output_tokens.
-        If tokens are missing, cost estimate will be tool-only.
+        If the usage dict contains ``authoritative_cost_usd`` (e.g. from
+        xAI's ``cost_in_usd_ticks``), that value is used directly.
+        Otherwise falls back to estimating from token counts + tool fees.
         """
 
-        input_tokens = int(usage.get("input_tokens") or 0)
-        output_tokens = int(usage.get("output_tokens") or 0)
+        # Prefer authoritative cost from the provider when available.
+        auth_cost = usage.get("authoritative_cost_usd")
+        if auth_cost and float(auth_cost) > 0:
+            total = float(auth_cost)
+        else:
+            input_tokens = int(usage.get("input_tokens") or 0)
+            output_tokens = int(usage.get("output_tokens") or 0)
+            cached_tokens = int(usage.get("cached_tokens") or 0)
 
-        token_cost = 0.0
-        if input_tokens or output_tokens:
-            if provider == "openai":
-                token_cost = estimate_token_cost_openai(model, input_tokens=input_tokens, output_tokens=output_tokens).total_cost_usd
-            elif provider == "grok":
-                token_cost = estimate_token_cost_grok(model, input_tokens=input_tokens, output_tokens=output_tokens).total_cost_usd
-            elif provider == "gemini":
-                token_cost = estimate_token_cost_gemini(model, input_tokens=input_tokens, output_tokens=output_tokens).total_cost_usd
-            else:
-                raise ValueError(f"Unknown provider: {provider}")
+            token_cost = 0.0
+            if input_tokens or output_tokens:
+                if provider == "openai":
+                    token_cost = estimate_token_cost_openai(model, input_tokens=input_tokens, output_tokens=output_tokens, cached_tokens=cached_tokens).total_cost_usd
+                elif provider == "grok":
+                    token_cost = estimate_token_cost_grok(model, input_tokens=input_tokens, output_tokens=output_tokens, cached_tokens=cached_tokens).total_cost_usd
+                elif provider == "gemini":
+                    token_cost = estimate_token_cost_gemini(model, input_tokens=input_tokens, output_tokens=output_tokens, cached_tokens=cached_tokens).total_cost_usd
+                else:
+                    raise ValueError(f"Unknown provider: {provider}")
 
-        tool_cost = 0.0
-        for tool in tools_used:
-            tool_cost += estimate_tool_cost(provider=provider, tool_name=tool, calls=1)
+            tool_cost = 0.0
+            for tool in tools_used:
+                tool_cost += estimate_tool_cost(provider=provider, tool_name=tool, calls=1)
 
-        total = float(token_cost + tool_cost)
+            total = float(token_cost + tool_cost)
+
         self.check_budget(total)
         self.daily_spent += total
         self.item_spent += total
 
-        # Track per-tool cost breakdown
-        for tool in tools_used:
-            add = estimate_tool_cost(
-                provider=provider, tool_name=tool, calls=1
-            )
-            self.daily_by_tool[tool] = self.daily_by_tool.get(tool, 0.0) + add
-            self.item_by_tool[tool] = self.item_by_tool.get(tool, 0.0) + add
-        if token_cost > 0:
-            # Attribute token cost to "llm" pseudo-tool for visibility
-            self.daily_by_tool["llm_tokens"] = self.daily_by_tool.get("llm_tokens", 0.0) + token_cost
-            self.item_by_tool["llm_tokens"] = self.item_by_tool.get("llm_tokens", 0.0) + token_cost
+        # Track per-tool cost breakdown.
+        # When using authoritative cost, attribute everything to "llm_tokens"
+        # since we can't reliably split token vs tool costs.
+        if auth_cost and float(auth_cost) > 0:
+            self.daily_by_tool["llm_tokens"] = self.daily_by_tool.get("llm_tokens", 0.0) + total
+            self.item_by_tool["llm_tokens"] = self.item_by_tool.get("llm_tokens", 0.0) + total
+        else:
+            for tool in tools_used:
+                add = estimate_tool_cost(
+                    provider=provider, tool_name=tool, calls=1
+                )
+                self.daily_by_tool[tool] = self.daily_by_tool.get(tool, 0.0) + add
+                self.item_by_tool[tool] = self.item_by_tool.get(tool, 0.0) + add
+            llm_portion = max(0.0, total - sum(
+                estimate_tool_cost(provider=provider, tool_name=t, calls=1)
+                for t in tools_used
+            ))
+            if llm_portion > 0:
+                self.daily_by_tool["llm_tokens"] = self.daily_by_tool.get("llm_tokens", 0.0) + llm_portion
+                self.item_by_tool["llm_tokens"] = self.item_by_tool.get("llm_tokens", 0.0) + llm_portion
 
         if self.debug or os.getenv("DEBUG", "").lower() in ("1", "true"):
+            input_tokens = int(usage.get("input_tokens") or 0)
+            output_tokens = int(usage.get("output_tokens") or 0)
+            src = "auth" if auth_cost and float(auth_cost) > 0 else "est"
             print(
-                f"COST stage={stage} purpose={purpose} provider={provider} model={model} tokens(in={input_tokens},out={output_tokens}) tools={tools_used} total=${total:.4f} daily=${self.daily_spent:.4f}/{self.max_daily_cost:.2f}"
+                f"COST stage={stage} purpose={purpose} provider={provider} model={model} "
+                f"tokens(in={input_tokens},out={output_tokens}) tools={tools_used} "
+                f"total=${total:.4f}({src}) daily=${self.daily_spent:.4f}/{self.max_daily_cost:.2f}"
             )
         return total

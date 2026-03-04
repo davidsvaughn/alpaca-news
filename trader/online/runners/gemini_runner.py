@@ -72,7 +72,7 @@ async def run_gemini(
     total_usage: dict[str, int] = {
         "input_tokens": 0, "output_tokens": 0, "total_tokens": 0,
         "requests": 0, "tool_calls": 0, "reasoning_tokens": 0,
-        "web_search_calls": 0,
+        "web_search_calls": 0, "cached_tokens": 0,
     }
     tool_traces: list[dict[str, Any]] = []
     hop_index = 0
@@ -158,6 +158,7 @@ async def run_gemini(
         )
         cached_tok = getattr(um, "cached_content_token_count", 0) or 0
         total_usage["input_tokens"] += in_tok + cached_tok
+        total_usage["cached_tokens"] += cached_tok
         total_usage["output_tokens"] += (
             getattr(um, "candidates_token_count", 0)
             or getattr(um, "output_token_count", 0)

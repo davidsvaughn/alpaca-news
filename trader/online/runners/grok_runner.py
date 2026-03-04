@@ -133,6 +133,7 @@ async def run_grok(
         "input_tokens": 0, "output_tokens": 0, "total_tokens": 0,
         "requests": 0, "tool_calls": 0, "reasoning_tokens": 0,
         "web_search_calls": 0, "x_search_calls": 0,
+        "cached_tokens": 0, "cost_in_usd_ticks": 0,
     }
 
     def _accumulate_usage(resp: Any) -> None:
@@ -143,6 +144,12 @@ async def run_grok(
             details = getattr(resp.usage, "output_tokens_details", None)
             if details:
                 total_usage["reasoning_tokens"] += getattr(details, "reasoning_tokens", 0) or 0
+            input_details = getattr(resp.usage, "input_tokens_details", None)
+            if input_details:
+                total_usage["cached_tokens"] += getattr(input_details, "cached_tokens", 0) or 0
+            # Authoritative cost from xAI (in 1/10,000,000,000 USD units)
+            ticks = getattr(resp.usage, "cost_in_usd_ticks", 0) or 0
+            total_usage["cost_in_usd_ticks"] += int(ticks)
         total_usage["requests"] += 1
 
     _accumulate_usage(response)
@@ -289,22 +296,44 @@ async def run_grok(
         _extract_builtin_traces(response)
 
     # Reconcile server-side tool counts with xAI's authoritative billing data.
-    # server_side_tool_usage is a dict like:
-    #   {"SERVER_SIDE_TOOL_WEB_SEARCH": 2, "SERVER_SIDE_TOOL_X_SEARCH": 3}
-    _sstu = getattr(response, "server_side_tool_usage", None)
-    if _sstu and isinstance(_sstu, dict):
-        auth_web = int(_sstu.get("SERVER_SIDE_TOOL_WEB_SEARCH") or 0)
-        auth_x = int(_sstu.get("SERVER_SIDE_TOOL_X_SEARCH") or 0)
+    # Newer API returns usage.server_side_tool_usage_details; older API had
+    # response.server_side_tool_usage with different key names.
+    _details = None
+    if hasattr(response, "usage") and response.usage:
+        _details = getattr(response.usage, "server_side_tool_usage_details", None)
+        if _details and hasattr(_details, "model_dump"):
+            _details = _details.model_dump()
+        elif _details and not isinstance(_details, dict):
+            _details = None
+
+    # Fall back to legacy top-level field
+    if not _details:
+        _sstu = getattr(response, "server_side_tool_usage", None)
+        if _sstu and isinstance(_sstu, dict):
+            _details = {
+                "web_search_calls": int(_sstu.get("SERVER_SIDE_TOOL_WEB_SEARCH") or 0),
+                "x_search_calls": int(_sstu.get("SERVER_SIDE_TOOL_X_SEARCH") or 0),
+            }
+
+    if _details and isinstance(_details, dict):
+        auth_web = int(_details.get("web_search_calls") or 0)
+        auth_x = int(_details.get("x_search_calls") or 0)
         manual_web = int(total_usage["web_search_calls"] or 0)
         manual_x = int(total_usage["x_search_calls"] or 0)
-        if auth_web > manual_web or auth_x > manual_x:
+        if auth_web != manual_web or auth_x != manual_x:
             if DEBUG:
                 print(
                     f"  [Grok] server_side_tool_usage correction: "
                     f"web_search {manual_web}→{auth_web}, x_search {manual_x}→{auth_x}"
                 )
-            total_usage["web_search_calls"] = max(auth_web, manual_web)
-            total_usage["x_search_calls"] = max(auth_x, manual_x)
+            total_usage["web_search_calls"] = auth_web
+            total_usage["x_search_calls"] = auth_x
+
+    # Convert authoritative xAI cost ticks to USD for downstream use.
+    # cost_in_usd_ticks is in 1/10,000,000,000 USD units.
+    ticks = total_usage.get("cost_in_usd_ticks", 0)
+    if ticks > 0:
+        total_usage["authoritative_cost_usd"] = ticks / 10_000_000_000
 
     # Extract final output
     output_text = getattr(response, "output_text", "") or ""

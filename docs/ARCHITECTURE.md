@@ -4,7 +4,7 @@
 > For implementation status and roadmap, see [ROADMAP.md](ROADMAP.md).
 > For design rationale and open questions, see [DECISIONS.md](DECISIONS.md).
 >
-> Last updated: 2026-02-17
+> Last updated: 2026-03-04
 
 ---
 
@@ -650,7 +650,8 @@ no build step.
 |------|-----|----------|
 | Dashboard | `/` | Stats cards (HTMX polling), activity panel (10s refresh), active watches, manual explore form, live SSE event feed |
 | Watches | `/watches` | Filterable table by status, force-exit buttons, detail pages with full lifecycle view |
-| Snapshots | `/snapshots` | Filterable table by symbol, detail pages with pipeline timeline + collapsible agent rounds + tool traces |
+| Snapshots | `/snapshots` | Filterable table (symbol, signal, date, price, volume, market cap, P/E), detail pages with pipeline timeline + collapsible agent rounds + tool traces, integrated backtest panel with strategy/allocation selection + portfolio simulation, SSE auto-refresh on new snapshots |
+| Strategies | `/strategies` | Strategy parameter explorer |
 | Costs | `/costs` | Budget progress bar, Chart.js daily trend + tool breakdown doughnut, history table |
 | Config | `/config` | Read-only grouped settings display (10 categories, 47 fields) |
 | Knowledge | `/knowledge` | JSON file viewer/editor with Save/Cancel for 7 knowledge files |
@@ -668,8 +669,16 @@ by `ActivityTracker` — thread-safe in-memory state read by `/api/activity-pane
 **Real-time costs:** Daily Cost card shows `sealed + inflight` cost. Inflight cost comes from
 `ActivityTracker.get_inflight_cost()`, updated as explorations accumulate LLM spend.
 
-**Real-time:** SSE connection with green/red indicator, toast notifications for key events
-(watch created/exited, snapshot sealed, explore complete/error), HTMX auto-refresh panels.
+**Real-time:** SSE connection (`/events` endpoint, `EventBus` → `sse.py`) with green/red
+indicator, toast notifications for key events (watch created/exited, snapshot sealed, explore
+complete/error), HTMX auto-refresh panels. Backtest lifecycle events (`backtest_started`,
+`backtest_complete`, `backtest_error`) enable running backtests to persist across navigation.
+
+**Backtest system:** Async job-based — `POST /api/strategies/backtest` returns a `job_id`
+immediately (HTTP 202), runs the backtest engine in a background task, and publishes SSE
+events on completion/error. `GET /api/strategies/backtest/{job_id}` returns job status +
+results. Frontend stores `job_id` in localStorage for state recovery across navigation and
+page refresh. See [BACKTEST-ARCHITECTURE.md](BACKTEST-ARCHITECTURE.md) for details.
 
 ### 10c. Cost Control — DONE
 

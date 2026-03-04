@@ -572,7 +572,30 @@
     "DLR",
     "JAKK",
     "MAMK",
-    "AXP"
+    "AXP",
+    "STKL",
+    "DAVE",
+    "SCHW",
+    "ALB",
+    "ABUS",
+    "ROIV",
+    "CRC",
+    "CHRD",
+    "DD",
+    "ALL",
+    "CENX",
+    "KALU",
+    "AA",
+    "LOT",
+    "BEAT",
+    "GRDX",
+    "BKR",
+    "BAYRY",
+    "BKSY",
+    "IRDM",
+    "BBWI",
+    "RHEP",
+    "ABCP"
   ],
   "crypto": [],
   "rejected": [
@@ -665,7 +688,11 @@
     "ABRA",
     "WEIR",
     "POU",
-    "PRY"
+    "PRY",
+    "SCWX",
+    "SUNDRMFAST",
+    "REVA",
+    "AKME"
   ],
-  "last_updated": "2026-03-04T15:07:17.263770+00:00"
+  "last_updated": "2026-03-04T16:34:12.803922+00:00"
 }

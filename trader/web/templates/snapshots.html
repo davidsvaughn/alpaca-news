@@ -340,6 +340,7 @@
         <div class="bt-toolbar-actions">
           <div class="btn-group btn-group-sm bt-action-group" role="group" aria-label="backtest actions">
             <button id="bt-run-btn" class="btn btn-primary" onclick="runBacktest()" disabled>Run</button>
+            <button id="bt-abort-btn" class="btn btn-outline-danger d-none" onclick="abortBacktest()">Abort</button>
             <button id="bt-clear-btn" class="btn btn-outline-secondary d-none" onclick="clearBacktest()">Clear</button>
           </div>
           <span id="bt-spinner" class="spinner-border spinner-border-sm text-primary d-none"></span>
@@ -405,7 +406,8 @@
     </div>
 
     <div id="bt-stats" class="bt-stats d-none">
-      <div id="bt-avg-card" class="bt-metric bt-metric-pair">
+      <!-- Hidden for now — misleading without more context. May revisit later. -->
+      <div id="bt-avg-card" class="bt-metric bt-metric-pair d-none">
         <div id="bt-avg" class="bt-metric-row">
           <span class="bt-metric-label">Avg P&L:</span>
           <span id="bt-avg-val" class="fw-bold"></span>
@@ -418,7 +420,7 @@
         </div>
       </div>
 
-      <div id="bt-pair-a" class="bt-metric bt-metric-pair">
+      <div id="bt-pair-a" class="bt-metric bt-metric-pair d-none">
         <div id="bt-ann-a" class="bt-metric-row">
           <span class="bt-metric-label" title="Annualized return (unlimited capital, time-weighted log return)">Ann(A):</span>
           <span id="bt-ann-a-val" class="fw-bold"></span>
@@ -430,7 +432,7 @@
         </div>
       </div>
 
-      <div id="bt-pair-b" class="bt-metric bt-metric-pair">
+      <div id="bt-pair-b" class="bt-metric bt-metric-pair d-none">
         <div id="bt-ann-b" class="bt-metric-row">
           <span class="bt-metric-label" title="Annualized return (fixed capital split, daily equity curve CAGR)">Ann(B):</span>
           <span id="bt-ann-b-val" class="fw-bold"></span>
@@ -881,6 +883,7 @@ function toggleBacktestPanel() {
     btn.classList.toggle('btn-primary', !hidden);
     btn.setAttribute('aria-expanded', hidden ? 'false' : 'true');
   }
+  localStorage.setItem('bt_panel_open', hidden ? '' : '1');
   if (!hidden && !_btStrategies) {
     // First open: fetch strategy + allocation definitions
     loadBtSettings();
@@ -1094,6 +1097,12 @@ function _collectBacktestFilters() {
   return filters;
 }
 
+function _btSetRunning(running) {
+  document.getElementById('bt-spinner').classList.toggle('d-none', !running);
+  document.getElementById('bt-run-btn').disabled = running;
+  document.getElementById('bt-abort-btn').classList.toggle('d-none', !running);
+}
+
 function runBacktest() {
   var strategy = _btCurrentStrategy;
   if (!strategy) return;
@@ -1101,8 +1110,7 @@ function runBacktest() {
   var allocParams = _collectAllocParams();
   var filters = _collectBacktestFilters();
 
-  document.getElementById('bt-spinner').classList.remove('d-none');
-  document.getElementById('bt-run-btn').disabled = true;
+  _btSetRunning(true);
 
   var marketClose = _getMarketClose();
   var minHold = parseInt(document.getElementById('bt-min-hold').value) || 5;
@@ -1118,26 +1126,75 @@ function runBacktest() {
   })
   .then(function(r) { return r.json(); })
   .then(function(data) {
-    var trades = data.trades || [];
-    if (!trades.length) {
-      alert('No snapshots match the current filters for backtest.');
+    if (data.error) {
+      alert(data.error);
+      _btSetRunning(false);
       return;
     }
-    _btResults = {};
-    trades.forEach(function(r) { _btResults[r.snapshot_id] = r; });
-    _btSummary = data.summary || null;
-    _displayResults();
-    document.getElementById('bt-clear-btn').classList.remove('d-none');
+    // Store job_id — SSE handler will pick up completion
+    localStorage.setItem('bt_job_id', data.job_id);
   })
   .catch(function(err) {
     console.error('Backtest error:', err);
     alert('Backtest failed. Check console for details.');
-  })
-  .finally(function() {
-    document.getElementById('bt-spinner').classList.add('d-none');
-    document.getElementById('bt-run-btn').disabled = false;
+    _btSetRunning(false);
   });
 }
+
+function abortBacktest() {
+  var jobId = localStorage.getItem('bt_job_id');
+  if (!jobId) { _btSetRunning(false); return; }
+  fetch('/api/strategies/backtest/' + jobId + '/abort', {method: 'POST'})
+    .finally(function() {
+      _btSetRunning(false);
+      localStorage.removeItem('bt_job_id');
+    });
+}
+
+// Handle backtest completion via SSE
+function _onBacktestComplete(jobId) {
+  fetch('/api/strategies/backtest/' + jobId)
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+      if (data.status !== 'complete' || !data.result) return;
+      var trades = data.result.trades || [];
+      _btResults = {};
+      trades.forEach(function(r) { _btResults[r.snapshot_id] = r; });
+      _btSummary = data.result.summary || null;
+      _displayResults();
+      document.getElementById('bt-clear-btn').classList.remove('d-none');
+      // Cache results in localStorage for page-refresh survival
+      try {
+        localStorage.setItem('bt_results', JSON.stringify(_btResults));
+        localStorage.setItem('bt_summary', JSON.stringify(_btSummary));
+      } catch(e) { /* quota exceeded — non-critical */ }
+    })
+    .finally(function() {
+      _btSetRunning(false);
+      localStorage.removeItem('bt_job_id');
+    });
+}
+
+document.body.addEventListener('sse:backtest_complete', function(e) {
+  var jobId = e.detail.job_id;
+  if (jobId !== localStorage.getItem('bt_job_id')) return;
+  _onBacktestComplete(jobId);
+});
+
+document.body.addEventListener('sse:backtest_error', function(e) {
+  var jobId = e.detail.job_id;
+  if (jobId !== localStorage.getItem('bt_job_id')) return;
+  alert('Backtest failed: ' + (e.detail.error || 'Unknown error'));
+  _btSetRunning(false);
+  localStorage.removeItem('bt_job_id');
+});
+
+document.body.addEventListener('sse:backtest_aborted', function(e) {
+  var jobId = e.detail.job_id;
+  if (jobId !== localStorage.getItem('bt_job_id')) return;
+  _btSetRunning(false);
+  localStorage.removeItem('bt_job_id');
+});
 
 function _fmtDuration(minutes) {
   if (minutes == null || minutes <= 0) return '';
@@ -1275,19 +1332,17 @@ function _updateAvgPnl() {
     return;
   }
 
-  // Avg P&L + P&L/day
-  _showMetric('bt-avg', 'bt-avg-val', s.avg_pnl, 2);
-  document.getElementById('bt-avg-count').textContent = '(' + s.count + ' rows)';
-  _showMetric('bt-daily-pnl', 'bt-daily-pnl-val', s.daily_pnl, 3);
-  _syncMetricPair('bt-avg-card', 'bt-avg', 'bt-daily-pnl', 'bt-avg-divider');
-
-  // Annualized metrics + Sharpe ratios
-  _showMetric('bt-ann-a', 'bt-ann-a-val', s.ann_a, 1);
-  _showSharpe('bt-sharpe-a', 'bt-sharpe-a-val', s.sharpe_a);
-  _showMetric('bt-ann-b', 'bt-ann-b-val', s.ann_b, 1);
-  _showSharpe('bt-sharpe-b', 'bt-sharpe-b-val', s.sharpe_b);
-  _syncMetricPair('bt-pair-a', 'bt-ann-a', 'bt-sharpe-a', 'bt-pair-a-divider');
-  _syncMetricPair('bt-pair-b', 'bt-ann-b', 'bt-sharpe-b', 'bt-pair-b-divider');
+  // Hidden for now — misleading without more context. May revisit later.
+  // _showMetric('bt-avg', 'bt-avg-val', s.avg_pnl, 2);
+  // document.getElementById('bt-avg-count').textContent = '(' + s.count + ' rows)';
+  // _showMetric('bt-daily-pnl', 'bt-daily-pnl-val', s.daily_pnl, 3);
+  // _syncMetricPair('bt-avg-card', 'bt-avg', 'bt-daily-pnl', 'bt-avg-divider');
+  // _showMetric('bt-ann-a', 'bt-ann-a-val', s.ann_a, 1);
+  // _showSharpe('bt-sharpe-a', 'bt-sharpe-a-val', s.sharpe_a);
+  // _showMetric('bt-ann-b', 'bt-ann-b-val', s.ann_b, 1);
+  // _showSharpe('bt-sharpe-b', 'bt-sharpe-b-val', s.sharpe_b);
+  // _syncMetricPair('bt-pair-a', 'bt-ann-a', 'bt-sharpe-a', 'bt-pair-a-divider');
+  // _syncMetricPair('bt-pair-b', 'bt-ann-b', 'bt-sharpe-b', 'bt-pair-b-divider');
 
   // Portfolio simulation result
   var simCard = document.getElementById('bt-sim-card');
@@ -1340,6 +1395,9 @@ function _updateAvgPnl() {
 function clearBacktest() {
   _btResults = {};
   _btSummary = null;
+  localStorage.removeItem('bt_results');
+  localStorage.removeItem('bt_summary');
+  localStorage.removeItem('bt_job_id');
   var tbl = document.getElementById('snapshots-tbl');
   if (tbl) {
     tbl.querySelectorAll('.exit-pnl, .exit-duration').forEach(function(cell) {
@@ -1376,7 +1434,10 @@ document.addEventListener('htmx:afterSwap', function(e) {
     updateClearAllBtn();
     updateFilterXButtons();
     // Re-apply cached backtest results after table swap
-    if (Object.keys(_btResults).length) _displayResults();
+    if (Object.keys(_btResults).length) {
+      _displayResults();
+      document.getElementById('bt-clear-btn').classList.remove('d-none');
+    }
   }
 });
 
@@ -1386,6 +1447,11 @@ applyClientFilters = function() {
   _origApplyClientFilters();
   if (Object.keys(_btResults).length) _updateAvgPnl();
 };
+
+// Auto-refresh table when a new snapshot is sealed
+document.body.addEventListener('sse:snapshot_sealed', function() {
+  reloadTable();
+});
 
 // Initial load
 (function() {
@@ -1413,6 +1479,53 @@ applyClientFilters = function() {
     if (v) params += '&' + key + '=' + encodeURIComponent(v);
   });
   htmx.ajax('GET', '/api/snapshots?' + params, {target: '#snapshots-table', swap: 'innerHTML'});
+
+  // Restore backtest panel visibility
+  if (localStorage.getItem('bt_panel_open') === '1') {
+    toggleBacktestPanel();
+  }
+
+  // Restore in-flight or completed backtest state
+  var savedJobId = localStorage.getItem('bt_job_id');
+  if (savedJobId) {
+    fetch('/api/strategies/backtest/' + savedJobId)
+      .then(function(r) { return r.json(); })
+      .then(function(data) {
+        if (data.status === 'complete') {
+          var trades = data.result.trades || [];
+          _btResults = {};
+          trades.forEach(function(r) { _btResults[r.snapshot_id] = r; });
+          _btSummary = data.result.summary || null;
+          _displayResults();
+          document.getElementById('bt-clear-btn').classList.remove('d-none');
+          try {
+            localStorage.setItem('bt_results', JSON.stringify(_btResults));
+            localStorage.setItem('bt_summary', JSON.stringify(_btSummary));
+          } catch(e) {}
+          localStorage.removeItem('bt_job_id');
+        } else if (data.status === 'running') {
+          // Still running — show spinner + abort button, SSE will pick up completion
+          _btSetRunning(true);
+        } else {
+          // Error or expired
+          localStorage.removeItem('bt_job_id');
+        }
+      })
+      .catch(function() { localStorage.removeItem('bt_job_id'); });
+  } else {
+    // No active job — restore cached completed results
+    try {
+      var cached = localStorage.getItem('bt_results');
+      if (cached) {
+        _btResults = JSON.parse(cached);
+        _btSummary = JSON.parse(localStorage.getItem('bt_summary') || 'null');
+        // htmx:afterSwap will call _displayResults() after table loads
+      }
+    } catch(e) {
+      localStorage.removeItem('bt_results');
+      localStorage.removeItem('bt_summary');
+    }
+  }
 })();
 </script>
 {% endblock %}

@@ -799,14 +799,20 @@ async def run_pipeline(
                 _tr["agent"] = spec.name
             all_tool_traces.extend(agent_result.tool_traces)
 
-            # Estimate per-agent cost (tokens + server-side tool fees)
-            agent_cost = _estimate_agent_cost(
-                spec.name, model_name,
-                input_tokens=int(agent_result.usage.get("input_tokens") or 0),
-                output_tokens=int(agent_result.usage.get("output_tokens") or 0),
-                web_search_calls=int(agent_result.usage.get("web_search_calls") or 0),
-                x_search_calls=int(agent_result.usage.get("x_search_calls") or 0),
-            )
+            # Use authoritative cost from provider when available (e.g. xAI
+            # cost_in_usd_ticks), otherwise fall back to estimate.
+            auth_cost = agent_result.usage.get("authoritative_cost_usd")
+            if auth_cost and auth_cost > 0:
+                agent_cost = float(auth_cost)
+            else:
+                agent_cost = _estimate_agent_cost(
+                    spec.name, model_name,
+                    input_tokens=int(agent_result.usage.get("input_tokens") or 0),
+                    output_tokens=int(agent_result.usage.get("output_tokens") or 0),
+                    cached_tokens=int(agent_result.usage.get("cached_tokens") or 0),
+                    web_search_calls=int(agent_result.usage.get("web_search_calls") or 0),
+                    x_search_calls=int(agent_result.usage.get("x_search_calls") or 0),
+                )
             cumulative_cost += agent_cost
 
             # Build round record
@@ -932,6 +938,7 @@ def _estimate_agent_cost(
     *,
     input_tokens: int,
     output_tokens: int,
+    cached_tokens: int = 0,
     web_search_calls: int = 0,
     x_search_calls: int = 0,
 ) -> float:
@@ -946,6 +953,7 @@ def _estimate_agent_cost(
     # Coerce to int — runners may pass None if API response omits fields
     input_tokens = int(input_tokens or 0)
     output_tokens = int(output_tokens or 0)
+    cached_tokens = int(cached_tokens or 0)
     web_search_calls = int(web_search_calls or 0)
     x_search_calls = int(x_search_calls or 0)
 
@@ -958,14 +966,17 @@ def _estimate_agent_cost(
             if provider == "openai":
                 token_cost = estimate_token_cost_openai(
                     raw_model, input_tokens=input_tokens, output_tokens=output_tokens,
+                    cached_tokens=cached_tokens,
                 ).total_cost_usd
             elif provider == "grok":
                 token_cost = estimate_token_cost_grok(
                     raw_model, input_tokens=input_tokens, output_tokens=output_tokens,
+                    cached_tokens=cached_tokens,
                 ).total_cost_usd
             elif provider == "gemini":
                 token_cost = estimate_token_cost_gemini(
                     raw_model, input_tokens=input_tokens, output_tokens=output_tokens,
+                    cached_tokens=cached_tokens,
                 ).total_cost_usd
         except (KeyError, ValueError):
             pass
