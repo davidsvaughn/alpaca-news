@@ -512,7 +512,7 @@ def create_app(
         return templates.TemplateResponse(
             request=request,
             name="dashboard.html",
-            context={"active_page": "dashboard"},
+            context={"active_page": "dashboard", "x_stream_enabled": settings.x_stream_enabled},
         )
 
     @app.get("/watches", response_class=HTMLResponse)
