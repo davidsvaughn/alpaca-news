@@ -130,17 +130,22 @@ def create_app(
 
     templates.env.filters["fmt_dt"] = _fmt_dt
 
-    def _normalize_signal_filter(value: str | None) -> str | None:
-        if not value:
+    def _parse_conf_min(value: str | None) -> float | None:
+        """Parse a signed confidence minimum from a percentage string.
+
+        Accepts values like '85' (bullish >=85%), '-60' (bearish >=60%),
+        or '0' (all bullish+neutral).  Returned as a fraction (e.g. 0.85).
+        """
+        if value is None:
             return None
-        v = value.strip().lower()
-        if v in {"bull", "bullish"}:
-            return "bullish"
-        if v in {"bear", "bearish"}:
-            return "bearish"
-        if v == "neutral":
-            return "neutral"
-        return None
+        v = value.strip()
+        if not v:
+            return None
+        try:
+            pct = float(v)
+        except ValueError:
+            return None
+        return pct / 100.0
 
     def _parse_optional_float(value: str | None) -> float | None:
         if value is None:
@@ -247,8 +252,19 @@ def create_app(
             return "\u2014"
         return f"{v:.1f}"
 
+    def _signed_confidence(pred: dict[str, Any] | None) -> float:
+        """Compute signed confidence: +conf for bullish, -conf for bearish, 0 for neutral/missing."""
+        if not pred:
+            return 0.0
+        d = str(pred.get("direction") or "").lower()
+        c = float(pred.get("confidence") or 0)
+        if d == "bullish":
+            return c
+        if d == "bearish":
+            return -c
+        return 0.0
+
     def _sort_snapshot_rows(rows: list[dict[str, Any]], sort_col: str, sort_dir: str) -> list[dict[str, Any]]:
-        signal_rank = {"bearish": 0, "neutral": 1, "bullish": 2}
 
         def _value(row: dict[str, Any]) -> Any:
             if sort_col == "created":
@@ -259,9 +275,7 @@ def create_app(
             if sort_col == "symbols":
                 return row.get("_primary_symbol") or ""
             if sort_col == "signal":
-                pred = row.get("prediction") or {}
-                d = str(pred.get("direction") or "").lower()
-                return signal_rank.get(d)
+                return _signed_confidence(row.get("prediction"))
             if sort_col == "price_10":
                 return _safe_float(row.get("_entry_price"))
             if sort_col == "price":
@@ -380,7 +394,7 @@ def create_app(
         created_after: str | None = None,
         created_before: str | None = None,
         headline: str | None = None,
-        signal: str | None = None,
+        conf_min: str | None = None,
         price_10_min: str | None = None,
         price_min: str | None = None,
         price_max: str | None = None,
@@ -395,13 +409,7 @@ def create_app(
         include_market_metrics: bool = True,
     ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
         explored_only = explored == "1"
-        signal_direction = _normalize_signal_filter(signal)
-        signal_filter = (
-            "bull" if signal_direction == "bullish"
-            else "bear" if signal_direction == "bearish"
-            else "neutral" if signal_direction == "neutral"
-            else ""
-        )
+        conf_min_val = _parse_conf_min(conf_min)
         sort_col_norm, sort_dir_norm = _normalize_sort(sort_col, sort_dir)
         price_10_min_val = _parse_optional_float(price_10_min)
         price_min_val = _parse_optional_float(price_min)
@@ -424,7 +432,7 @@ def create_app(
             created_after=created_after,
             created_before=created_before,
             headline=headline,
-            signal_direction=signal_direction,
+            conf_min=conf_min_val,
             price_10_min=price_10_min_val,
             price_delay=delay,
         )
@@ -435,7 +443,7 @@ def create_app(
             created_after=created_after,
             created_before=created_before,
             headline=headline,
-            signal_direction=signal_direction,
+            conf_min=conf_min_val,
             price_10_min=price_10_min_val,
             price_delay=delay,
             limit=max(base_total, 1),
@@ -484,7 +492,7 @@ def create_app(
         sorted_rows = _sort_snapshot_rows(filtered_rows, sort_col_norm, sort_dir_norm)
         meta = {
             "explored_only": explored_only,
-            "signal_filter": signal_filter,
+            "conf_min_filter": conf_min or "",
             "sort_col": sort_col_norm,
             "sort_dir": sort_dir_norm,
             "symbol_filter": symbol or "",
@@ -543,7 +551,7 @@ def create_app(
         created_after: str | None = None,
         created_before: str | None = None,
         headline: str | None = None,
-        signal: str | None = None,
+        conf_min: str | None = None,
         price_10_min: str | None = None,
         price_min: str | None = None,
         price_max: str | None = None,
@@ -557,13 +565,7 @@ def create_app(
         sort_dir: str | None = None,
     ):
         explored_only = explored == "1"
-        signal_direction = _normalize_signal_filter(signal)
-        signal_filter = (
-            "bull" if signal_direction == "bullish"
-            else "bear" if signal_direction == "bearish"
-            else "neutral" if signal_direction == "neutral"
-            else ""
-        )
+        conf_min_val = _parse_conf_min(conf_min)
         sort_col_norm, sort_dir_norm = _normalize_sort(sort_col, sort_dir)
         price_10_min_val = _parse_optional_float(price_10_min)
         delay = app.state.settings.price_delay_minutes
@@ -574,7 +576,7 @@ def create_app(
             created_after=created_after,
             created_before=created_before,
             headline=headline,
-            signal_direction=signal_direction,
+            conf_min=conf_min_val,
             price_10_min=price_10_min_val,
             price_delay=delay,
         )
@@ -583,7 +585,7 @@ def create_app(
             name="snapshots.html",
             context={"active_page": "snapshots", "symbol_filter": symbol,
                      "headline_filter": headline,
-                     "signal_filter": signal_filter,
+                     "conf_min_filter": conf_min or "",
                      "price_10_min_filter": price_10_min or "",
                      "price_min_filter": price_min or "",
                      "price_max_filter": price_max or "",
@@ -762,7 +764,7 @@ def create_app(
         created_after: str | None = None,
         created_before: str | None = None,
         headline: str | None = None,
-        signal: str | None = None,
+        conf_min: str | None = None,
         price_10_min: str | None = None,
         price_min: str | None = None,
         price_max: str | None = None,
@@ -784,7 +786,7 @@ def create_app(
             created_after=created_after,
             created_before=created_before,
             headline=headline,
-            signal=signal,
+            conf_min=conf_min,
             price_10_min=price_10_min,
             price_min=price_min,
             price_max=price_max,
@@ -809,7 +811,7 @@ def create_app(
                 "headline": meta["headline_filter"],
                 "created_after": meta["created_after"],
                 "created_before": meta["created_before"],
-                "signal": meta["signal_filter"],
+                "conf_min": meta["conf_min_filter"],
                 "price_10_min": meta["price_10_min_filter"],
                 "price_min": meta["price_min_filter"],
                 "price_max": meta["price_max_filter"],
@@ -836,7 +838,7 @@ def create_app(
                 "total_pages": total_pages,
                 "symbol_filter": meta["symbol_filter"],
                 "headline_filter": meta["headline_filter"],
-                "signal_filter": meta["signal_filter"],
+                "conf_min_filter": meta["conf_min_filter"],
                 "price_10_min_filter": meta["price_10_min_filter"],
                 "price_min_filter": meta["price_min_filter"],
                 "price_max_filter": meta["price_max_filter"],
@@ -996,7 +998,7 @@ def create_app(
                 created_after=(str(filters.get("created_after")).strip() if filters.get("created_after") is not None else None),
                 created_before=(str(filters.get("created_before")).strip() if filters.get("created_before") is not None else None),
                 headline=(str(filters.get("headline")).strip() if filters.get("headline") is not None else None),
-                signal=(str(filters.get("signal")).strip() if filters.get("signal") is not None else None),
+                conf_min=(str(filters.get("conf_min")).strip() if filters.get("conf_min") is not None else None),
                 price_10_min=(str(filters.get("price_10_min")).strip() if filters.get("price_10_min") is not None else None),
                 price_min=(str(filters.get("price_min")).strip() if filters.get("price_min") is not None else None),
                 price_max=(str(filters.get("price_max")).strip() if filters.get("price_max") is not None else None),

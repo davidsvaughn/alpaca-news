@@ -737,18 +737,28 @@ def _price_expr(price_delay: int = 10) -> str:
     )
 
 
-def get_all_snapshots(
-    db: Database, *, symbol: str | None = None, explored_only: bool = False,
-    created_after: str | None = None, created_before: str | None = None,
+_SIGNED_CONF_EXPR = (
+    "CASE LOWER(json_extract(snapshot_json, '$.prediction.direction'))"
+    " WHEN 'bullish' THEN CAST(json_extract(snapshot_json, '$.prediction.confidence') AS REAL)"
+    " WHEN 'bearish' THEN -CAST(json_extract(snapshot_json, '$.prediction.confidence') AS REAL)"
+    " ELSE 0 END"
+)
+
+
+def _add_common_snapshot_clauses(
+    clauses: list[str],
+    params: dict[str, Any],
+    *,
+    symbol: str | None = None,
+    explored_only: bool = False,
+    created_after: str | None = None,
+    created_before: str | None = None,
     headline: str | None = None,
-    signal_direction: str | None = None,
+    conf_min: float | None = None,
     price_10_min: float | None = None,
     price_delay: int = 10,
-    limit: int = 50, offset: int = 0,
-) -> list[dict[str, Any]]:
-    """Fetch snapshots ordered by created_at DESC, with optional filters."""
-    clauses: list[str] = []
-    params: dict[str, Any] = {"lim": limit, "off": offset}
+) -> None:
+    """Populate *clauses* and *params* for snapshot queries."""
     if symbol:
         clauses.append("symbols LIKE :sym")
         params["sym"] = f"%{symbol}%"
@@ -763,12 +773,33 @@ def get_all_snapshots(
     if headline:
         clauses.append("json_extract(snapshot_json, '$.trigger.headline') LIKE :headline")
         params["headline"] = f"%{headline}%"
-    if signal_direction:
-        clauses.append("LOWER(json_extract(snapshot_json, '$.prediction.direction')) = :signal_direction")
-        params["signal_direction"] = signal_direction.lower()
+    if conf_min is not None:
+        clauses.append(f"({_SIGNED_CONF_EXPR}) >= :conf_min")
+        params["conf_min"] = conf_min
     if price_10_min is not None:
         clauses.append(f"{_price_expr(price_delay)} >= :price_10_min")
         params["price_10_min"] = float(price_10_min)
+
+
+def get_all_snapshots(
+    db: Database, *, symbol: str | None = None, explored_only: bool = False,
+    created_after: str | None = None, created_before: str | None = None,
+    headline: str | None = None,
+    conf_min: float | None = None,
+    price_10_min: float | None = None,
+    price_delay: int = 10,
+    limit: int = 50, offset: int = 0,
+) -> list[dict[str, Any]]:
+    """Fetch snapshots ordered by created_at DESC, with optional filters."""
+    clauses: list[str] = []
+    params: dict[str, Any] = {"lim": limit, "off": offset}
+    _add_common_snapshot_clauses(
+        clauses, params,
+        symbol=symbol, explored_only=explored_only,
+        created_after=created_after, created_before=created_before,
+        headline=headline, conf_min=conf_min,
+        price_10_min=price_10_min, price_delay=price_delay,
+    )
     where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
     sql = f"SELECT snapshot_json FROM snapshots{where} ORDER BY created_at DESC LIMIT :lim OFFSET :off"
     with db.engine.connect() as conn:
@@ -784,33 +815,20 @@ def count_snapshots(
     created_after: str | None = None,
     created_before: str | None = None,
     headline: str | None = None,
-    signal_direction: str | None = None,
+    conf_min: float | None = None,
     price_10_min: float | None = None,
     price_delay: int = 10,
 ) -> int:
     """Count snapshots, optionally filtered by symbol and/or explored-only."""
     clauses: list[str] = []
     params: dict[str, Any] = {}
-    if symbol:
-        clauses.append("symbols LIKE :sym")
-        params["sym"] = f"%{symbol}%"
-    if explored_only:
-        clauses.append("json_extract(snapshot_json, '$.triage.action') = 'investigate'")
-    if created_after:
-        clauses.append("date(created_at) >= date(:created_after)")
-        params["created_after"] = created_after
-    if created_before:
-        clauses.append("date(created_at) <= date(:created_before)")
-        params["created_before"] = created_before
-    if headline:
-        clauses.append("json_extract(snapshot_json, '$.trigger.headline') LIKE :headline")
-        params["headline"] = f"%{headline}%"
-    if signal_direction:
-        clauses.append("LOWER(json_extract(snapshot_json, '$.prediction.direction')) = :signal_direction")
-        params["signal_direction"] = signal_direction.lower()
-    if price_10_min is not None:
-        clauses.append(f"{_price_expr(price_delay)} >= :price_10_min")
-        params["price_10_min"] = float(price_10_min)
+    _add_common_snapshot_clauses(
+        clauses, params,
+        symbol=symbol, explored_only=explored_only,
+        created_after=created_after, created_before=created_before,
+        headline=headline, conf_min=conf_min,
+        price_10_min=price_10_min, price_delay=price_delay,
+    )
     where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
     sql = f"SELECT COUNT(*) FROM snapshots{where}"
     with db.engine.connect() as conn:

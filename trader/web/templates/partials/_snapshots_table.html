@@ -29,15 +29,7 @@
         <th><div class="fcw"><input type="text" class="form-control form-control-sm srv-filter" data-key="headline" placeholder="Search..." value="{{ headline_filter }}" style="font-size:.7rem;"><span class="fx" onclick="clearFilter(this)">&times;</span></div></th>
         <th><div class="fcw"><input type="text" class="form-control form-control-sm srv-filter" data-key="symbol" placeholder="Symbol" value="{{ symbol_filter }}" maxlength="12" style="font-size:.7rem;"><span class="fx" onclick="clearFilter(this)">&times;</span></div></th>
         <th>
-          <div class="fcw">
-            <select class="form-select form-select-sm srv-filter" data-key="signal" style="font-size:.7rem;">
-              <option value="">All</option>
-              <option value="bull" {% if signal_filter == 'bull' %}selected{% endif %}>up</option>
-              <option value="bear" {% if signal_filter == 'bear' %}selected{% endif %}>down</option>
-              <option value="neutral" {% if signal_filter == 'neutral' %}selected{% endif %}>neutral</option>
-            </select>
-            <span class="fx" onclick="clearFilter(this)">&times;</span>
-          </div>
+          <div class="fcw"><input type="number" class="form-control form-control-sm srv-filter" data-key="conf_min" value="{{ conf_min_filter }}" placeholder="Min %" step="any" title="Signed confidence: 85 = bullish ≥85%, -60 = bearish ≥60%, 0 = all bullish" style="font-size:.7rem;"><span class="fx" onclick="clearFilter(this)">&times;</span></div>
         </th>
         <th>
           <div class="fcw"><input type="number" class="form-control form-control-sm srv-filter" data-key="price_10_min" value="{{ price_10_min_filter }}" placeholder="Min" step="any" style="font-size:.7rem;"><span class="fx" onclick="clearFilter(this)">&times;</span></div>
@@ -69,7 +61,7 @@
         <th data-col="created" data-sort="date" class="resizable-th sortable-th"><span class="col-label">Created</span><span class="sort-arrow">{% if sort_col == 'created' %} {% if sort_dir == 'asc' %}&#9650;{% else %}&#9660;{% endif %}{% endif %}</span><div class="resize-handle"></div></th>
         <th data-col="headline" data-sort="text" class="resizable-th sortable-th"><span class="col-label">Headline</span><span class="sort-arrow">{% if sort_col == 'headline' %} {% if sort_dir == 'asc' %}&#9650;{% else %}&#9660;{% endif %}{% endif %}</span><div class="resize-handle"></div></th>
         <th data-col="symbols" data-sort="text" class="resizable-th sortable-th"><span class="col-label">Symbols</span><span class="sort-arrow">{% if sort_col == 'symbols' %} {% if sort_dir == 'asc' %}&#9650;{% else %}&#9660;{% endif %}{% endif %}</span><div class="resize-handle"></div></th>
-        <th data-col="signal" data-sort="text" class="resizable-th sortable-th"><span class="col-label">Signal</span><span class="sort-arrow">{% if sort_col == 'signal' %} {% if sort_dir == 'asc' %}&#9650;{% else %}&#9660;{% endif %}{% endif %}</span><div class="resize-handle"></div></th>
+        <th data-col="signal" data-sort="num" class="resizable-th sortable-th"><span class="col-label">Signal</span><span class="sort-arrow">{% if sort_col == 'signal' %} {% if sort_dir == 'asc' %}&#9650;{% else %}&#9660;{% endif %}{% endif %}</span><div class="resize-handle"></div></th>
         <th data-col="price_10" data-sort="num" class="resizable-th sortable-th"><span class="col-label">Price@{{ price_delay_minutes | default(10) }}</span><span class="sort-arrow">{% if sort_col == 'price_10' %} {% if sort_dir == 'asc' %}&#9650;{% else %}&#9660;{% endif %}{% endif %}</span><div class="resize-handle"></div></th>
         <th data-col="price" data-sort="num" class="resizable-th sortable-th"><span class="col-label">Price</span><span class="sort-arrow">{% if sort_col == 'price' %} {% if sort_dir == 'asc' %}&#9650;{% else %}&#9660;{% endif %}{% endif %}</span><div class="resize-handle"></div></th>
         <th data-col="avg_vol" data-sort="num" class="resizable-th sortable-th"><span class="col-label">AvgVol</span><span class="sort-arrow">{% if sort_col == 'avg_vol' %} {% if sort_dir == 'asc' %}&#9650;{% else %}&#9660;{% endif %}{% endif %}</span><div class="resize-handle"></div></th>
@@ -102,7 +94,8 @@
           {% endif %}
           {% endfor %}
         </td>
-        <td data-sort-val="{{ dir }}">
+        {% set sconf = (conf if dir == 'bullish' else (-conf if dir == 'bearish' else 0)) if conf is not none else 0 %}
+        <td data-sort-val="{{ sconf }}">
           {% if dir == 'bullish' %}
             <span class="text-success">&#9650;{% if conf is not none %} {{ "%.0f"|format(conf * 100) }}%{% endif %}</span>
           {% elif dir == 'bearish' %}
