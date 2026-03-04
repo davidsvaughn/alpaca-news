@@ -285,17 +285,30 @@ def prefetch_market_data(symbols: list[str], market: MarketDataService) -> str:
                 field_map = [
                     (["market_cap", "marketCap"], "Market Cap"),
                     (["pe_ratio", "peRatio"], "P/E"),
+                    (["pb_ratio", "pbRatio"], "P/B"),
                     (["eps"], "EPS"),
                     (["beta"], "Beta"),
                     (["dividend_yield", "dividendYield"], "Div Yield"),
+                    (["net_profit_margin", "profit_margin"], "Net Margin"),
+                    (["return_on_equity"], "ROE"),
+                    (["debt_to_equity"], "Debt/Equity"),
+                    (["eps_change_pct_ttm"], "EPS Growth"),
+                    (["rev_change_pct_ttm"], "Rev Growth"),
+                    (["short_int_to_float"], "Short % Float"),
+                    (["short_int_days_to_cover"], "Short Days"),
                     (["sector"], "Sector"),
                     (["industry"], "Industry"),
                 ]
+                # Labels that should be skipped when value is 0
+                _skip_zero = {"Div Yield", "Short % Float", "Short Days"}
+                # Labels displayed as percentages
+                _pct_labels = {"Div Yield", "Net Margin", "ROE", "EPS Growth",
+                               "Rev Growth", "Short % Float"}
                 for keys, label in field_map:
                     val = next((fund[k] for k in keys if fund.get(k) not in (None, "")), None)
                     if val is None or val == "":
                         continue
-                    if label == "Div Yield" and val == 0.0:
+                    if label in _skip_zero and val == 0.0:
                         continue
                     if label == "Market Cap" and isinstance(val, (int, float)):
                         if val > 1e9:
@@ -304,8 +317,10 @@ def prefetch_market_data(symbols: list[str], market: MarketDataService) -> str:
                             parts.append(f"{label}: ${val/1e6:.1f}M")
                         else:
                             parts.append(f"{label}: ${val:,.0f}")
-                    elif label == "Div Yield" and isinstance(val, (int, float)):
-                        parts.append(f"{label}: {val:.2f}%")
+                    elif label in _pct_labels and isinstance(val, (int, float)):
+                        parts.append(f"{label}: {val:.1f}%")
+                    elif label in ("Debt/Equity", "P/B", "Short Days") and isinstance(val, (int, float)):
+                        parts.append(f"{label}: {val:.1f}")
                     else:
                         parts.append(f"{label}: {val}")
                 if parts:

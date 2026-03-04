@@ -126,6 +126,11 @@ class SchwabFundamentals:
     return_on_equity: float | None
     revenue: float | None
     shares_outstanding: float | None
+    debt_to_equity: float | None
+    short_int_to_float: float | None
+    short_int_days_to_cover: float | None
+    eps_change_pct_ttm: float | None
+    rev_change_pct_ttm: float | None
     fetched_at: str
 
     def to_dict(self) -> dict[str, Any]:
@@ -846,6 +851,11 @@ class SchwabMarketClient:
                 return_on_equity=_safe_float(fund.get("returnOnEquity")),
                 revenue=_safe_float(fund.get("revenueTTM")),
                 shares_outstanding=_safe_float(fund.get("sharesOutstanding")),
+                debt_to_equity=_safe_float(fund.get("totalDebtToEquity")),
+                short_int_to_float=_safe_float(fund.get("shortIntToFloat")),
+                short_int_days_to_cover=_safe_float(fund.get("shortIntDayToCover")),
+                eps_change_pct_ttm=_safe_float(fund.get("epsChangePercentTTM")),
+                rev_change_pct_ttm=_safe_float(fund.get("revChangeTTM")),
                 fetched_at=now_iso,
             )
             return result.to_dict()
