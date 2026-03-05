@@ -689,6 +689,34 @@ daily + per-item budget enforcement. Wired into pipeline.
 
 `trader/online/backfill.py` — batch driver for processing existing news files.
 
+### 10e. Running Services
+
+**Trader app (dashboard + orchestrator):**
+```bash
+# Launch (foreground)
+uv run python -m trader.main
+
+# Launch (background, skip backfill)
+BACKFILL_ON_START=false nohup uv run python -m trader.main > /tmp/alpaca-dashboard.log 2>&1 &
+
+# Kill
+pkill -f "trader.main"
+```
+
+**News websockets** are auto-launched as subprocesses by the trader app, controlled by env vars:
+
+| Env var | Default | Script |
+|---------|---------|--------|
+| `WS_INSIGHT_SENTRY` | `true` | `websocket/insight_sentry_news.py` |
+| `WS_ALPACA` | `false` | `websocket/alpaca_news.py` |
+
+They terminate automatically when the trader app exits. To run standalone:
+```bash
+uv run python -u websocket/insight_sentry_news.py
+uv run python websocket/alpaca_news.py
+```
+Insight Sentry requires `INSIGHT_SENTRY_API_KEY` in `.env`. Saves to `output/insight_sentry/`. Auto-reconnects on disconnect.
+
 ---
 
 ## 11. Project Structure

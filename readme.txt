@@ -1,5 +1,9 @@
-start 
-python websocket/alpaca_news.py
+start:
+
+uv run python -u websocket/insight_sentry_news.py
+-or-
+nohup uv run python -u websocket/insight_sentry_news.py > /tmp/insight-sentry.log 2>&1 &
+
 
 # Kill existing
 pkill -f "trader.main"

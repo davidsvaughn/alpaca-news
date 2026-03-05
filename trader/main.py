@@ -12,6 +12,8 @@ from __future__ import annotations
 
 import argparse
 import atexit
+import subprocess
+import sys
 import threading
 import time
 from pathlib import Path
@@ -61,6 +63,32 @@ def main() -> None:
     # Startup health check — validate API keys and provider availability
     from trader.online.health_check import run_health_checks
     run_health_checks()
+
+    # Launch news websocket subprocesses (controlled by WS_INSIGHT_SENTRY / WS_ALPACA)
+    ws_procs: list[subprocess.Popen] = []
+    _ws_scripts: list[tuple[bool, str, str]] = [
+        (settings.ws_insight_sentry, "websocket/insight_sentry_news.py", "Insight Sentry"),
+        (settings.ws_alpaca, "websocket/alpaca_news.py", "Alpaca"),
+    ]
+    for enabled, script, label in _ws_scripts:
+        if enabled:
+            p = subprocess.Popen(
+                [sys.executable, "-u", script],
+                stdout=sys.stdout,
+                stderr=sys.stderr,
+            )
+            ws_procs.append(p)
+            print(f"{label} websocket started (pid {p.pid})")
+
+    def _shutdown_ws():
+        for p in ws_procs:
+            p.terminate()
+            try:
+                p.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                p.kill()
+
+    atexit.register(_shutdown_ws)
 
     xstream: XStreamService | None = None
     if settings.x_stream_enabled and settings.x_stream_mode != "off":

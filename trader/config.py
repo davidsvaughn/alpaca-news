@@ -121,6 +121,10 @@ class Settings:
     backfill_on_start: bool
     backfill_limit: int
 
+    # News websocket subprocesses (auto-start with trader app)
+    ws_insight_sentry: bool
+    ws_alpaca: bool
+
     # X API stream (optional)
     x_stream_enabled: bool
     x_stream_mode: Literal["burst", "off"]
@@ -258,6 +262,9 @@ def load_settings(*, dotenv_path: str | None = None, override: bool = False) -> 
     backfill_on_start = _env_bool("BACKFILL_ON_START", False)
     backfill_limit = _env_int("BACKFILL_LIMIT", 50)
 
+    ws_insight_sentry = _env_bool("WS_INSIGHT_SENTRY", True)
+    ws_alpaca = _env_bool("WS_ALPACA", False)
+
     # X stream (conservative defaults)
     x_stream_enabled = _env_bool("X_STREAM_ENABLED", False)
     x_stream_mode = (os.getenv("X_STREAM_MODE") or "burst").strip().lower()
@@ -351,6 +358,8 @@ def load_settings(*, dotenv_path: str | None = None, override: bool = False) -> 
         mock_llm=mock_llm,
         backfill_on_start=backfill_on_start,
         backfill_limit=backfill_limit,
+        ws_insight_sentry=ws_insight_sentry,
+        ws_alpaca=ws_alpaca,
 
         x_stream_enabled=x_stream_enabled,
         x_stream_mode=x_stream_mode,  # type: ignore[arg-type]

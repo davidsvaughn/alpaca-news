@@ -840,7 +840,9 @@
     "TKC",
     "GGR",
     "UBER",
-    "CART"
+    "CART",
+    "TRWD",
+    "ALAB"
   ],
   "crypto": [],
   "rejected": [
@@ -952,5 +954,5 @@
     "EIDF",
     "GRS"
   ],
-  "last_updated": "2026-03-05T15:59:48.654657+00:00"
+  "last_updated": "2026-03-05T16:06:42.281234+00:00"
 }
