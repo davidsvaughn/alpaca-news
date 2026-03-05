@@ -214,6 +214,7 @@ class SchwabMarketClient:
         self._streamer: Any | None = None
         self._stream_state = StreamState()
         self._stream_started = False
+        self._volume_delta_collector: Any | None = None  # VolumeDeltaCollector (optional)
         self._init_client()
 
     def _init_client(self) -> None:
@@ -483,6 +484,14 @@ class SchwabMarketClient:
                 raise
             raise RuntimeError(f"start_stream({symbols}) failed: {e}") from e
 
+    def attach_volume_delta_collector(self, collector: Any) -> None:
+        """Attach a VolumeDeltaCollector to receive tick-level updates.
+
+        The collector's ``on_stream_update`` is called for every
+        LEVELONE_EQUITIES message that includes price and volume.
+        """
+        self._volume_delta_collector = collector
+
     def _on_stream_message(self, message: Any) -> None:
         """Handler for incoming stream messages."""
         try:
@@ -492,6 +501,8 @@ class SchwabMarketClient:
             for data in data_list:
                 if data.get("service") != "LEVELONE_EQUITIES":
                     continue
+                ts = data.get("timestamp")
+                ts_sec = ts / 1000.0 if ts else None
                 for content in data.get("content", []):
                     symbol = content.get("key")
                     if not symbol:
@@ -502,6 +513,21 @@ class SchwabMarketClient:
                             fields[FIELD_NAMES[k]] = v
                     if fields:
                         self._stream_state.update(symbol, fields)
+                    # Feed volume delta shadow collector
+                    vdc = self._volume_delta_collector
+                    if vdc is not None:
+                        price = content.get("3")  # field 3 = last_price
+                        vol = content.get("8")    # field 8 = total_volume
+                        if price is not None and vol is not None:
+                            try:
+                                vdc.on_stream_update(
+                                    symbol,
+                                    last_price=float(price),
+                                    total_volume=int(vol),
+                                    timestamp=ts_sec,
+                                )
+                            except Exception:
+                                pass  # collector errors must not break stream
         except Exception as e:
             if DEBUG:
                 raise

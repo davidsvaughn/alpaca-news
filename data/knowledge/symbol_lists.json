@@ -814,7 +814,33 @@
     "IMTX",
     "HCM",
     "VIST",
-    "LFEV"
+    "LFEV",
+    "NRC",
+    "MOBX",
+    "NXE",
+    "RDTCF",
+    "RGNX",
+    "AMBQ",
+    "BVS",
+    "RENI",
+    "MRDN",
+    "DSGR",
+    "GIS",
+    "BKNG",
+    "GSL",
+    "BLDR",
+    "SOUN",
+    "CVS",
+    "BILI",
+    "DUKR",
+    "OLP",
+    "POST",
+    "BRLT",
+    "RYAM",
+    "TKC",
+    "GGR",
+    "UBER",
+    "CART"
   ],
   "crypto": [],
   "rejected": [
@@ -921,7 +947,10 @@
     "BF.B",
     "MI.UN",
     "BIOVIC B",
-    "VISTA"
+    "VISTA",
+    "FRAL.NS",
+    "EIDF",
+    "GRS"
   ],
-  "last_updated": "2026-03-05T15:00:28.860209+00:00"
+  "last_updated": "2026-03-05T15:59:48.654657+00:00"
 }

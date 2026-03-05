@@ -43,47 +43,46 @@ to validate before switching to live money.
 
 ## Best-Performing Backtest Configuration
 
-From the screenshot of the best-performing parameter set:
+From the screenshot of the best-performing parameter set (updated 2026-03-05):
 
 ### Exit Strategy: Volume Delta Divergence
 
 | Parameter | Value | Description |
 |-----------|-------|-------------|
 | Strategy | `volume_delta_divergence` | Exit on price-high + delta-decline divergence |
-| Lookback | **30 bars** | Rolling window for divergence detection |
+| Lookback | **80 bars** | Rolling window for divergence detection |
 
 ### Guard System
 
 | Parameter | Value | Description |
 |-----------|-------|-------------|
-| Guard Stop % | **10%** | Hard stop loss below entry |
+| Guard Stop % | **5%** | Hard stop loss below entry |
 | Guard Target % | **0%** (disabled) | No automatic take-profit |
 
 ### Global Parameters
 
 | Parameter | Value | Description |
 |-----------|-------|-------------|
-| Market Close | **16:00** | Regular hours only |
+| Market Close | **16:00** | Regular hours only (extended hours OFF) |
 | Min Hold | **5 bars** | 5 minutes before exit checks |
-| Price Delay | **10 min** | Entry price captured 10 min after signal |
-| Cost BPS | **10** | 0.10% transaction cost estimate |
+| Price Delay | **5 min** | Entry price captured 5 min after signal |
+| Cost BPS | **0.5** | 0.005% transaction cost estimate |
 
-### Allocation: Ranking Reallocation
+### Allocation: Max Positions
 
 | Parameter | Value | Description |
 |-----------|-------|-------------|
-| Allocation % | **5%** | Each position gets 5% of capital |
-| Max Concurrent | **20** | Derived: 100% / 5% = 20 slots |
-| Rank Method | **Momentum** | Rank by unrealized P&L |
-| Reinvest Delay | **1 min** | Cash available almost immediately |
+| Strategy | `max_positions` | Limit concurrent positions |
+| Max Concurrent | **20** | Maximum simultaneous positions |
+| When Full | **Replace weakest** | Replace position with lowest unrealized P&L |
+| Rank Method | **Unrealized P&L** | Rank by momentum (current P&L) |
+| Starting Capital | **$100,000** | Portfolio simulation starting amount |
 
 ### Snapshot Filters
 
 | Filter | Value |
 |--------|-------|
 | Confidence Min | **+85** (bullish ≥ 85%) |
-| Market Cap Min | (from screenshot) |
-| Avg Volume Min | (from screenshot) |
 
 ### Performance Metrics (from backtest)
 
