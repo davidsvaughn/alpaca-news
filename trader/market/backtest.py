@@ -9,8 +9,9 @@ remains available for backtesting months later.
 
 Usage::
 
-    from trader.market.backtest import run_backtest, STRATEGIES
+    from trader.market.backtest import run_backtest, evaluate_exit, STRATEGIES
 
+    # Batch backtest:
     results = run_backtest(
         strategy_key="fixed_stop_loss",
         params={"stop_pct": 5.0},
@@ -18,6 +19,13 @@ Usage::
                   "entry_price": 150.0,
                   "entry_time": "2026-01-15T15:40:00+00:00"}],
     )
+
+    # Live exit evaluation (called each cycle by LiveExitMonitor):
+    result = evaluate_exit("volume_delta_divergence", {"lookback": 80},
+                           bars=df, entry_idx=42, entry_price=150.0,
+                           guard_stop_pct=5.0, min_hold=5)
+    if result.should_exit:
+        print(f"EXIT: {result.reason} at {result.exit_price}")
 """
 
 from __future__ import annotations
@@ -1979,6 +1987,98 @@ _STRATEGY_RUNNERS = {
     "volume_imbalance_flip": _run_volume_imbalance_flip,
     "max_holding_period": _run_max_holding_period,
 }
+
+
+# ---------------------------------------------------------------------------
+# Live exit evaluation API
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class ExitResult:
+    """Result of evaluating an exit strategy on live bar data."""
+
+    should_exit: bool
+    exit_price: float | None = None
+    exit_time: str | None = None
+    reason: str = "still_open"
+    bars_held: int = 0
+
+
+def evaluate_exit(
+    strategy_key: str,
+    params: dict[str, float],
+    bars: pd.DataFrame,
+    entry_idx: int,
+    entry_price: float,
+    guard_stop_pct: float = 0,
+    guard_target_pct: float = 0,
+    min_hold: int = 5,
+    indicator_cache: dict[tuple[Any, ...], Any] | None = None,
+) -> ExitResult:
+    """Evaluate an exit strategy on bar data — for use by the live exit monitor.
+
+    Same math as the backtest engine, but designed for incremental evaluation:
+    call with the latest bars each cycle. If the strategy signals an exit,
+    returns ExitResult with should_exit=True.
+
+    Args:
+        strategy_key: Key into STRATEGIES / _STRATEGY_RUNNERS.
+        params: Strategy-specific parameter values.
+        bars: 1-min OHLCV DataFrame (columns: Open, High, Low, Close, Volume).
+              Must include bars from before entry through the present.
+        entry_idx: Index position of the entry bar in the DataFrame.
+        entry_price: Position entry price.
+        guard_stop_pct: Guard stop-loss % (0 = disabled).
+        guard_target_pct: Guard take-profit % (0 = disabled).
+        min_hold: Minimum bars before exit checks begin.
+        indicator_cache: Optional dict for caching indicators across calls
+                         for the same symbol. Reuse across cycles to avoid
+                         recomputing indicators on unchanged bar history.
+
+    Returns:
+        ExitResult with should_exit=True if strategy signals exit.
+    """
+    runner = _STRATEGY_RUNNERS.get(strategy_key)
+    if runner is None:
+        return ExitResult(should_exit=False, reason="unknown_strategy")
+
+    if indicator_cache is None:
+        indicator_cache = {}
+
+    # Apply min_hold offset (same as run_backtest)
+    run_idx = min(entry_idx + max(0, min_hold), len(bars) - 1)
+
+    guard_stop = (
+        entry_price * (1 - guard_stop_pct / 100) if guard_stop_pct > 0 else None
+    )
+    guard_target = (
+        entry_price * (1 + guard_target_pct / 100) if guard_target_pct > 0 else None
+    )
+
+    exit_price, exit_time, reason, bars_held = runner(
+        bars, run_idx, entry_price, params,
+        guard_stop=guard_stop, guard_target=guard_target,
+        indicator_cache=indicator_cache,
+    )
+
+    # Adjust bars_held to include min_hold period
+    bars_held = bars_held + (run_idx - entry_idx)
+
+    if exit_price is not None:
+        return ExitResult(
+            should_exit=True,
+            exit_price=float(exit_price),
+            exit_time=exit_time,
+            reason=reason,
+            bars_held=bars_held,
+        )
+
+    return ExitResult(
+        should_exit=False,
+        reason=reason,
+        bars_held=bars_held,
+    )
 
 
 # ---------------------------------------------------------------------------

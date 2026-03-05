@@ -84,6 +84,19 @@ follow_ups_table = Table(
 )
 
 
+live_configs_table = Table(
+    "live_configs",
+    metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("config_id", String, unique=True, nullable=False),
+    Column("name", String, nullable=False),
+    Column("active", Integer, nullable=False, server_default="0"),  # 0/1 boolean
+    Column("created_at", DateTime(timezone=True), server_default=func.now(), nullable=False),
+    Column("updated_at", DateTime(timezone=True), server_default=func.now(), nullable=False),
+    Column("config_json", JSON, nullable=False),
+)
+
+
 @dataclass(frozen=True)
 class Database:
     engine: Engine
@@ -284,7 +297,7 @@ def get_active_watches(db: Database) -> list[dict[str, Any]]:
         rows = conn.execute(
             text(
                 "SELECT watch_json FROM watches "
-                "WHERE status IN ('holding', 'exited', 'retrospective') "
+                "WHERE status IN ('holding', 'exited', 'retrospective', 'cooling_off') "
                 "ORDER BY created_at"
             ),
         ).fetchall()
@@ -293,6 +306,140 @@ def get_active_watches(db: Database) -> list[dict[str, Any]]:
         raw = row[0]
         result.append(json.loads(raw) if isinstance(raw, str) else raw)
     return result
+
+
+# ---------------------------------------------------------------------------
+# Live configs
+# ---------------------------------------------------------------------------
+
+
+def insert_live_config(db: Database, *, config: dict[str, Any]) -> bool:
+    """Insert a live config. Returns True if inserted, False if duplicate."""
+    with db.engine.begin() as conn:
+        result = conn.execute(
+            text(
+                "INSERT OR IGNORE INTO live_configs "
+                "(config_id, name, active, config_json) "
+                "VALUES (:cid, :name, :active, :cjson)"
+            ),
+            {
+                "cid": config["config_id"],
+                "name": config["name"],
+                "active": 1 if config.get("active") else 0,
+                "cjson": json.dumps(config, ensure_ascii=False),
+            },
+        )
+    return result.rowcount > 0
+
+
+def update_live_config(db: Database, config_id: str, config: dict[str, Any]) -> None:
+    """Update a live config's JSON, name, active flag, and updated_at."""
+    with db.engine.begin() as conn:
+        conn.execute(
+            text(
+                "UPDATE live_configs SET name = :name, active = :active, "
+                "config_json = :cjson, updated_at = CURRENT_TIMESTAMP "
+                "WHERE config_id = :cid"
+            ),
+            {
+                "cid": config_id,
+                "name": config["name"],
+                "active": 1 if config.get("active") else 0,
+                "cjson": json.dumps(config, ensure_ascii=False),
+            },
+        )
+
+
+def get_live_config(db: Database, config_id: str) -> dict[str, Any] | None:
+    """Fetch a single live config by ID."""
+    with db.engine.connect() as conn:
+        row = conn.execute(
+            text("SELECT config_json FROM live_configs WHERE config_id = :cid"),
+            {"cid": config_id},
+        ).fetchone()
+    if row is None:
+        return None
+    raw = row[0]
+    return json.loads(raw) if isinstance(raw, str) else raw
+
+
+def get_active_live_config(db: Database) -> dict[str, Any] | None:
+    """Fetch the currently active live config (at most one)."""
+    with db.engine.connect() as conn:
+        row = conn.execute(
+            text("SELECT config_json FROM live_configs WHERE active = 1 LIMIT 1"),
+        ).fetchone()
+    if row is None:
+        return None
+    raw = row[0]
+    return json.loads(raw) if isinstance(raw, str) else raw
+
+
+def get_all_live_configs(db: Database) -> list[dict[str, Any]]:
+    """Fetch all live configs ordered by created_at DESC."""
+    with db.engine.connect() as conn:
+        rows = conn.execute(
+            text("SELECT config_json FROM live_configs ORDER BY created_at DESC"),
+        ).fetchall()
+    return [json.loads(r[0]) if isinstance(r[0], str) else r[0] for r in rows]
+
+
+def activate_live_config(db: Database, config_id: str) -> bool:
+    """Activate a config, deactivating all others. Returns True if config exists."""
+    with db.engine.begin() as conn:
+        # Deactivate all
+        conn.execute(text("UPDATE live_configs SET active = 0"))
+        # Activate the specified one
+        result = conn.execute(
+            text("UPDATE live_configs SET active = 1, updated_at = CURRENT_TIMESTAMP WHERE config_id = :cid"),
+            {"cid": config_id},
+        )
+        # Update the JSON blob too
+        if result.rowcount > 0:
+            row = conn.execute(
+                text("SELECT config_json FROM live_configs WHERE config_id = :cid"),
+                {"cid": config_id},
+            ).fetchone()
+            if row:
+                cfg = json.loads(row[0]) if isinstance(row[0], str) else row[0]
+                cfg["active"] = True
+                conn.execute(
+                    text("UPDATE live_configs SET config_json = :cjson WHERE config_id = :cid"),
+                    {"cid": config_id, "cjson": json.dumps(cfg, ensure_ascii=False)},
+                )
+    return result.rowcount > 0
+
+
+def deactivate_live_config(db: Database, config_id: str) -> bool:
+    """Deactivate a specific config. Returns True if config exists."""
+    with db.engine.begin() as conn:
+        result = conn.execute(
+            text("UPDATE live_configs SET active = 0, updated_at = CURRENT_TIMESTAMP WHERE config_id = :cid"),
+            {"cid": config_id},
+        )
+        if result.rowcount > 0:
+            row = conn.execute(
+                text("SELECT config_json FROM live_configs WHERE config_id = :cid"),
+                {"cid": config_id},
+            ).fetchone()
+            if row:
+                cfg = json.loads(row[0]) if isinstance(row[0], str) else row[0]
+                cfg["active"] = False
+                conn.execute(
+                    text("UPDATE live_configs SET config_json = :cjson WHERE config_id = :cid"),
+                    {"cid": config_id, "cjson": json.dumps(cfg, ensure_ascii=False)},
+                )
+    return result.rowcount > 0
+
+
+def delete_live_config(db: Database, config_id: str) -> bool:
+    """Delete a live config. Returns True if deleted."""
+    with db.engine.begin() as conn:
+        result = conn.execute(
+            text("DELETE FROM live_configs WHERE config_id = :cid"),
+            {"cid": config_id},
+        )
+    return result.rowcount > 0
 
 
 # ---------------------------------------------------------------------------

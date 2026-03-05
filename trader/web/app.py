@@ -29,18 +29,26 @@ from trader.db.database import (
     get_active_follow_ups,
     get_active_watches,
     get_all_follow_ups,
+    get_all_live_configs,
     get_all_snapshots,
     get_all_watches,
+    get_active_live_config,
     get_daily_cost_history,
     get_daily_cost_today,
     get_daily_cost_today_by_provider,
     get_follow_ups_by_snapshot,
+    get_live_config,
     get_recent_events,
     get_snapshot,
     get_watch,
     get_watch_by_snapshot,
+    insert_live_config,
     insert_watch,
+    update_live_config,
     update_watch,
+    activate_live_config,
+    deactivate_live_config,
+    delete_live_config,
 )
 from trader.knowledge.store import KnowledgeStore
 from trader.models.watch import WatchBuilder
@@ -1207,6 +1215,88 @@ def create_app(
         if task and not task.done():
             task.cancel()
         return {"status": "aborted"}
+
+    # ------------------------------------------------------------------
+    # Live config endpoints
+    # ------------------------------------------------------------------
+
+    @app.get("/api/live/configs")
+    async def api_live_configs():
+        """List all saved live configs."""
+        return get_all_live_configs(db)
+
+    @app.get("/api/live/config")
+    async def api_live_config_active():
+        """Get the currently active live config (or null)."""
+        cfg = get_active_live_config(db)
+        return cfg or JSONResponse(None, status_code=200)
+
+    @app.get("/api/live/config/{config_id}")
+    async def api_live_config_get(config_id: str):
+        """Get a specific live config by ID."""
+        cfg = get_live_config(db, config_id)
+        if not cfg:
+            return JSONResponse({"error": "not_found"}, status_code=404)
+        return cfg
+
+    @app.post("/api/live/config")
+    async def api_live_config_create(request: Request):
+        """Create or update a live config from JSON body."""
+        from trader.models.live_config import LiveConfig
+
+        body = await request.json()
+        config_id = body.get("config_id")
+
+        if config_id and get_live_config(db, config_id):
+            # Update existing
+            existing = get_live_config(db, config_id)
+            existing.update(body)
+            existing["updated_at"] = datetime.now(tz=timezone.utc).isoformat()
+            update_live_config(db, config_id, existing)
+            return existing
+        else:
+            # Create new
+            cfg = LiveConfig.create(
+                name=body.get("name", "Untitled"),
+                filters=body.get("filters", {}),
+                allocation=body.get("allocation", "none"),
+                allocation_params=body.get("allocation_params", {}),
+                starting_capital=float(body.get("starting_capital", 100000)),
+                exit_strategy=body.get("exit_strategy", "volume_delta_divergence"),
+                exit_params=body.get("exit_params", {}),
+                guard_stop_pct=float(body.get("guard_stop_pct", 0)),
+                guard_target_pct=float(body.get("guard_target_pct", 0)),
+                min_hold=int(body.get("min_hold", 5)),
+                price_delay_minutes=int(body.get("price_delay_minutes", 10)),
+                market_close=body.get("market_close", "16:00"),
+                cooling_off_market_hours=float(body.get("cooling_off_market_hours", 24.0)),
+            )
+            insert_live_config(db, config=cfg.to_dict())
+            return cfg.to_dict()
+
+    @app.post("/api/live/config/{config_id}/activate")
+    async def api_live_config_activate(config_id: str):
+        """Activate a live config (deactivates all others)."""
+        ok = activate_live_config(db, config_id)
+        if not ok:
+            return JSONResponse({"error": "not_found"}, status_code=404)
+        return {"status": "activated", "config_id": config_id}
+
+    @app.post("/api/live/config/{config_id}/deactivate")
+    async def api_live_config_deactivate(config_id: str):
+        """Deactivate a live config."""
+        ok = deactivate_live_config(db, config_id)
+        if not ok:
+            return JSONResponse({"error": "not_found"}, status_code=404)
+        return {"status": "deactivated", "config_id": config_id}
+
+    @app.delete("/api/live/config/{config_id}")
+    async def api_live_config_delete(config_id: str):
+        """Delete a live config."""
+        ok = delete_live_config(db, config_id)
+        if not ok:
+            return JSONResponse({"error": "not_found"}, status_code=404)
+        return {"status": "deleted", "config_id": config_id}
 
     @app.get("/api/activity-panel", response_class=HTMLResponse)
     async def api_activity_panel(request: Request):
