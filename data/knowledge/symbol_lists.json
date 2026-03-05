@@ -842,7 +842,16 @@
     "UBER",
     "CART",
     "TRWD",
-    "ALAB"
+    "ALAB",
+    "TNYA",
+    "GRRR",
+    "ET",
+    "BP",
+    "IREN",
+    "MCK",
+    "FAST",
+    "HYOR",
+    "SEI"
   ],
   "crypto": [],
   "rejected": [
@@ -954,5 +963,5 @@
     "EIDF",
     "GRS"
   ],
-  "last_updated": "2026-03-05T16:06:42.281234+00:00"
+  "last_updated": "2026-03-05T16:53:14.318239+00:00"
 }
