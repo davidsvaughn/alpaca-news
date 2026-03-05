@@ -143,7 +143,9 @@ class TestLiveConfig:
         assert delete_live_config(db, sample_config.config_id)
         assert get_all_live_configs(db) == []
 
-    def test_only_one_active(self, db):
+    def test_multiple_active(self, db):
+        """Multiple configs can be active simultaneously (multi-portfolio)."""
+        from trader.db.database import get_active_live_configs
         cfg1 = LiveConfig.create(
             name="Config A", filters={}, allocation="none",
             allocation_params={}, starting_capital=100000,
@@ -158,12 +160,17 @@ class TestLiveConfig:
         insert_live_config(db, config=cfg2.to_dict())
         activate_live_config(db, cfg1.config_id)
         activate_live_config(db, cfg2.config_id)
-        # Only cfg2 should be active
-        active = get_active_live_config(db)
-        assert active["config_id"] == cfg2.config_id
-        # cfg1 should be deactivated
-        cfg1_fetched = get_live_config(db, cfg1.config_id)
-        assert cfg1_fetched["active"] is False
+        # Both should be active
+        active = get_active_live_configs(db)
+        active_ids = {c["config_id"] for c in active}
+        assert cfg1.config_id in active_ids
+        assert cfg2.config_id in active_ids
+        assert len(active) == 2
+        # Deactivate one — other stays active
+        deactivate_live_config(db, cfg1.config_id)
+        active = get_active_live_configs(db)
+        assert len(active) == 1
+        assert active[0]["config_id"] == cfg2.config_id
 
 
 # ---------------------------------------------------------------------------

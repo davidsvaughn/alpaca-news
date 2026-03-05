@@ -632,10 +632,14 @@ def _run_single_exploration_body(
     # backtest filter set + allocation strategy). Otherwise, fall back to
     # the legacy signal-confidence-threshold approach.
     watch_was_created = False
+    _sig_dir = signal.direction if signal else "no_signal"
+    _sig_conf = signal.confidence if signal else 0
+    print(f"LIVE-DEBUG: watch_enabled={settings.watch_enabled} signal={_sig_dir} conf={_sig_conf} symbol={symbol}")
     if settings.watch_enabled and signal is not None and signal.direction != "neutral":
         try:
             from trader.db.database import get_active_live_config
             active_cfg = get_active_live_config(db)
+            print(f"LIVE-DEBUG: active_cfg={'YES' if active_cfg else 'NO'}")
 
             if active_cfg:
                 # Live trading mode: use LivePortfolioManager

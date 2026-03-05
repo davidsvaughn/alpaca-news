@@ -886,7 +886,16 @@
     "AVO",
     "SERV",
     "UWHR",
-    "BEN"
+    "BEN",
+    "JBHT",
+    "HBAN",
+    "MCRAA",
+    "MCRAB",
+    "MNSO",
+    "MSCI",
+    "FIS",
+    "ITUB",
+    "BBD"
   ],
   "crypto": [],
   "rejected": [
@@ -999,5 +1008,5 @@
     "GRS",
     "SAMHI"
   ],
-  "last_updated": "2026-03-05T18:46:48.357490+00:00"
+  "last_updated": "2026-03-05T19:38:03.368042+00:00"
 }

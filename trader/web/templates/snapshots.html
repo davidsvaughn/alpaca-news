@@ -1177,7 +1177,7 @@ function goLive() {
     market_close: marketClose,
   };
 
-  if (!confirm('Go live with ' + strategy + '?\n\nThis will create and activate a live config. New snapshots matching your filters will be traded automatically (virtual positions).')) return;
+  if (!confirm('Add portfolio: ' + strategy + '?\n\nThis creates a new virtual portfolio. Multiple portfolios can run simultaneously. Check the Positions tab to monitor.')) return;
 
   fetch('/api/live/config', {
     method: 'POST',
@@ -1191,10 +1191,8 @@ function goLive() {
     return fetch('/api/live/config/' + cfg.config_id + '/activate', {method: 'POST'})
       .then(function(r) { return r.json(); })
       .then(function() {
-        alert('Live config activated: ' + configName + '\n\nCheck the Positions tab to monitor.');
-        document.getElementById('bt-golive-btn').textContent = 'Live!';
-        document.getElementById('bt-golive-btn').classList.replace('btn-success', 'btn-outline-success');
-        document.getElementById('bt-golive-btn').disabled = true;
+        alert('Portfolio added: ' + configName + '\n\nCheck the Positions tab to monitor.');
+        _updateGoLiveBtn();
       });
   })
   .catch(function(err) {
@@ -1589,24 +1587,26 @@ document.body.addEventListener('sse:snapshot_sealed', function() {
     }
   }
 
-  // Check if a live config is already active and update Go Live button
-  fetch('/api/live/config')
+  _updateGoLiveBtn();
+})();
+
+function _updateGoLiveBtn() {
+  fetch('/api/live/configs')
     .then(function(r) { return r.json(); })
-    .then(function(cfg) {
+    .then(function(configs) {
       var btn = document.getElementById('bt-golive-btn');
-      if (cfg && cfg.config_id) {
-        btn.textContent = 'Live: ' + (cfg.name || 'active');
-        btn.classList.replace('btn-success', 'btn-outline-success');
-        btn.disabled = false;
-        btn.onclick = function() {
-          if (confirm('Deactivate current live config "' + cfg.name + '"?')) {
-            fetch('/api/live/config/' + cfg.config_id + '/deactivate', {method: 'POST'})
-              .then(function() { location.reload(); });
-          }
-        };
+      var active = (configs || []).filter(function(c) { return c.active; });
+      if (active.length > 0) {
+        btn.textContent = active.length + ' Live';
+        btn.classList.remove('btn-success');
+        btn.classList.add('btn-outline-success');
+      } else {
+        btn.textContent = 'Go Live';
+        btn.classList.remove('btn-outline-success');
+        btn.classList.add('btn-success');
       }
     })
     .catch(function() {});
-})();
+}
 </script>
 {% endblock %}

@@ -318,10 +318,13 @@ class LiveExitMonitor:
 
 
 class LivePortfolioManager:
-    """Evaluates new snapshots against the active LiveConfig.
+    """Evaluates new snapshots against all active LiveConfigs.
 
-    Called from the orchestrator when a snapshot is sealed. Decides
-    whether to buy (create watch) based on filters and allocation.
+    Supports multiple portfolios: each active config is evaluated
+    independently. A single snapshot can create watches in multiple
+    portfolios if it passes each config's filters.
+
+    Called from the orchestrator when a snapshot is sealed.
     """
 
     def __init__(
@@ -344,15 +347,37 @@ class LivePortfolioManager:
         snapshot: dict[str, Any],
         symbol: str,
     ) -> bool:
-        """Evaluate a sealed snapshot against the active LiveConfig.
+        """Evaluate a sealed snapshot against ALL active LiveConfigs.
 
-        Returns True if a watch was created (buy), False if skipped.
+        Returns True if at least one watch was created across any portfolio.
         """
-        config_dict = get_active_live_config(self.db)
-        if not config_dict:
-            return False
+        from trader.db.database import get_active_live_configs
 
-        cfg = LiveConfig.from_dict(config_dict)
+        active_configs = get_active_live_configs(self.db)
+        if not active_configs:
+            log.debug("evaluate_snapshot(%s): no active configs", symbol)
+            return False
+        log.info("evaluate_snapshot(%s): checking %d active config(s)", symbol, len(active_configs))
+
+        any_created = False
+        for config_dict in active_configs:
+            cfg = LiveConfig.from_dict(config_dict)
+            if self._evaluate_for_config(snapshot, symbol, cfg):
+                any_created = True
+
+        return any_created
+
+    def _evaluate_for_config(
+        self,
+        snapshot: dict[str, Any],
+        symbol: str,
+        cfg: LiveConfig,
+    ) -> bool:
+        """Evaluate a snapshot against a single LiveConfig.
+
+        Returns True if a watch was created for this portfolio.
+        """
+        log.info("EVAL %s for config %s (%s)", symbol, cfg.name, cfg.config_id)
 
         # Extract prediction from snapshot
         prediction = snapshot.get("prediction") or {}
@@ -395,8 +420,8 @@ class LivePortfolioManager:
             log.info("SKIP %s: failed market metric filter", symbol)
             return False
 
-        # --- Check allocation ---
-        holding_count = count_holding_watches(self.db)
+        # --- Check allocation (per-portfolio) ---
+        holding_count = count_holding_watches(self.db, live_config_id=cfg.config_id)
 
         alloc = cfg.allocation
         alloc_params = cfg.allocation_params or {}

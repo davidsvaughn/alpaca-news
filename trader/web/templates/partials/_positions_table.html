@@ -1,202 +1,165 @@
-<!-- Portfolio Stats -->
-<div class="row mb-3 g-2">
+<!-- Macro: stats row -->
+{% macro stats_row(stats) %}
+<div class="row mb-2 g-2">
+  {% for label, value, cls in [
+    ('Open', stats.holding_count, ''),
+    ('Cooling', stats.cooling_count, ''),
+    ('Closed', stats.closed_count, ''),
+    ('Win Rate', stats.win_rate|string + '%', ''),
+    ('P&L', ('%+.2f'|format(stats.total_realized_pnl)) + '%', 'pnl-positive' if stats.total_realized_pnl >= 0 else 'pnl-negative'),
+    ('W/L', stats.wins|string + '/' + stats.losses|string, ''),
+  ] %}
   <div class="col-auto">
     <div class="card border-0 bg-light">
-      <div class="card-body py-2 px-3 text-center">
-        <div class="small text-muted">Open</div>
-        <div class="fw-bold fs-5">{{ stats.holding_count }}</div>
+      <div class="card-body py-1 px-2 text-center">
+        <div class="small text-muted" style="font-size:.7rem">{{ label }}</div>
+        <div class="fw-bold {{ cls }}">{{ value }}</div>
       </div>
     </div>
   </div>
-  <div class="col-auto">
-    <div class="card border-0 bg-light">
-      <div class="card-body py-2 px-3 text-center">
-        <div class="small text-muted">Cooling Off</div>
-        <div class="fw-bold fs-5">{{ stats.cooling_count }}</div>
-      </div>
-    </div>
-  </div>
-  <div class="col-auto">
-    <div class="card border-0 bg-light">
-      <div class="card-body py-2 px-3 text-center">
-        <div class="small text-muted">Closed</div>
-        <div class="fw-bold fs-5">{{ stats.closed_count }}</div>
-      </div>
-    </div>
-  </div>
-  <div class="col-auto">
-    <div class="card border-0 bg-light">
-      <div class="card-body py-2 px-3 text-center">
-        <div class="small text-muted">Win Rate</div>
-        <div class="fw-bold fs-5">{{ stats.win_rate }}%</div>
-      </div>
-    </div>
-  </div>
-  <div class="col-auto">
-    <div class="card border-0 bg-light">
-      <div class="card-body py-2 px-3 text-center">
-        <div class="small text-muted">Total P&L</div>
-        <div class="fw-bold fs-5 {% if stats.total_realized_pnl >= 0 %}pnl-positive{% else %}pnl-negative{% endif %}">
-          {{ "%+.2f"|format(stats.total_realized_pnl) }}%
-        </div>
-      </div>
-    </div>
-  </div>
-  <div class="col-auto">
-    <div class="card border-0 bg-light">
-      <div class="card-body py-2 px-3 text-center">
-        <div class="small text-muted">W / L</div>
-        <div class="fw-bold fs-5">{{ stats.wins }} / {{ stats.losses }}</div>
-      </div>
-    </div>
-  </div>
+  {% endfor %}
 </div>
+{% endmacro %}
 
-<!-- Open Positions -->
-<h5 class="mt-3 mb-2">Open Positions</h5>
-{% if holding %}
+<!-- Macro: holdings table -->
+{% macro holdings_table(watches) %}
+{% if watches %}
 <div class="table-responsive">
-  <table class="table table-sm table-hover align-middle">
-    <thead class="table-light">
-      <tr>
-        <th>Symbol</th>
-        <th>Direction</th>
-        <th>Entry Price</th>
-        <th>Confidence</th>
-        <th>Strategy</th>
-        <th>Entered</th>
-        <th></th>
-      </tr>
-    </thead>
+  <table class="table table-sm table-hover align-middle mb-1">
+    <thead class="table-light"><tr>
+      <th>Symbol</th><th>Dir</th><th>Entry</th><th>Conf</th><th>Strategy</th><th>Entered</th><th></th>
+    </tr></thead>
     <tbody>
-      {% for w in holding %}
-      <tr>
-        <td><strong>{{ w.symbol }}</strong></td>
-        <td>
-          {% if w.entry.direction == 'bullish' %}
-            <span class="text-success">&#9650; bullish</span>
-          {% else %}
-            <span class="text-danger">&#9660; bearish</span>
-          {% endif %}
-        </td>
-        <td>${{ "%.2f"|format(w.entry.price) }}</td>
-        <td>{{ "%.0f"|format(w.entry.confidence * 100) }}%</td>
-        <td class="small text-muted">{{ w.exit_strategy or 'legacy' }}</td>
-        <td class="small text-muted">{{ w.created_at[:16] }}</td>
-        <td><a href="/watches/{{ w.watch_id }}" class="btn btn-sm btn-outline-secondary">Detail</a></td>
-      </tr>
-      {% endfor %}
+    {% for w in watches %}
+    <tr>
+      <td><strong>{{ w.symbol }}</strong></td>
+      <td>{% if w.entry.direction == 'bullish' %}<span class="text-success">&#9650;</span>{% else %}<span class="text-danger">&#9660;</span>{% endif %}</td>
+      <td>${{ "%.2f"|format(w.entry.price) }}</td>
+      <td>{{ "%.0f"|format(w.entry.confidence * 100) }}%</td>
+      <td class="small text-muted">{{ w.exit_strategy or 'legacy' }}</td>
+      <td class="small text-muted">{{ w.created_at[:16] }}</td>
+      <td><a href="/watches/{{ w.watch_id }}" class="btn btn-sm btn-outline-secondary py-0" style="font-size:.75rem">Detail</a></td>
+    </tr>
+    {% endfor %}
     </tbody>
   </table>
 </div>
 {% else %}
-<p class="text-muted small">No open positions.</p>
+<p class="text-muted small mb-1">No open positions.</p>
+{% endif %}
+{% endmacro %}
+
+<!-- Macro: exited/cooling table -->
+{% macro cooling_table(watches) %}
+{% if watches %}
+<div class="table-responsive">
+  <table class="table table-sm table-hover align-middle mb-1">
+    <thead class="table-light"><tr>
+      <th>Symbol</th><th>Status</th><th>Entry</th><th>Exit</th><th>P&L</th><th>Reason</th><th>Until</th><th></th>
+    </tr></thead>
+    <tbody>
+    {% for w in watches %}
+    <tr>
+      <td><strong>{{ w.symbol }}</strong></td>
+      <td><span class="badge badge-{{ w.status }}">{{ w.status }}</span></td>
+      <td>${{ "%.2f"|format(w.entry.price) }}</td>
+      <td>{% if w.exit %}${{ "%.2f"|format(w.exit.price) }}{% else %}&mdash;{% endif %}</td>
+      <td>{% if w.exit %}<span class="{% if w.exit.realized_pnl_pct >= 0 %}pnl-positive{% else %}pnl-negative{% endif %}">{{ "%+.2f"|format(w.exit.realized_pnl_pct) }}%</span>{% else %}&mdash;{% endif %}</td>
+      <td class="small">{% if w.exit %}{{ w.exit.reason }}{% endif %}</td>
+      <td class="small text-muted">{% if w.cooling_off_until %}{{ w.cooling_off_until[:16] }}{% endif %}</td>
+      <td><a href="/watches/{{ w.watch_id }}" class="btn btn-sm btn-outline-secondary py-0" style="font-size:.75rem">Detail</a></td>
+    </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% else %}
+<p class="text-muted small mb-1">None.</p>
+{% endif %}
+{% endmacro %}
+
+<!-- Macro: closed table -->
+{% macro closed_table(watches, total) %}
+{% if watches %}
+<div class="table-responsive">
+  <table class="table table-sm table-hover align-middle mb-1">
+    <thead class="table-light"><tr>
+      <th>Symbol</th><th>Entry</th><th>Exit</th><th>P&L</th><th>Reason</th><th>Entered</th><th>Sealed</th><th></th>
+    </tr></thead>
+    <tbody>
+    {% for w in watches %}
+    <tr>
+      <td><strong>{{ w.symbol }}</strong></td>
+      <td>${{ "%.2f"|format(w.entry.price) }}</td>
+      <td>{% if w.exit %}${{ "%.2f"|format(w.exit.price) }}{% else %}&mdash;{% endif %}</td>
+      <td>{% if w.exit %}<span class="{% if w.exit.realized_pnl_pct >= 0 %}pnl-positive{% else %}pnl-negative{% endif %}">{{ "%+.2f"|format(w.exit.realized_pnl_pct) }}%</span>{% else %}&mdash;{% endif %}</td>
+      <td class="small">{% if w.exit %}{{ w.exit.reason }}{% endif %}</td>
+      <td class="small text-muted">{{ w.created_at[:16] }}</td>
+      <td class="small text-muted">{{ (w.lifecycle_sealed_at or '')[:16] }}</td>
+      <td><a href="/watches/{{ w.watch_id }}" class="btn btn-sm btn-outline-secondary py-0" style="font-size:.75rem">Detail</a></td>
+    </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% else %}
+<p class="text-muted small mb-1">None.</p>
+{% endif %}
+{% endmacro %}
+
+<!-- Render portfolios -->
+{% for p in portfolios %}
+<div class="portfolio-section">
+  <h5 class="mb-2">
+    {{ p.config.name }}
+    {% if p.config.active %}<span class="badge bg-success" style="font-size:.65rem">active</span>
+    {% else %}<span class="badge bg-secondary" style="font-size:.65rem">inactive</span>{% endif %}
+  </h5>
+  {{ stats_row(p.stats) }}
+
+  {% if p.holding %}
+  <h6 class="text-muted small mb-1">Open</h6>
+  {{ holdings_table(p.holding) }}
+  {% endif %}
+
+  {% if p.cooling %}
+  <h6 class="text-muted small mb-1">Recently Exited</h6>
+  {{ cooling_table(p.cooling) }}
+  {% endif %}
+
+  {% if p.closed %}
+  <h6 class="text-muted small mb-1">Closed ({{ p.stats.closed_count }})</h6>
+  {{ closed_table(p.closed, p.stats.closed_count) }}
+  {% endif %}
+
+  {% if not p.holding and not p.cooling and not p.closed %}
+  <p class="text-muted small">No positions yet for this portfolio.</p>
+  {% endif %}
+
+  {% if not loop.last %}<hr class="my-2">{% endif %}
+</div>
+{% endfor %}
+
+<!-- Legacy watches (no portfolio) -->
+{% if legacy.holding or legacy.cooling or legacy.closed %}
+<div class="portfolio-section">
+  <h5 class="mb-2 text-muted">Legacy Watches <span class="badge bg-secondary" style="font-size:.65rem">no config</span></h5>
+  {{ stats_row(legacy.stats) }}
+  {% if legacy.holding %}
+  <h6 class="text-muted small mb-1">Open</h6>
+  {{ holdings_table(legacy.holding) }}
+  {% endif %}
+  {% if legacy.cooling %}
+  <h6 class="text-muted small mb-1">Recently Exited</h6>
+  {{ cooling_table(legacy.cooling) }}
+  {% endif %}
+  {% if legacy.closed %}
+  <h6 class="text-muted small mb-1">Closed ({{ legacy.stats.closed_count }})</h6>
+  {{ closed_table(legacy.closed, legacy.stats.closed_count) }}
+  {% endif %}
+</div>
 {% endif %}
 
-<!-- Recently Exited / Cooling Off -->
-<h5 class="mt-4 mb-2">Recently Exited</h5>
-{% if cooling %}
-<div class="table-responsive">
-  <table class="table table-sm table-hover align-middle">
-    <thead class="table-light">
-      <tr>
-        <th>Symbol</th>
-        <th>Status</th>
-        <th>Entry</th>
-        <th>Exit</th>
-        <th>P&L %</th>
-        <th>Reason</th>
-        <th>Cooling Until</th>
-        <th></th>
-      </tr>
-    </thead>
-    <tbody>
-      {% for w in cooling %}
-      <tr>
-        <td><strong>{{ w.symbol }}</strong></td>
-        <td><span class="badge badge-{{ w.status }}">{{ w.status }}</span></td>
-        <td>${{ "%.2f"|format(w.entry.price) }}</td>
-        <td>
-          {% if w.exit %}
-            ${{ "%.2f"|format(w.exit.price) }}
-          {% else %}
-            <span class="text-muted">&mdash;</span>
-          {% endif %}
-        </td>
-        <td>
-          {% if w.exit %}
-            <span class="{% if w.exit.realized_pnl_pct >= 0 %}pnl-positive{% else %}pnl-negative{% endif %}">
-              {{ "%+.2f"|format(w.exit.realized_pnl_pct) }}%
-            </span>
-          {% else %}
-            <span class="text-muted">&mdash;</span>
-          {% endif %}
-        </td>
-        <td class="small">
-          {% if w.exit %}{{ w.exit.reason }}{% else %}&mdash;{% endif %}
-        </td>
-        <td class="small text-muted">
-          {% if w.cooling_off_until %}{{ w.cooling_off_until[:16] }}{% else %}&mdash;{% endif %}
-        </td>
-        <td><a href="/watches/{{ w.watch_id }}" class="btn btn-sm btn-outline-secondary">Detail</a></td>
-      </tr>
-      {% endfor %}
-    </tbody>
-  </table>
-</div>
-{% else %}
-<p class="text-muted small">No recently exited positions.</p>
-{% endif %}
-
-<!-- Closed Positions -->
-<h5 class="mt-4 mb-2">Closed <span class="text-muted small fw-normal">({{ stats.closed_count }} total)</span></h5>
-{% if closed %}
-<div class="table-responsive">
-  <table class="table table-sm table-hover align-middle">
-    <thead class="table-light">
-      <tr>
-        <th>Symbol</th>
-        <th>Entry</th>
-        <th>Exit</th>
-        <th>P&L %</th>
-        <th>Reason</th>
-        <th>Entered</th>
-        <th>Sealed</th>
-        <th></th>
-      </tr>
-    </thead>
-    <tbody>
-      {% for w in closed %}
-      <tr>
-        <td><strong>{{ w.symbol }}</strong></td>
-        <td>${{ "%.2f"|format(w.entry.price) }}</td>
-        <td>
-          {% if w.exit %}
-            ${{ "%.2f"|format(w.exit.price) }}
-          {% else %}
-            <span class="text-muted">&mdash;</span>
-          {% endif %}
-        </td>
-        <td>
-          {% if w.exit %}
-            <span class="{% if w.exit.realized_pnl_pct >= 0 %}pnl-positive{% else %}pnl-negative{% endif %}">
-              {{ "%+.2f"|format(w.exit.realized_pnl_pct) }}%
-            </span>
-          {% else %}
-            <span class="text-muted">&mdash;</span>
-          {% endif %}
-        </td>
-        <td class="small">
-          {% if w.exit %}{{ w.exit.reason }}{% else %}&mdash;{% endif %}
-        </td>
-        <td class="small text-muted">{{ w.created_at[:16] }}</td>
-        <td class="small text-muted">{{ (w.lifecycle_sealed_at or '')[:16] }}</td>
-        <td><a href="/watches/{{ w.watch_id }}" class="btn btn-sm btn-outline-secondary">Detail</a></td>
-      </tr>
-      {% endfor %}
-    </tbody>
-  </table>
-</div>
-{% else %}
-<p class="text-muted small">No closed positions yet.</p>
+{% if not portfolios and not legacy.holding and not legacy.cooling and not legacy.closed %}
+<p class="text-muted">No positions. Activate a portfolio and wait for matching snapshots.</p>
 {% endif %}

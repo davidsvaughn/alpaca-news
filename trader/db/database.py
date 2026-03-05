@@ -282,12 +282,25 @@ def get_watch_by_snapshot(db: Database, snapshot_id: str) -> dict[str, Any] | No
     return json.loads(raw) if isinstance(raw, str) else raw
 
 
-def count_holding_watches(db: Database) -> int:
-    """Count watches currently in 'holding' status."""
-    with db.engine.connect() as conn:
-        row = conn.execute(
-            text("SELECT COUNT(*) FROM watches WHERE status = 'holding'"),
-        ).fetchone()
+def count_holding_watches(db: Database, *, live_config_id: str | None = None) -> int:
+    """Count watches currently in 'holding' status.
+
+    If live_config_id is provided, counts only watches for that portfolio.
+    """
+    if live_config_id:
+        with db.engine.connect() as conn:
+            row = conn.execute(
+                text(
+                    "SELECT COUNT(*) FROM watches WHERE status = 'holding' "
+                    "AND json_extract(watch_json, '$.live_config_id') = :cid"
+                ),
+                {"cid": live_config_id},
+            ).fetchone()
+    else:
+        with db.engine.connect() as conn:
+            row = conn.execute(
+                text("SELECT COUNT(*) FROM watches WHERE status = 'holding'"),
+            ).fetchone()
     return row[0] if row else 0
 
 
@@ -364,15 +377,18 @@ def get_live_config(db: Database, config_id: str) -> dict[str, Any] | None:
 
 
 def get_active_live_config(db: Database) -> dict[str, Any] | None:
-    """Fetch the currently active live config (at most one)."""
+    """Fetch any active live config (returns first if multiple). For single-config compat."""
+    configs = get_active_live_configs(db)
+    return configs[0] if configs else None
+
+
+def get_active_live_configs(db: Database) -> list[dict[str, Any]]:
+    """Fetch all active live configs (supports multiple portfolios)."""
     with db.engine.connect() as conn:
-        row = conn.execute(
-            text("SELECT config_json FROM live_configs WHERE active = 1 LIMIT 1"),
-        ).fetchone()
-    if row is None:
-        return None
-    raw = row[0]
-    return json.loads(raw) if isinstance(raw, str) else raw
+        rows = conn.execute(
+            text("SELECT config_json FROM live_configs WHERE active = 1 ORDER BY created_at"),
+        ).fetchall()
+    return [json.loads(r[0]) if isinstance(r[0], str) else r[0] for r in rows]
 
 
 def get_all_live_configs(db: Database) -> list[dict[str, Any]]:
@@ -385,20 +401,11 @@ def get_all_live_configs(db: Database) -> list[dict[str, Any]]:
 
 
 def activate_live_config(db: Database, config_id: str) -> bool:
-    """Activate a config, deactivating all others. Returns True if config exists."""
+    """Activate a config (additive — does NOT deactivate others).
+
+    Multiple configs can be active simultaneously for multi-portfolio support.
+    """
     with db.engine.begin() as conn:
-        # Deactivate all (both column and JSON blob)
-        all_rows = conn.execute(
-            text("SELECT config_id, config_json FROM live_configs WHERE active = 1"),
-        ).fetchall()
-        for row in all_rows:
-            cfg = json.loads(row[1]) if isinstance(row[1], str) else row[1]
-            cfg["active"] = False
-            conn.execute(
-                text("UPDATE live_configs SET active = 0, config_json = :cjson WHERE config_id = :cid"),
-                {"cid": row[0], "cjson": json.dumps(cfg, ensure_ascii=False)},
-            )
-        # Activate the specified one
         result = conn.execute(
             text("UPDATE live_configs SET active = 1, updated_at = CURRENT_TIMESTAMP WHERE config_id = :cid"),
             {"cid": config_id},

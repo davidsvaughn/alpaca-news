@@ -29,6 +29,7 @@ from trader.db.database import (
     get_active_follow_ups,
     get_active_watches,
     get_all_follow_ups,
+    get_active_live_configs,
     get_all_live_configs,
     get_all_snapshots,
     get_all_watches,
@@ -538,13 +539,16 @@ def create_app(
 
     @app.get("/positions", response_class=HTMLResponse)
     async def positions_page(request: Request):
-        active_cfg = get_active_live_config(db)
+        from trader.db.database import get_active_live_configs
+        active_cfgs = get_active_live_configs(db)
         return templates.TemplateResponse(
             request=request,
             name="positions.html",
             context={
                 "active_page": "positions",
-                "live_config": _DictObj(active_cfg) if active_cfg else None,
+                "live_configs": [_DictObj(c) for c in active_cfgs],
+                # backward compat: first active config
+                "live_config": _DictObj(active_cfgs[0]) if active_cfgs else None,
             },
         )
 
@@ -1238,53 +1242,95 @@ def create_app(
 
         Sections: 'holding', 'cooling_off', 'closed', or None (all).
         """
-        watches = get_all_watches(db, limit=200)
-        active_cfg = get_active_live_config(db)
+        from trader.db.database import get_active_live_configs
 
-        holding = []
-        cooling = []
-        closed = []
+        watches = get_all_watches(db, limit=500)
+        active_cfgs = get_active_live_configs(db)
+
+        # Build config lookup
+        cfg_map = {c["config_id"]: c for c in active_cfgs}
+
+        # Group watches by portfolio (live_config_id)
+        def _compute_stats(watch_list):
+            holding, cooling, closed = [], [], []
+            for w in watch_list:
+                s = w.get("status", "")
+                if s == "holding":
+                    holding.append(w)
+                elif s in ("exited", "cooling_off"):
+                    cooling.append(w)
+                elif s in ("sealed", "retrospective"):
+                    closed.append(w)
+            total_pnl, wins, losses = 0.0, 0, 0
+            for w in closed:
+                ex = w.get("exit")
+                if ex and ex.get("realized_pnl_pct") is not None:
+                    pnl = float(ex["realized_pnl_pct"])
+                    total_pnl += pnl
+                    if pnl >= 0:
+                        wins += 1
+                    else:
+                        losses += 1
+            total = wins + losses
+            return {
+                "holding": holding,
+                "cooling": cooling,
+                "closed": closed[:50],
+                "stats": {
+                    "holding_count": len(holding),
+                    "cooling_count": len(cooling),
+                    "closed_count": len(closed),
+                    "total_realized_pnl": round(total_pnl, 2),
+                    "win_rate": round(wins / total * 100, 1) if total > 0 else 0.0,
+                    "wins": wins,
+                    "losses": losses,
+                },
+            }
+
+        # Build per-portfolio data
+        portfolios = []
+        by_config: dict[str, list] = {}
+        legacy_watches = []
 
         for w in watches:
-            status = w.get("status", "")
-            if status == "holding":
-                holding.append(w)
-            elif status in ("exited", "cooling_off"):
-                cooling.append(w)
-            elif status in ("sealed", "retrospective"):
-                closed.append(w)
+            cid = w.get("live_config_id")
+            if cid:
+                by_config.setdefault(cid, []).append(w)
+            else:
+                legacy_watches.append(w)
 
-        # Compute portfolio stats
-        total_realized_pnl = 0.0
-        wins = 0
-        losses = 0
-        for w in closed:
-            exit_data = w.get("exit")
-            if exit_data and exit_data.get("realized_pnl_pct") is not None:
-                pnl = float(exit_data["realized_pnl_pct"])
-                total_realized_pnl += pnl
-                if pnl >= 0:
-                    wins += 1
-                else:
-                    losses += 1
+        # Active portfolios first
+        for cfg_dict in active_cfgs:
+            cid = cfg_dict["config_id"]
+            data = _compute_stats(by_config.get(cid, []))
+            data["config"] = cfg_dict
+            portfolios.append(data)
 
-        total_trades = wins + losses
-        win_rate = (wins / total_trades * 100) if total_trades > 0 else 0.0
+        # Inactive portfolios with watches
+        for cid, ws in by_config.items():
+            if cid not in cfg_map:
+                data = _compute_stats(ws)
+                data["config"] = get_live_config(db, cid) or {"config_id": cid, "name": cid, "active": False}
+                portfolios.append(data)
+
+        # Legacy watches (no config)
+        legacy_data = _compute_stats(legacy_watches)
+
+        # Wrap for Jinja
+        for p in portfolios:
+            p["config"] = _DictObj(p["config"])
+            p["holding"] = [_DictObj(w) for w in p["holding"]]
+            p["cooling"] = [_DictObj(w) for w in p["cooling"]]
+            p["closed"] = [_DictObj(w) for w in p["closed"]]
 
         context = {
-            "holding": [_DictObj(w) for w in holding],
-            "cooling": [_DictObj(w) for w in cooling],
-            "closed": [_DictObj(w) for w in closed[:50]],  # limit closed to most recent 50
-            "stats": {
-                "holding_count": len(holding),
-                "cooling_count": len(cooling),
-                "closed_count": len(closed),
-                "total_realized_pnl": round(total_realized_pnl, 2),
-                "win_rate": round(win_rate, 1),
-                "wins": wins,
-                "losses": losses,
+            "portfolios": portfolios,
+            "legacy": {
+                "holding": [_DictObj(w) for w in legacy_data["holding"]],
+                "cooling": [_DictObj(w) for w in legacy_data["cooling"]],
+                "closed": [_DictObj(w) for w in legacy_data["closed"]],
+                "stats": legacy_data["stats"],
             },
-            "live_config": _DictObj(active_cfg) if active_cfg else None,
         }
         return templates.TemplateResponse(
             request=request,
