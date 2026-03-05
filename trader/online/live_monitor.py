@@ -355,15 +355,22 @@ class LivePortfolioManager:
 
         active_configs = get_active_live_configs(self.db)
         if not active_configs:
-            log.debug("evaluate_snapshot(%s): no active configs", symbol)
+            print(f"LIVE-PM: {symbol} — no active configs")
             return False
-        log.info("evaluate_snapshot(%s): checking %d active config(s)", symbol, len(active_configs))
+        print(f"LIVE-PM: {symbol} — checking {len(active_configs)} config(s)")
 
         any_created = False
         for config_dict in active_configs:
-            cfg = LiveConfig.from_dict(config_dict)
-            if self._evaluate_for_config(snapshot, symbol, cfg):
-                any_created = True
+            try:
+                cfg = LiveConfig.from_dict(config_dict)
+                result = self._evaluate_for_config(snapshot, symbol, cfg)
+                print(f"LIVE-PM: {symbol} config={cfg.name} -> {'BUY' if result else 'SKIP'}")
+                if result:
+                    any_created = True
+            except Exception as e:
+                print(f"LIVE-PM: {symbol} config={config_dict.get('name','?')} ERROR: {e}")
+                import traceback
+                traceback.print_exc()
 
         return any_created
 
@@ -377,18 +384,16 @@ class LivePortfolioManager:
 
         Returns True if a watch was created for this portfolio.
         """
-        log.info("EVAL %s for config %s (%s)", symbol, cfg.name, cfg.config_id)
-
         # Extract prediction from snapshot
         prediction = snapshot.get("prediction") or {}
         confidence = prediction.get("confidence", 0.0)
         direction = (prediction.get("direction") or "neutral").lower()
+        print(f"LIVE-EVAL: {symbol} dir={direction} conf={confidence} config={cfg.name}")
 
         # --- Apply filters ---
 
-        # Direction filter: must be bullish (or bearish if we support shorts)
         if direction == "neutral":
-            log.debug("SKIP %s: neutral direction", symbol)
+            print(f"LIVE-EVAL: {symbol} SKIP neutral")
             return False
 
         # Apply filters — uses the same keys as the backtest UI:
@@ -403,22 +408,24 @@ class LivePortfolioManager:
                 conf_min_val = float(conf_min_str) / 100.0
                 signed_conf = confidence if direction == "bullish" else -confidence
                 if signed_conf < conf_min_val:
-                    log.debug("SKIP %s: confidence %.2f < threshold %.2f", symbol, signed_conf, conf_min_val)
+                    print(f"LIVE-EVAL: {symbol} SKIP conf {signed_conf:.2f} < {conf_min_val:.2f}")
                     return False
             except (ValueError, TypeError):
                 pass
+        print(f"LIVE-EVAL: {symbol} passed confidence filter")
 
         # Symbol filter
         sym_filter = filters.get("symbol")
         if sym_filter and sym_filter.strip():
             if symbol.upper() != sym_filter.strip().upper():
-                log.debug("SKIP %s: symbol filter requires %s", symbol, sym_filter)
+                print(f"LIVE-EVAL: {symbol} SKIP symbol filter")
                 return False
 
         # Market metric filters (price, volume, market cap, PE)
         if not self._apply_market_filters(symbol, filters):
-            log.info("SKIP %s: failed market metric filter", symbol)
+            print(f"LIVE-EVAL: {symbol} SKIP market metric filter")
             return False
+        print(f"LIVE-EVAL: {symbol} passed market filters")
 
         # --- Check allocation (per-portfolio) ---
         holding_count = count_holding_watches(self.db, live_config_id=cfg.config_id)
@@ -439,25 +446,26 @@ class LivePortfolioManager:
         else:
             max_concurrent = 20
 
+        print(f"LIVE-EVAL: {symbol} allocation {holding_count}/{max_concurrent}")
         if holding_count >= max_concurrent:
-            # TODO: Phase 3 — implement replace-weakest logic
-            # For now, just skip when at capacity.
-            log.info("SKIP %s: at capacity (%d/%d positions)", symbol, holding_count, max_concurrent)
+            print(f"LIVE-EVAL: {symbol} SKIP at capacity")
             return False
 
         # --- Determine entry price ---
-        # Use price from snapshot's price_context or price_at dict
         entry_price = self._extract_entry_price(snapshot, symbol, cfg.price_delay_minutes)
+        print(f"LIVE-EVAL: {symbol} entry_price={entry_price}")
         if entry_price is None or entry_price <= 0:
-            log.debug("SKIP %s: no entry price available", symbol)
+            print(f"LIVE-EVAL: {symbol} SKIP no entry price")
             return False
 
-        # Price@x minimum filter
+        # Price minimum filter — uses entry price (current price in live mode).
+        # This corresponds to the "Price@x" filter in backtest, which in live
+        # mode just means "minimum stock price to consider".
         price_10_min = filters.get("price_10_min")
         if price_10_min:
             try:
                 if entry_price < float(price_10_min):
-                    log.debug("SKIP %s: entry price %.2f < price@x min %.2f", symbol, entry_price, float(price_10_min))
+                    log.info("SKIP %s: price %.2f < min $%s", symbol, entry_price, price_10_min)
                     return False
             except (ValueError, TypeError):
                 pass
@@ -521,10 +529,19 @@ class LivePortfolioManager:
     ) -> float | None:
         """Extract entry price from snapshot data.
 
-        Looks in price_at dict (keyed by delay minutes), then falls back
-        to price_context or prediction entry_price.
+        In live mode, prioritizes current price (price_context) since the
+        delayed price_at value may not be populated yet at seal time.
+        Falls back through multiple sources.
         """
-        # Try price_at dict (from price delay collection)
+        # Try price_context first (current price — always available at seal time)
+        price_ctx = snapshot.get("price_context") or {}
+        for key in ("lastPrice", "last_price", "regularMarketPrice"):
+            if key in price_ctx:
+                val = price_ctx[key]
+                if val and float(val) > 0:
+                    return float(val)
+
+        # Try price_at dict (from delayed price collection, may not exist yet)
         price_at = snapshot.get("price_at") or {}
         delay_key = str(delay_minutes)
         if delay_key in price_at:
@@ -542,14 +559,6 @@ class LivePortfolioManager:
         ep = pred.get("entry_price")
         if ep and float(ep) > 0:
             return float(ep)
-
-        # Try price_context (last trade price)
-        price_ctx = snapshot.get("price_context") or {}
-        for key in ("lastPrice", "last_price", "regularMarketPrice"):
-            if key in price_ctx:
-                val = price_ctx[key]
-                if val and float(val) > 0:
-                    return float(val)
 
         return None
 

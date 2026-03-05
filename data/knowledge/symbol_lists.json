@@ -895,7 +895,11 @@
     "MSCI",
     "FIS",
     "ITUB",
-    "BBD"
+    "BBD",
+    "HMC",
+    "SOBKY",
+    "SNTX",
+    "CMLS"
   ],
   "crypto": [],
   "rejected": [
@@ -1008,5 +1012,5 @@
     "GRS",
     "SAMHI"
   ],
-  "last_updated": "2026-03-05T19:38:03.368042+00:00"
+  "last_updated": "2026-03-05T20:10:41.336054+00:00"
 }

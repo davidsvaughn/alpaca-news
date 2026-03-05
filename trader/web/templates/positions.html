@@ -30,6 +30,7 @@
         <div class="col-auto text-muted">Stop: {{ cfg.guard_stop_pct }}%</div>
         <div class="col-auto text-muted">{{ cfg.allocation }}</div>
         <div class="col-auto text-muted">${{ "{:,.0f}".format(cfg.starting_capital) }}</div>
+        <div class="col-auto text-muted" style="font-size:.7rem"><code>{{ cfg.config_id }}</code> | {{ cfg.created_at[:16] }}</div>
         <div class="col-auto">
           <button class="btn btn-sm btn-outline-danger py-0 px-1"
                   hx-post="/api/live/config/{{ cfg.config_id }}/deactivate"

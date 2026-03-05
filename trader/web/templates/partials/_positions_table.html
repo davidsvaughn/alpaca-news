@@ -110,11 +110,15 @@
 <!-- Render portfolios -->
 {% for p in portfolios %}
 <div class="portfolio-section">
-  <h5 class="mb-2">
+  <h5 class="mb-1">
     {{ p.config.name }}
     {% if p.config.active %}<span class="badge bg-success" style="font-size:.65rem">active</span>
     {% else %}<span class="badge bg-secondary" style="font-size:.65rem">inactive</span>{% endif %}
   </h5>
+  <div class="small text-muted mb-2">
+    <code>{{ p.config.config_id }}</code>
+    {% if p.config.created_at %} | started {{ p.config.created_at[:16] }}{% endif %}
+  </div>
   {{ stats_row(p.stats) }}
 
   {% if p.holding %}
