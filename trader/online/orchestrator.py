@@ -74,6 +74,10 @@ _triage_semaphore: threading.Semaphore | None = None
 _in_flight_symbols: dict[str, str] = {}   # symbol.upper() → snap_id
 _in_flight_lock = threading.Lock()
 
+# Shared live trading state, initialised by run_watch_loop.
+_live_collector: Any = None   # VolumeDeltaCollector
+_live_market: Any = None      # MarketDataService (for streaming)
+
 
 def _describe_api_error(e: Exception) -> str:
     """Extract provider, status, and actionable info from API errors."""
@@ -635,7 +639,10 @@ def _run_single_exploration_body(
             if active_cfg:
                 # Live trading mode: use LivePortfolioManager
                 from trader.online.live_monitor import LivePortfolioManager
-                pm = LivePortfolioManager(db=db, bus=bus, data_dir=settings.data_dir)
+                pm = LivePortfolioManager(
+                    db=db, bus=bus, data_dir=settings.data_dir,
+                    collector=_live_collector, market=_live_market,
+                )
                 watch_was_created = pm.evaluate_snapshot(
                     snapshot=snapshot.to_dict() if hasattr(snapshot, "to_dict") else snapshot,
                     symbol=symbol,
@@ -1232,10 +1239,40 @@ def run_watch_loop(
         bus.publish(PipelineEvent(type="monitoring_started", payload={}))
 
     # Live exit monitor thread (mechanical exit strategies, same as backtest)
+    # Also sets up the shadow collector for real-time volume delta tracking.
+    global _live_collector, _live_market
     if settings.watch_enabled:
         from trader.online.live_monitor import LiveExitMonitor, live_monitoring_loop
 
-        live_monitor = LiveExitMonitor(db=db, bus=bus, data_dir=settings.data_dir)
+        # Create shadow collector for tick-level volume delta
+        try:
+            from trader.market.volume_delta_shadow import VolumeDeltaCollector
+            _live_collector = VolumeDeltaCollector()
+            _live_collector.start()
+        except Exception as e:
+            print(f"WARN: VolumeDeltaCollector init failed: {e}")
+
+        # Create shared MarketDataService for streaming
+        try:
+            from trader.market.data_service import MarketDataService
+            _live_market = MarketDataService()
+            # Attach collector to Schwab stream
+            if _live_collector and _live_market.schwab_available:
+                _live_market._schwab.attach_volume_delta_collector(_live_collector)
+                # Start streaming for any existing holding/cooling_off watches
+                existing = get_active_watches(db)
+                stream_symbols = list({w["symbol"] for w in existing if w.get("status") in ("holding", "cooling_off")})
+                if stream_symbols:
+                    _live_market._schwab.start_stream(stream_symbols)
+                    for sym in stream_symbols:
+                        _live_collector.add_symbol(sym)
+                    print(f"Resumed streaming for {len(stream_symbols)} active watches: {stream_symbols}")
+        except Exception as e:
+            print(f"WARN: Live market/stream init failed: {e}")
+
+        live_monitor = LiveExitMonitor(
+            db=db, bus=bus, data_dir=settings.data_dir, collector=_live_collector,
+        )
         live_monitor_thread = threading.Thread(
             target=live_monitoring_loop,
             args=(live_monitor,),

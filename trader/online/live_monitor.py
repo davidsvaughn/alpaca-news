@@ -56,10 +56,12 @@ class LiveExitMonitor:
         db: Database,
         bus: Any = None,
         data_dir: str = "data",
+        collector: Any = None,  # VolumeDeltaCollector (optional)
     ) -> None:
         self.db = db
         self.bus = bus
         self.data_dir = data_dir
+        self.collector = collector
         # Per-symbol indicator cache (reused across cycles to avoid
         # recomputing indicators on unchanged bar history).
         self._indicator_caches: dict[str, dict[tuple[Any, ...], Any]] = {}
@@ -267,18 +269,37 @@ class LiveExitMonitor:
             self._seal_watch(watch_dict)
 
     def _seal_watch(self, watch_dict: dict[str, Any]) -> None:
-        """Seal a watch (final state)."""
+        """Seal a watch (final state). Saves shadow data and cleans up streaming."""
         builder = WatchBuilder.from_dict(watch_dict)
         watch_id = watch_dict["watch_id"]
+        symbol = watch_dict["symbol"]
         builder.seal()
 
-        log.info("SEALED: %s %s", watch_dict["symbol"], watch_id)
+        log.info("SEALED: %s %s", symbol, watch_id)
 
         updated = builder.to_watch()
         update_watch(self.db, watch_id, updated.to_dict())
 
         # Clean up indicator cache
-        self._indicator_caches.pop(watch_dict["symbol"], None)
+        self._indicator_caches.pop(symbol, None)
+
+        # Save shadow collector data and check if symbol can be removed
+        if self.collector is not None:
+            try:
+                self.collector.save_daily(symbol)
+                log.info("Shadow data saved for %s", symbol)
+            except Exception:
+                log.exception("Failed to save shadow data for %s", symbol)
+
+            # Only remove symbol if no other active watches need it
+            other_watches = get_active_watches(self.db)
+            still_needed = any(
+                w.get("symbol") == symbol and w.get("watch_id") != watch_id
+                for w in other_watches
+            )
+            if not still_needed:
+                self.collector.remove_symbol(symbol)
+                log.info("Removed %s from shadow collector (no active watches)", symbol)
 
         if self.bus:
             from trader.online.event_bus import PipelineEvent
@@ -286,7 +307,7 @@ class LiveExitMonitor:
                 type="watch_sealed",
                 payload={
                     "watch_id": watch_id,
-                    "symbol": watch_dict["symbol"],
+                    "symbol": symbol,
                 },
             ))
 
@@ -309,10 +330,14 @@ class LivePortfolioManager:
         db: Database,
         bus: Any = None,
         data_dir: str = "data",
+        collector: Any = None,  # VolumeDeltaCollector (optional)
+        market: Any = None,     # MarketDataService (optional, for streaming)
     ) -> None:
         self.db = db
         self.bus = bus
         self.data_dir = data_dir
+        self.collector = collector
+        self.market = market
 
     def evaluate_snapshot(
         self,
@@ -413,6 +438,16 @@ class LivePortfolioManager:
             "LIVE BUY: %s %s — conf=%.2f, price=%.2f, strategy=%s",
             symbol, watch.watch_id, confidence, entry_price, cfg.exit_strategy,
         )
+
+        # Start streaming for this symbol (shadow collector + Schwab stream)
+        if self.collector is not None:
+            self.collector.add_symbol(symbol)
+        if self.market is not None and hasattr(self.market, '_schwab') and self.market.schwab_available:
+            try:
+                self.market._schwab.start_stream([symbol])
+                log.info("Started Schwab stream for %s", symbol)
+            except Exception:
+                log.exception("Failed to start Schwab stream for %s", symbol)
 
         if self.bus:
             from trader.online.event_bus import PipelineEvent

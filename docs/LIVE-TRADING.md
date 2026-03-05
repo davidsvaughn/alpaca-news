@@ -94,8 +94,8 @@ Post-exit: streaming continues for configurable period (default 24 market hours)
 - [x] Wire into orchestrator (replace WatchMonitor startup)
 - [x] Market hours calculation for cooling_off expiry
 - [x] 26 integration tests (all passing)
-- [ ] Integrate with Schwab streaming (add/remove symbols on buy/sell) — deferred to Phase 3
-- [ ] Integrate with shadow collector (continue during cooling_off) — deferred to Phase 3
+- [x] Integrate with Schwab streaming (add/remove symbols on buy/sell)
+- [x] Integrate with shadow collector (continue during cooling_off)
 
 ### Phase 3: Positions UI
 - [ ] Backend: API endpoints for positions data + portfolio stats
@@ -536,3 +536,13 @@ For VDD: use Schwab (full exchange volume, already integrated). Alpaca for order
 - Orchestrator wired: `LiveExitMonitor` thread starts when `watch_enabled=True`; `LivePortfolioManager` called on snapshot seal when a LiveConfig is active (falls back to legacy signal-threshold when no config active)
 - `tests/test_live_trading.py` — 26 tests covering: LiveConfig CRUD, evaluate_exit (5 strategies), market hours (6 scenarios), Watch live fields, LivePortfolioManager (4 scenarios), LiveExitMonitor (2 lifecycle tests)
 - All 26 new tests + 10 existing watch tests pass
+
+| 2026-03-05 | Streaming integration (shadow collector + Schwab) | Done |
+
+### Streaming Integration Details (2026-03-05)
+- `VolumeDeltaCollector` created at startup in `run_watch_loop`, attached to shared `SchwabMarketClient`
+- On startup: resumes streaming for existing holding/cooling_off watches
+- On buy (`LivePortfolioManager.evaluate_snapshot`): `collector.add_symbol()` + `schwab.start_stream([symbol])`
+- On seal (`LiveExitMonitor._seal_watch`): `collector.save_daily()` + remove symbol if no other active watches need it
+- Module-level `_live_collector` and `_live_market` shared between orchestrator and LivePortfolioManager
+- Collector runs throughout cooling_off period, accumulating tick-level data for post-mortem
