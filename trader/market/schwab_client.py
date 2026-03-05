@@ -495,6 +495,13 @@ class SchwabMarketClient:
     def _on_stream_message(self, message: Any) -> None:
         """Handler for incoming stream messages."""
         try:
+            # schwabdev may send JSON strings instead of parsed dicts
+            if isinstance(message, str):
+                import json as _json
+                try:
+                    message = _json.loads(message)
+                except (ValueError, TypeError):
+                    return
             if not isinstance(message, dict):
                 return
             data_list = message.get("data", [])
