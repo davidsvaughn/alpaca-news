@@ -291,7 +291,13 @@ After exiting, continue collecting real-time stream data for post-mortem analysi
 - Market hours = 9:30-16:00 ET (or extended if configured)
 - 24 market hours ~ 3.7 trading days (6.5h/day)
 - Shadow collector keeps running for this symbol
-- On expiry: seal watch, flush shadow data, remove symbol from stream (if no other watches need it)
+- Bar data persisted immediately via JSONL append (crash-safe, zero data loss)
+- On expiry: seal watch, export summary JSON (atomic write), remove symbol from stream (if no other watches need it)
+
+### Data persistence
+- **Real-time**: Each 1-minute bar appended to `~/.cache/alpaca-news/volume_delta_shadow/{SYMBOL}/bars/{date}.jsonl`
+- **Summary**: Clean JSON export at `~/.cache/alpaca-news/volume_delta_shadow/{SYMBOL}/{date}.json` (on seal + hourly)
+- **Recovery**: On restart, `add_symbol()` loads today's JSONL to restore in-memory state
 
 ### Configurable
 - `cooling_off_market_hours: float = 24.0` in LiveConfig
@@ -547,6 +553,17 @@ For VDD: use Schwab (full exchange volume, already integrated). Alpaca for order
 - On seal (`LiveExitMonitor._seal_watch`): `collector.save_daily()` + remove symbol if no other active watches need it
 - Module-level `_live_collector` and `_live_market` shared between orchestrator and LivePortfolioManager
 - Collector runs throughout cooling_off period, accumulating tick-level data for post-mortem
+
+| 2026-03-05 | Crash-safe JSONL bar persistence | Done |
+
+### JSONL Persistence Details (2026-03-05)
+- **Problem**: `save_daily()` used non-atomic `write_text()`, and periodic full snapshots meant up to 5 min of data lost on crash
+- **Solution**: Two-layer persistence (WAL pattern, same as SQLite/Redis):
+  1. **JSONL append-on-flush**: Each completed 1-minute bar is immediately appended to `~/.cache/alpaca-news/volume_delta_shadow/{SYMBOL}/bars/{date}.jsonl`. POSIX atomic for writes < 4KB.
+  2. **Atomic summary export**: `save_daily()` now uses temp-file + rename. Runs hourly and on seal (convenience, not safety).
+- **Recovery on restart**: `add_symbol()` loads existing bars from today's JSONL log
+- **Data loss on crash**: At most 1 incomplete minute bar (the one being accumulated)
+- `TickAccumulator._on_bar_flushed` callback hooks bar completion to JSONL append
 
 | 2026-03-05 | Phase 3: Positions UI | Done |
 
