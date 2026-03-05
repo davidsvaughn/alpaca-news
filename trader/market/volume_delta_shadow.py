@@ -159,21 +159,30 @@ class TickAccumulator:
         self.prev_price = price
         self.prev_total_volume = total_volume
 
+    # Callback set by VolumeDeltaCollector to persist bars immediately.
+    _on_bar_flushed: Any = None  # Callable[[str, dict], None] or None
+
     def _flush_minute_bar(self, bar_start_ts: float) -> None:
         """Save completed 1-minute bar with tick-level volume delta."""
-        self.minute_bars.append(
-            {
-                "t": datetime.fromtimestamp(bar_start_ts, tz=timezone.utc).isoformat(),
-                "o": self._minute_open,
-                "h": self._minute_high,
-                "l": self._minute_low,
-                "c": self._minute_close,
-                "v": self._minute_volume,
-                "uptick": self._minute_uptick,
-                "downtick": self._minute_downtick,
-                "delta": self._minute_uptick - self._minute_downtick,
-            }
-        )
+        bar = {
+            "t": datetime.fromtimestamp(bar_start_ts, tz=timezone.utc).isoformat(),
+            "o": self._minute_open,
+            "h": self._minute_high,
+            "l": self._minute_low,
+            "c": self._minute_close,
+            "v": self._minute_volume,
+            "uptick": self._minute_uptick,
+            "downtick": self._minute_downtick,
+            "delta": self._minute_uptick - self._minute_downtick,
+        }
+        self.minute_bars.append(bar)
+
+        # Notify collector for immediate disk persistence
+        if self._on_bar_flushed is not None:
+            try:
+                self._on_bar_flushed(bar)
+            except Exception:
+                pass  # logged at collector level
 
     @property
     def total_vol(self) -> int:
@@ -234,11 +243,17 @@ class VolumeDeltaCollector:
 
     Manages per-symbol TickAccumulators and hooks into the Schwab stream.
     Can be attached to the existing SchwabMarketClient's stream message flow.
+
+    Persistence: completed 1-minute bars are appended to a per-symbol JSONL
+    file immediately on flush (one JSON object per line). This is crash-safe
+    because POSIX append writes of < 4KB are atomic. On restart, bars are
+    loaded from today's JSONL file to restore state.
     """
 
     def __init__(self) -> None:
         self._accumulators: dict[str, TickAccumulator] = {}
         self._lock = threading.Lock()
+        self._bar_log_files: dict[str, Path] = {}  # sym -> open JSONL path
         self._started_at: float | None = None
         self._active = False
 
@@ -262,19 +277,64 @@ class VolumeDeltaCollector:
         with self._lock:
             return list(self._accumulators.keys())
 
+    def _bar_log_path(self, symbol: str, date_str: str | None = None) -> Path:
+        """Path to the JSONL bar log for a symbol and date."""
+        if date_str is None:
+            date_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        out_dir = SHADOW_CACHE_DIR / symbol.upper() / "bars"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        return out_dir / f"{date_str}.jsonl"
+
+    def _load_bars_from_log(self, symbol: str) -> list[dict]:
+        """Load today's bars from JSONL log (for recovery after restart)."""
+        path = self._bar_log_path(symbol)
+        if not path.exists():
+            return []
+        bars = []
+        try:
+            for line in path.read_text().splitlines():
+                line = line.strip()
+                if line:
+                    bars.append(json.loads(line))
+        except Exception:
+            logger.exception("Failed to load bar log for %s", symbol)
+        return bars
+
+    def _append_bar_to_log(self, symbol: str, bar: dict) -> None:
+        """Append a completed minute bar to the JSONL log file.
+
+        Small appends (< 4KB) are atomic on POSIX — no corruption risk.
+        """
+        path = self._bar_log_path(symbol)
+        try:
+            with open(path, "a") as f:
+                f.write(json.dumps(bar, separators=(",", ":")) + "\n")
+        except Exception:
+            logger.exception("Failed to append bar to log for %s", symbol)
+
     def add_symbol(self, symbol: str) -> None:
-        """Start tracking a symbol."""
+        """Start tracking a symbol. Loads any existing bars from today's log."""
         sym = symbol.upper()
         with self._lock:
             if sym not in self._accumulators:
-                self._accumulators[sym] = TickAccumulator()
+                acc = TickAccumulator()
+                # Recover bars from today's JSONL log (survives restarts)
+                existing_bars = self._load_bars_from_log(sym)
+                if existing_bars:
+                    acc.minute_bars = existing_bars
+                    logger.info(
+                        "VolumeDeltaCollector: recovered %d bars for %s from log",
+                        len(existing_bars), sym,
+                    )
+                # Set up append callback for crash-safe persistence
+                acc._on_bar_flushed = lambda bar, s=sym: self._append_bar_to_log(s, bar)
+                self._accumulators[sym] = acc
                 logger.info("VolumeDeltaCollector: tracking %s", sym)
 
     def remove_symbol(self, symbol: str) -> None:
-        """Stop tracking a symbol (preserves data until save/reset)."""
+        """Stop tracking a symbol (preserves data and log files)."""
         sym = symbol.upper()
         with self._lock:
-            # Don't delete — just log. Data persists for end-of-day save.
             if sym in self._accumulators:
                 logger.info("VolumeDeltaCollector: removed %s (data preserved)", sym)
 
@@ -399,14 +459,21 @@ class VolumeDeltaCollector:
         }
 
     def save_daily(self, symbol: str, date_str: str | None = None) -> Path | None:
-        """Save a symbol's shadow data to disk for later analysis.
+        """Save a symbol's full shadow summary to disk (atomic write).
+
+        This is the "clean export" — a single JSON file with summary + all
+        bars. The JSONL bar log provides crash safety; this provides a
+        convenient analysis artifact.
 
         Returns path to saved file, or None if no data.
         """
+        import os
+        import tempfile
+
         sym = symbol.upper()
         with self._lock:
             acc = self._accumulators.get(sym)
-        if acc is None or acc.update_count == 0:
+        if acc is None or (acc.update_count == 0 and not acc.minute_bars):
             return None
 
         if date_str is None:
@@ -424,7 +491,19 @@ class VolumeDeltaCollector:
             "minute_bars": acc.minute_bars,
         }
 
-        out_path.write_text(json.dumps(data, indent=2))
+        # Atomic write: temp file + rename (prevents corruption on crash)
+        fd, tmp = tempfile.mkstemp(dir=out_dir, suffix=".tmp")
+        try:
+            with os.fdopen(fd, "w") as f:
+                json.dump(data, f, indent=2)
+            os.rename(tmp, out_path)
+        except BaseException:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+            raise
+
         logger.info("Saved shadow data: %s (%d bars)", out_path, len(acc.minute_bars))
         return out_path
 

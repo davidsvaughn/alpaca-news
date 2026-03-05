@@ -872,7 +872,12 @@
     "MAR",
     "YPF",
     "CARE",
-    "PDYN"
+    "PDYN",
+    "AR",
+    "RCEL",
+    "PR",
+    "SKYX",
+    "TALO"
   ],
   "crypto": [],
   "rejected": [
@@ -985,5 +990,5 @@
     "GRS",
     "SAMHI"
   ],
-  "last_updated": "2026-03-05T17:58:41.735489+00:00"
+  "last_updated": "2026-03-05T18:16:37.576792+00:00"
 }

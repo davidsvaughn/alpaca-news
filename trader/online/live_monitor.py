@@ -512,18 +512,40 @@ class LivePortfolioManager:
 # ---------------------------------------------------------------------------
 
 
+_SHADOW_SUMMARY_INTERVAL_S = 3600  # write clean summary JSON hourly
+
+
 def live_monitoring_loop(
     monitor: LiveExitMonitor,
     interval_s: int = 60,
 ) -> None:
-    """Run the live exit monitor in a loop. Intended as a daemon thread target."""
+    """Run the live exit monitor in a loop. Intended as a daemon thread target.
+
+    Bar-level data is persisted immediately via JSONL append (crash-safe).
+    The periodic save_all here just writes clean summary JSON files for
+    convenience — not needed for safety.
+    """
     log.info("Live exit monitor started (interval=%ds)", interval_s)
+    last_summary_save = time.monotonic()
     while True:
         try:
             # Only run during market hours (or within 30 min after close
             # to catch final exit signals)
             if is_market_open() or _near_close():
                 monitor.run_cycle()
+
+            # Periodic clean summary export (convenience, not safety).
+            # Bar data is already persisted via JSONL append on each flush.
+            if monitor.collector is not None:
+                elapsed = time.monotonic() - last_summary_save
+                if elapsed >= _SHADOW_SUMMARY_INTERVAL_S:
+                    try:
+                        paths = monitor.collector.save_all()
+                        if paths:
+                            log.info("Shadow summary export: %d symbols", len(paths))
+                        last_summary_save = time.monotonic()
+                    except Exception:
+                        log.exception("Shadow summary export failed")
         except Exception:
             log.exception("Live monitor cycle error")
         time.sleep(interval_s)
