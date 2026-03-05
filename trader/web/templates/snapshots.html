@@ -1149,6 +1149,11 @@ function goLive() {
   var params = _collectParams();
   var allocParams = _collectAllocParams();
   var filters = _collectBacktestFilters();
+  // Strip backtest-only filters that don't apply to live trading
+  delete filters.created_after;
+  delete filters.created_before;
+  delete filters.headline;
+  delete filters.explored;
   var marketClose = _getMarketClose();
   var minHold = parseInt(document.getElementById('bt-min-hold').value) || 5;
   var guardStop = parseFloat(document.getElementById('bt-guard-stop').value) || 0;

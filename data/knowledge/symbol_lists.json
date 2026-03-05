@@ -879,7 +879,14 @@
     "SKYX",
     "TALO",
     "MAJI",
-    "LMMY"
+    "LMMY",
+    "FLG",
+    "STWD",
+    "KFY",
+    "AVO",
+    "SERV",
+    "UWHR",
+    "BEN"
   ],
   "crypto": [],
   "rejected": [
@@ -992,5 +999,5 @@
     "GRS",
     "SAMHI"
   ],
-  "last_updated": "2026-03-05T18:17:22.485555+00:00"
+  "last_updated": "2026-03-05T18:46:48.357490+00:00"
 }

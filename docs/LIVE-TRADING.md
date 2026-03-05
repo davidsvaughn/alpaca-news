@@ -574,3 +574,15 @@ For VDD: use Schwab (full exchange volume, already integrated). Alpaca for order
 - Nav bar updated with Positions link (between Dashboard and Watches)
 - `cooling_off` badge style added (cyan)
 - Positions page auto-refreshes via HTMX (`every 30s` + SSE events)
+
+| 2026-03-05 | Go Live from UI + filter fixes | Done |
+
+### Go Live UI + Filter Fixes (2026-03-05)
+- **"Go Live" button** added to Snapshots backtest panel (green, next to Run/Clear)
+  - Gathers all current backtest settings (strategy, params, filters, allocation, guards)
+  - Creates + activates a LiveConfig in one click with confirmation dialog
+  - Shows "Live: {name}" (outline green) when a config is already active; click to deactivate
+- **Filter key fix**: backtest UI sends `conf_min`, `price_min`, `avg_vol_min`, etc. LivePortfolioManager now reads these keys correctly (was looking for `confidence_min`)
+- **Market metric filters enforced**: `_apply_market_filters()` checks price, volume, market cap, P/E ranges using MarketDataService (permissive on data fetch failure)
+- **Positions page** now displays all active filters: `Confidence >= 79% | AvgVol >= 1M | MktCap >= 1B` etc.
+- Fixed missing `get_active_watches` import in orchestrator

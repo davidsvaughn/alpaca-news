@@ -22,12 +22,11 @@
 {% if live_config %}
 <div class="card config-card mb-3">
   <div class="card-body py-2 px-3">
-    <div class="row small">
+    <div class="row small g-2 mb-1">
       <div class="col-auto"><strong>Strategy:</strong> {{ live_config.exit_strategy }}</div>
       <div class="col-auto"><strong>Guard Stop:</strong> {{ live_config.guard_stop_pct }}%</div>
       <div class="col-auto"><strong>Allocation:</strong> {{ live_config.allocation }}</div>
       <div class="col-auto"><strong>Capital:</strong> ${{ "{:,.0f}".format(live_config.starting_capital) }}</div>
-      <div class="col-auto"><strong>Confidence:</strong> >= {{ live_config.filters.confidence_min or 'any' }}%</div>
       <div class="col-auto">
         <button class="btn btn-sm btn-outline-danger"
                 hx-post="/api/live/config/{{ live_config.config_id }}/deactivate"
@@ -38,6 +37,26 @@
         </button>
       </div>
     </div>
+    {% set f = live_config.filters %}
+    {% set active_filters = [] %}
+    {% if f.conf_min %}{% set _ = active_filters.append('Confidence >= ' + f.conf_min|string + '%') %}{% endif %}
+    {% if f.price_min %}{% set _ = active_filters.append('Price >= $' + f.price_min|string) %}{% endif %}
+    {% if f.price_max %}{% set _ = active_filters.append('Price <= $' + f.price_max|string) %}{% endif %}
+    {% if f.avg_vol_min %}{% set _ = active_filters.append('AvgVol >= ' + f.avg_vol_min|string + 'M') %}{% endif %}
+    {% if f.avg_vol_max %}{% set _ = active_filters.append('AvgVol <= ' + f.avg_vol_max|string + 'M') %}{% endif %}
+    {% if f.mkt_cap_min %}{% set _ = active_filters.append('MktCap >= ' + f.mkt_cap_min|string + 'B') %}{% endif %}
+    {% if f.mkt_cap_max %}{% set _ = active_filters.append('MktCap <= ' + f.mkt_cap_max|string + 'B') %}{% endif %}
+    {% if f.pe_min %}{% set _ = active_filters.append('P/E >= ' + f.pe_min|string) %}{% endif %}
+    {% if f.pe_max %}{% set _ = active_filters.append('P/E <= ' + f.pe_max|string) %}{% endif %}
+    {% if f.price_10_min %}{% set _ = active_filters.append('Price@x >= $' + f.price_10_min|string) %}{% endif %}
+    {% if f.symbol %}{% set _ = active_filters.append('Symbol: ' + f.symbol) %}{% endif %}
+    {% if active_filters %}
+    <div class="small text-muted">
+      <strong>Filters:</strong> {{ active_filters | join(' | ') }}
+    </div>
+    {% else %}
+    <div class="small text-muted"><strong>Filters:</strong> none</div>
+    {% endif %}
   </div>
 </div>
 {% else %}

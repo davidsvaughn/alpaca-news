@@ -366,22 +366,34 @@ class LivePortfolioManager:
             log.debug("SKIP %s: neutral direction", symbol)
             return False
 
-        # Confidence filter
+        # Apply filters — uses the same keys as the backtest UI:
+        # conf_min, symbol, created_after, price_min, price_max,
+        # avg_vol_min, avg_vol_max, mkt_cap_min, mkt_cap_max, pe_min, pe_max
         filters = cfg.filters or {}
-        conf_min = filters.get("confidence_min")
-        if conf_min is not None:
-            # conf_min is stored as signed percentage (e.g., 85 for bullish >= 85%)
-            conf_min_val = float(conf_min) / 100.0
-            signed_conf = confidence if direction == "bullish" else -confidence
-            if signed_conf < conf_min_val:
-                log.debug("SKIP %s: confidence %.2f < threshold %.2f", symbol, signed_conf, conf_min_val)
+
+        # Confidence filter (key: conf_min, value: signed percentage string)
+        conf_min_str = filters.get("conf_min") or filters.get("confidence_min")
+        if conf_min_str:
+            try:
+                conf_min_val = float(conf_min_str) / 100.0
+                signed_conf = confidence if direction == "bullish" else -confidence
+                if signed_conf < conf_min_val:
+                    log.debug("SKIP %s: confidence %.2f < threshold %.2f", symbol, signed_conf, conf_min_val)
+                    return False
+            except (ValueError, TypeError):
+                pass
+
+        # Symbol filter
+        sym_filter = filters.get("symbol")
+        if sym_filter and sym_filter.strip():
+            if symbol.upper() != sym_filter.strip().upper():
+                log.debug("SKIP %s: symbol filter requires %s", symbol, sym_filter)
                 return False
 
-        # Additional filters (price, volume, market_cap, PE) would require
-        # fetching market metrics. For Phase 2, we apply confidence + direction
-        # filters. Market metric filters can be added in Phase 3 when the
-        # Positions UI provides the full backtest filter interface.
-        # TODO: Add market metric filters (price_min/max, avg_vol_min/max, etc.)
+        # Market metric filters (price, volume, market cap, PE)
+        if not self._apply_market_filters(symbol, filters):
+            log.info("SKIP %s: failed market metric filter", symbol)
+            return False
 
         # --- Check allocation ---
         holding_count = count_holding_watches(self.db)
@@ -414,6 +426,16 @@ class LivePortfolioManager:
         if entry_price is None or entry_price <= 0:
             log.debug("SKIP %s: no entry price available", symbol)
             return False
+
+        # Price@x minimum filter
+        price_10_min = filters.get("price_10_min")
+        if price_10_min:
+            try:
+                if entry_price < float(price_10_min):
+                    log.debug("SKIP %s: entry price %.2f < price@x min %.2f", symbol, entry_price, float(price_10_min))
+                    return False
+            except (ValueError, TypeError):
+                pass
 
         # --- Create watch ---
         snapshot_id = snapshot.get("snapshot_id", "")
@@ -505,6 +527,70 @@ class LivePortfolioManager:
                     return float(val)
 
         return None
+
+    def _apply_market_filters(
+        self, symbol: str, filters: dict[str, Any],
+    ) -> bool:
+        """Check market metric filters (price, volume, market cap, PE).
+
+        Returns False if the symbol should be skipped due to a filter.
+        Permissive on data fetch failure (logs warning, allows through).
+        """
+        # Gather which filters are actually set
+        checks: list[tuple[str, str, str, float]] = []  # (key_min, key_max, metric_name, scale)
+        for key_min, key_max, name, scale in [
+            ("price_min", "price_max", "price", 1.0),
+            ("avg_vol_min", "avg_vol_max", "avg_vol", 1e6),   # UI values in millions
+            ("mkt_cap_min", "mkt_cap_max", "mkt_cap", 1e9),   # UI values in billions
+            ("pe_min", "pe_max", "pe", 1.0),
+        ]:
+            lo = filters.get(key_min)
+            hi = filters.get(key_max)
+            if lo or hi:
+                checks.append((key_min, key_max, name, scale))
+
+        if not checks:
+            return True  # no market filters set
+
+        # Fetch market data
+        try:
+            data = self.market.get_fundamentals(symbol)
+            quote = self.market.get_quotes([symbol]) if hasattr(self.market, "get_quotes") else {}
+        except Exception:
+            log.warning("Could not fetch market data for %s filter check — allowing through", symbol)
+            return True
+
+        price = None
+        if isinstance(quote, dict):
+            q = quote.get(symbol.upper()) or quote.get(symbol) or {}
+            price = q.get("lastPrice") or q.get("last_price")
+        if price is None:
+            price = data.get("lastPrice") or data.get("regularMarketPrice")
+
+        metrics = {
+            "price": float(price) if price else None,
+            "avg_vol": data.get("avg10DaysVolume") or data.get("averageVolume"),
+            "mkt_cap": data.get("marketCap"),
+            "pe": data.get("peRatio") or data.get("trailingPE") or data.get("forwardPE"),
+        }
+
+        for key_min, key_max, name, scale in checks:
+            val = metrics.get(name)
+            if val is None:
+                continue  # permissive: skip filter if data unavailable
+            val = float(val)
+            lo = filters.get(key_min)
+            hi = filters.get(key_max)
+            if lo:
+                if val < float(lo) * scale:
+                    log.debug("SKIP %s: %s=%.2f < min %.2f", symbol, name, val, float(lo) * scale)
+                    return False
+            if hi:
+                if val > float(hi) * scale:
+                    log.debug("SKIP %s: %s=%.2f > max %.2f", symbol, name, val, float(hi) * scale)
+                    return False
+
+        return True
 
 
 # ---------------------------------------------------------------------------
