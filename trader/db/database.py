@@ -387,14 +387,22 @@ def get_all_live_configs(db: Database) -> list[dict[str, Any]]:
 def activate_live_config(db: Database, config_id: str) -> bool:
     """Activate a config, deactivating all others. Returns True if config exists."""
     with db.engine.begin() as conn:
-        # Deactivate all
-        conn.execute(text("UPDATE live_configs SET active = 0"))
+        # Deactivate all (both column and JSON blob)
+        all_rows = conn.execute(
+            text("SELECT config_id, config_json FROM live_configs WHERE active = 1"),
+        ).fetchall()
+        for row in all_rows:
+            cfg = json.loads(row[1]) if isinstance(row[1], str) else row[1]
+            cfg["active"] = False
+            conn.execute(
+                text("UPDATE live_configs SET active = 0, config_json = :cjson WHERE config_id = :cid"),
+                {"cid": row[0], "cjson": json.dumps(cfg, ensure_ascii=False)},
+            )
         # Activate the specified one
         result = conn.execute(
             text("UPDATE live_configs SET active = 1, updated_at = CURRENT_TIMESTAMP WHERE config_id = :cid"),
             {"cid": config_id},
         )
-        # Update the JSON blob too
         if result.rowcount > 0:
             row = conn.execute(
                 text("SELECT config_json FROM live_configs WHERE config_id = :cid"),

@@ -1,0 +1,28 @@
+{
+  "watch_id": "watch_615e88842fa1",
+  "symbol": "AAPL",
+  "status": "holding",
+  "entry": {
+    "snapshot_id": "snap_test",
+    "price": 150.0,
+    "time": "2026-03-05T17:35:35.657053+00:00",
+    "confidence": 0.92,
+    "direction": "bullish",
+    "horizon": "1d",
+    "thesis": "live_trading"
+  },
+  "exit": null,
+  "created_at": "2026-03-05T17:35:35.657119+00:00",
+  "last_checkin_at": null,
+  "lifecycle_sealed_at": null,
+  "live_config_id": "lc_2ce010e4fb9e",
+  "exit_strategy": "volume_delta_divergence",
+  "exit_params": {
+    "lookback": 80
+  },
+  "cooling_off_until": null,
+  "monitoring_snapshot_ids": [],
+  "retrospective_snapshot_ids": [],
+  "checkin_history": [],
+  "retrospective_data": null
+}

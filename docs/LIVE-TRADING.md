@@ -88,13 +88,14 @@ Post-exit: streaming continues for configurable period (default 24 market hours)
 - [x] Modify Watch model (add `cooling_off` state, simplify fields)
 - [x] Fence off legacy WatchMonitor LLM check-in code
 
-### Phase 2: Core Live Loop
-- [ ] Implement LiveExitMonitor (daemon thread, bar-based exit evaluation)
-- [ ] Implement LivePortfolioManager (filter + allocate new snapshots)
-- [ ] Wire into orchestrator (replace WatchMonitor startup)
-- [ ] Integrate with Schwab streaming (add/remove symbols on buy/sell)
-- [ ] Integrate with shadow collector (continue during cooling_off)
-- [ ] Market hours calculation for cooling_off expiry
+### Phase 2: Core Live Loop (DONE)
+- [x] Implement LiveExitMonitor (daemon thread, bar-based exit evaluation)
+- [x] Implement LivePortfolioManager (filter + allocate new snapshots)
+- [x] Wire into orchestrator (replace WatchMonitor startup)
+- [x] Market hours calculation for cooling_off expiry
+- [x] 26 integration tests (all passing)
+- [ ] Integrate with Schwab streaming (add/remove symbols on buy/sell) — deferred to Phase 3
+- [ ] Integrate with shadow collector (continue during cooling_off) — deferred to Phase 3
 
 ### Phase 3: Positions UI
 - [ ] Backend: API endpoints for positions data + portfolio stats
@@ -524,3 +525,14 @@ For VDD: use Schwab (full exchange volume, already integrated). Alpaca for order
 - Full backward compatibility with existing watch DB records
 - Legacy WatchMonitor fenced off (requires `WATCH_LEGACY_MONITOR=1` env var to activate)
 - `watcher.py` docstring updated with legacy notice
+
+| 2026-03-05 | Phase 2: Core Live Loop | Done |
+
+### Phase 2 Details (2026-03-05)
+- `trader/market/market_hours.py` — `is_market_open()`, `add_market_hours()` for market-hours-aware timestamps
+- `trader/online/live_monitor.py` — `LiveExitMonitor` + `LivePortfolioManager` + `live_monitoring_loop()`
+- **LiveExitMonitor**: daemon thread, fetches Schwab 1-min bars, runs `evaluate_exit()` per holding watch, manages exited→cooling_off→sealed transitions
+- **LivePortfolioManager**: evaluates snapshots against active LiveConfig (confidence + direction filters, allocation capacity check), creates watches via `WatchBuilder.create_from_live_config()`
+- Orchestrator wired: `LiveExitMonitor` thread starts when `watch_enabled=True`; `LivePortfolioManager` called on snapshot seal when a LiveConfig is active (falls back to legacy signal-threshold when no config active)
+- `tests/test_live_trading.py` — 26 tests covering: LiveConfig CRUD, evaluate_exit (5 strategies), market hours (6 scenarios), Watch live fields, LivePortfolioManager (4 scenarios), LiveExitMonitor (2 lifecycle tests)
+- All 26 new tests + 10 existing watch tests pass

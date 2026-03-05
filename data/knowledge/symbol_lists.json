@@ -859,7 +859,18 @@
     "ERAS",
     "TCX",
     "TKO",
-    "CORZ"
+    "CORZ",
+    "NEXXY",
+    "AMFPF",
+    "UNCFF",
+    "ISNPY",
+    "UNP",
+    "NSC",
+    "CHRW",
+    "ICE",
+    "DDOG",
+    "MAR",
+    "YPF"
   ],
   "crypto": [],
   "rejected": [
@@ -969,7 +980,8 @@
     "VISTA",
     "FRAL.NS",
     "EIDF",
-    "GRS"
+    "GRS",
+    "SAMHI"
   ],
-  "last_updated": "2026-03-05T17:26:34.905094+00:00"
+  "last_updated": "2026-03-05T17:46:39.339756+00:00"
 }

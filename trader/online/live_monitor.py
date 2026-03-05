@@ -1,0 +1,504 @@
+"""Live exit monitor and portfolio manager.
+
+Replaces the legacy LLM-based WatchMonitor with mechanical exit
+strategies (same math as backtest). Runs as a daemon thread.
+
+LiveExitMonitor:
+  - Evaluates exit strategies on 1-min Schwab bars for each holding watch
+  - Manages cooling_off → sealed transitions
+
+LivePortfolioManager:
+  - Evaluates new snapshots against the active LiveConfig
+  - Applies filters and allocation strategy
+  - Creates watches for qualifying snapshots
+"""
+
+from __future__ import annotations
+
+import logging
+import threading
+import time
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+from typing import Any
+
+import pandas as pd
+
+from trader.db.database import (
+    Database,
+    count_holding_watches,
+    get_active_live_config,
+    get_active_watches,
+    insert_watch,
+    update_watch,
+)
+from trader.market.market_hours import ET, add_market_hours, is_market_open
+from trader.models.live_config import LiveConfig
+from trader.models.watch import WatchBuilder
+
+log = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# LiveExitMonitor
+# ---------------------------------------------------------------------------
+
+
+class LiveExitMonitor:
+    """Evaluates exit strategies on live bar data for holding watches.
+
+    Call run_cycle() periodically (every ~60s) from a daemon thread.
+    """
+
+    def __init__(
+        self,
+        *,
+        db: Database,
+        bus: Any = None,
+        data_dir: str = "data",
+    ) -> None:
+        self.db = db
+        self.bus = bus
+        self.data_dir = data_dir
+        # Per-symbol indicator cache (reused across cycles to avoid
+        # recomputing indicators on unchanged bar history).
+        self._indicator_caches: dict[str, dict[tuple[Any, ...], Any]] = {}
+
+    def run_cycle(self) -> None:
+        """Run one check cycle across all active watches."""
+        watches = get_active_watches(self.db)
+        if not watches:
+            return
+
+        for watch_dict in watches:
+            try:
+                status = watch_dict.get("status")
+                if status == "holding":
+                    self._check_holding(watch_dict)
+                elif status == "exited":
+                    self._transition_to_cooling_off(watch_dict)
+                elif status == "cooling_off":
+                    self._check_cooling_off(watch_dict)
+                # "retrospective" and "sealed" are ignored
+            except Exception:
+                log.exception("Error processing watch %s", watch_dict.get("watch_id"))
+
+    # ------------------------------------------------------------------
+    # Holding: evaluate exit strategy
+    # ------------------------------------------------------------------
+
+    def _check_holding(self, watch_dict: dict[str, Any]) -> None:
+        """Evaluate exit strategy for a holding watch."""
+        from trader.market.backtest import (
+            ExitResult,
+            _filter_trading_hours,
+            _get_ohlcv_1m,
+            evaluate_exit,
+        )
+
+        symbol = watch_dict["symbol"]
+        entry = watch_dict["entry"]
+        watch_id = watch_dict["watch_id"]
+
+        # Get exit strategy from watch or active config
+        strategy_key = watch_dict.get("exit_strategy")
+        exit_params = watch_dict.get("exit_params") or {}
+        guard_stop_pct = 0.0
+        guard_target_pct = 0.0
+        min_hold = 5
+        market_close: str | None = "16:00"
+
+        # If watch has a live_config_id, load config for guards/timing
+        config_dict = get_active_live_config(self.db)
+        if config_dict:
+            cfg = LiveConfig.from_dict(config_dict)
+            if not strategy_key:
+                strategy_key = cfg.exit_strategy
+                exit_params = cfg.exit_params
+            guard_stop_pct = cfg.guard_stop_pct
+            guard_target_pct = cfg.guard_target_pct
+            min_hold = cfg.min_hold
+            market_close = cfg.market_close
+
+        if not strategy_key:
+            log.warning("Watch %s has no exit strategy configured", watch_id)
+            return
+
+        entry_price = entry["price"]
+        entry_time_str = entry["time"]
+
+        # Fetch bars: from day before entry to today
+        try:
+            entry_dt = datetime.fromisoformat(entry_time_str)
+        except (ValueError, TypeError):
+            log.warning("Watch %s: bad entry time %r", watch_id, entry_time_str)
+            return
+
+        start_date = (entry_dt - timedelta(days=2)).strftime("%Y-%m-%d")
+        bars = _get_ohlcv_1m(symbol, start_date)
+        if bars is None or bars.empty:
+            log.debug("Watch %s: no bar data for %s", watch_id, symbol)
+            return
+
+        bars = _filter_trading_hours(bars, market_close)
+        if bars.empty:
+            return
+
+        # Find entry bar index
+        # Entry time is UTC ISO; bars index is tz-naive Eastern
+        if entry_dt.tzinfo is not None:
+            entry_dt_et = entry_dt.astimezone(ET).replace(tzinfo=None)
+        else:
+            entry_dt_et = entry_dt
+
+        entry_ts = pd.Timestamp(entry_dt_et)
+        entry_idx = bars.index.searchsorted(entry_ts)
+        if entry_idx >= len(bars):
+            # Entry is after all available bars — nothing to evaluate yet
+            return
+
+        # Get or create indicator cache for this symbol
+        cache = self._indicator_caches.setdefault(symbol, {})
+
+        result: ExitResult = evaluate_exit(
+            strategy_key=strategy_key,
+            params=exit_params,
+            bars=bars,
+            entry_idx=entry_idx,
+            entry_price=entry_price,
+            guard_stop_pct=guard_stop_pct,
+            guard_target_pct=guard_target_pct,
+            min_hold=min_hold,
+            indicator_cache=cache,
+        )
+
+        # Update last_checkin_at
+        builder = WatchBuilder.from_dict(watch_dict)
+        builder.last_checkin_at = datetime.now(tz=timezone.utc).isoformat()
+
+        if result.should_exit:
+            exit_price = result.exit_price or float(bars.iloc[-1]["Close"])
+            builder.record_exit(price=exit_price, reason=result.reason)
+            log.info(
+                "LIVE EXIT: %s %s — reason=%s, price=%.2f, bars_held=%d",
+                symbol, watch_id, result.reason, exit_price, result.bars_held,
+            )
+            # Clean up indicator cache
+            self._indicator_caches.pop(symbol, None)
+
+            if self.bus:
+                from trader.online.event_bus import PipelineEvent
+                self.bus.publish(PipelineEvent(
+                    type="watch_exited",
+                    payload={
+                        "watch_id": watch_id,
+                        "symbol": symbol,
+                        "exit_price": exit_price,
+                        "exit_reason": result.reason,
+                        "bars_held": result.bars_held,
+                    },
+                ))
+
+        updated = builder.to_watch()
+        update_watch(self.db, watch_id, updated.to_dict())
+
+    # ------------------------------------------------------------------
+    # Exited → cooling_off transition
+    # ------------------------------------------------------------------
+
+    def _transition_to_cooling_off(self, watch_dict: dict[str, Any]) -> None:
+        """Transition an exited watch to cooling_off."""
+        builder = WatchBuilder.from_dict(watch_dict)
+        watch_id = watch_dict["watch_id"]
+
+        # Determine cooling_off duration from config
+        cooling_hours = 24.0  # default
+        config_dict = get_active_live_config(self.db)
+        if config_dict:
+            cooling_hours = config_dict.get("cooling_off_market_hours", 24.0)
+
+        # Compute when cooling_off expires
+        now = datetime.now(tz=ET)
+        expires = add_market_hours(now, cooling_hours)
+        builder.start_cooling_off(expires.isoformat())
+
+        log.info(
+            "COOLING OFF: %s %s — until %s (%.1f market hours)",
+            watch_dict["symbol"], watch_id, expires.strftime("%Y-%m-%d %H:%M ET"), cooling_hours,
+        )
+
+        updated = builder.to_watch()
+        update_watch(self.db, watch_id, updated.to_dict())
+
+        if self.bus:
+            from trader.online.event_bus import PipelineEvent
+            self.bus.publish(PipelineEvent(
+                type="watch_cooling_off",
+                payload={
+                    "watch_id": watch_id,
+                    "symbol": watch_dict["symbol"],
+                    "cooling_off_until": expires.isoformat(),
+                },
+            ))
+
+    # ------------------------------------------------------------------
+    # Cooling off → sealed
+    # ------------------------------------------------------------------
+
+    def _check_cooling_off(self, watch_dict: dict[str, Any]) -> None:
+        """Check if a cooling_off watch should be sealed."""
+        until_str = watch_dict.get("cooling_off_until")
+        if not until_str:
+            # No expiry set — seal immediately
+            self._seal_watch(watch_dict)
+            return
+
+        try:
+            until_dt = datetime.fromisoformat(until_str)
+        except (ValueError, TypeError):
+            self._seal_watch(watch_dict)
+            return
+
+        now = datetime.now(tz=timezone.utc)
+        if until_dt.tzinfo is None:
+            until_dt = until_dt.replace(tzinfo=timezone.utc)
+
+        if now >= until_dt:
+            self._seal_watch(watch_dict)
+
+    def _seal_watch(self, watch_dict: dict[str, Any]) -> None:
+        """Seal a watch (final state)."""
+        builder = WatchBuilder.from_dict(watch_dict)
+        watch_id = watch_dict["watch_id"]
+        builder.seal()
+
+        log.info("SEALED: %s %s", watch_dict["symbol"], watch_id)
+
+        updated = builder.to_watch()
+        update_watch(self.db, watch_id, updated.to_dict())
+
+        # Clean up indicator cache
+        self._indicator_caches.pop(watch_dict["symbol"], None)
+
+        if self.bus:
+            from trader.online.event_bus import PipelineEvent
+            self.bus.publish(PipelineEvent(
+                type="watch_sealed",
+                payload={
+                    "watch_id": watch_id,
+                    "symbol": watch_dict["symbol"],
+                },
+            ))
+
+
+# ---------------------------------------------------------------------------
+# LivePortfolioManager
+# ---------------------------------------------------------------------------
+
+
+class LivePortfolioManager:
+    """Evaluates new snapshots against the active LiveConfig.
+
+    Called from the orchestrator when a snapshot is sealed. Decides
+    whether to buy (create watch) based on filters and allocation.
+    """
+
+    def __init__(
+        self,
+        *,
+        db: Database,
+        bus: Any = None,
+        data_dir: str = "data",
+    ) -> None:
+        self.db = db
+        self.bus = bus
+        self.data_dir = data_dir
+
+    def evaluate_snapshot(
+        self,
+        snapshot: dict[str, Any],
+        symbol: str,
+    ) -> bool:
+        """Evaluate a sealed snapshot against the active LiveConfig.
+
+        Returns True if a watch was created (buy), False if skipped.
+        """
+        config_dict = get_active_live_config(self.db)
+        if not config_dict:
+            return False
+
+        cfg = LiveConfig.from_dict(config_dict)
+
+        # Extract prediction from snapshot
+        prediction = snapshot.get("prediction") or {}
+        confidence = prediction.get("confidence", 0.0)
+        direction = (prediction.get("direction") or "neutral").lower()
+
+        # --- Apply filters ---
+
+        # Direction filter: must be bullish (or bearish if we support shorts)
+        if direction == "neutral":
+            log.debug("SKIP %s: neutral direction", symbol)
+            return False
+
+        # Confidence filter
+        filters = cfg.filters or {}
+        conf_min = filters.get("confidence_min")
+        if conf_min is not None:
+            # conf_min is stored as signed percentage (e.g., 85 for bullish >= 85%)
+            conf_min_val = float(conf_min) / 100.0
+            signed_conf = confidence if direction == "bullish" else -confidence
+            if signed_conf < conf_min_val:
+                log.debug("SKIP %s: confidence %.2f < threshold %.2f", symbol, signed_conf, conf_min_val)
+                return False
+
+        # Additional filters (price, volume, market_cap, PE) would require
+        # fetching market metrics. For Phase 2, we apply confidence + direction
+        # filters. Market metric filters can be added in Phase 3 when the
+        # Positions UI provides the full backtest filter interface.
+        # TODO: Add market metric filters (price_min/max, avg_vol_min/max, etc.)
+
+        # --- Check allocation ---
+        holding_count = count_holding_watches(self.db)
+
+        alloc = cfg.allocation
+        alloc_params = cfg.allocation_params or {}
+
+        if alloc == "none":
+            max_concurrent = 999
+        elif alloc == "fixed_dollar":
+            alloc_pct = float(alloc_params.get("alloc_pct", 5))
+            max_concurrent = int(100 / alloc_pct) if alloc_pct > 0 else 20
+        elif alloc == "max_positions":
+            max_concurrent = int(alloc_params.get("max_pos", 10))
+        elif alloc == "ranking_realloc":
+            alloc_pct = float(alloc_params.get("alloc_pct", 5))
+            max_concurrent = int(100 / alloc_pct) if alloc_pct > 0 else 20
+        else:
+            max_concurrent = 20
+
+        if holding_count >= max_concurrent:
+            # TODO: Phase 3 — implement replace-weakest logic
+            # For now, just skip when at capacity.
+            log.info("SKIP %s: at capacity (%d/%d positions)", symbol, holding_count, max_concurrent)
+            return False
+
+        # --- Determine entry price ---
+        # Use price from snapshot's price_context or price_at dict
+        entry_price = self._extract_entry_price(snapshot, symbol, cfg.price_delay_minutes)
+        if entry_price is None or entry_price <= 0:
+            log.debug("SKIP %s: no entry price available", symbol)
+            return False
+
+        # --- Create watch ---
+        snapshot_id = snapshot.get("snapshot_id", "")
+        wb = WatchBuilder.create_from_live_config(
+            snapshot_id=snapshot_id,
+            symbol=symbol,
+            entry_price=entry_price,
+            confidence=confidence,
+            direction=direction,
+            live_config_id=cfg.config_id,
+            exit_strategy=cfg.exit_strategy,
+            exit_params=cfg.exit_params,
+        )
+        watch = wb.to_watch()
+
+        # Persist
+        watch_path = Path(self.data_dir) / "watches" / f"{watch.watch_id}.json"
+        insert_watch(self.db, watch=watch.to_dict())
+        watch.persist(watch_path)
+
+        log.info(
+            "LIVE BUY: %s %s — conf=%.2f, price=%.2f, strategy=%s",
+            symbol, watch.watch_id, confidence, entry_price, cfg.exit_strategy,
+        )
+
+        if self.bus:
+            from trader.online.event_bus import PipelineEvent
+            self.bus.publish(PipelineEvent(
+                type="watch_created",
+                payload={
+                    "watch_id": watch.watch_id,
+                    "symbol": symbol,
+                    "direction": direction,
+                    "confidence": confidence,
+                    "entry_price": entry_price,
+                    "snapshot_id": snapshot_id,
+                    "live_config_id": cfg.config_id,
+                },
+            ))
+
+        return True
+
+    def _extract_entry_price(
+        self,
+        snapshot: dict[str, Any],
+        symbol: str,
+        delay_minutes: int,
+    ) -> float | None:
+        """Extract entry price from snapshot data.
+
+        Looks in price_at dict (keyed by delay minutes), then falls back
+        to price_context or prediction entry_price.
+        """
+        # Try price_at dict (from price delay collection)
+        price_at = snapshot.get("price_at") or {}
+        delay_key = str(delay_minutes)
+        if delay_key in price_at:
+            val = price_at[delay_key]
+            if val and float(val) > 0:
+                return float(val)
+
+        # Try legacy price_10min
+        p10 = snapshot.get("price_10min")
+        if p10 and float(p10) > 0:
+            return float(p10)
+
+        # Try prediction entry_price
+        pred = snapshot.get("prediction") or {}
+        ep = pred.get("entry_price")
+        if ep and float(ep) > 0:
+            return float(ep)
+
+        # Try price_context (last trade price)
+        price_ctx = snapshot.get("price_context") or {}
+        for key in ("lastPrice", "last_price", "regularMarketPrice"):
+            if key in price_ctx:
+                val = price_ctx[key]
+                if val and float(val) > 0:
+                    return float(val)
+
+        return None
+
+
+# ---------------------------------------------------------------------------
+# Monitoring loop (daemon thread entry point)
+# ---------------------------------------------------------------------------
+
+
+def live_monitoring_loop(
+    monitor: LiveExitMonitor,
+    interval_s: int = 60,
+) -> None:
+    """Run the live exit monitor in a loop. Intended as a daemon thread target."""
+    log.info("Live exit monitor started (interval=%ds)", interval_s)
+    while True:
+        try:
+            # Only run during market hours (or within 30 min after close
+            # to catch final exit signals)
+            if is_market_open() or _near_close():
+                monitor.run_cycle()
+        except Exception:
+            log.exception("Live monitor cycle error")
+        time.sleep(interval_s)
+
+
+def _near_close() -> bool:
+    """True if within 30 minutes after market close (catch stragglers)."""
+    now = datetime.now(tz=ET)
+    if now.weekday() > 4:
+        return False
+    minutes = now.hour * 60 + now.minute
+    close_min = 16 * 60
+    return close_min <= minutes < close_min + 30

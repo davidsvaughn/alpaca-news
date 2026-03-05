@@ -622,59 +622,61 @@ def _run_single_exploration_body(
         from trader.market.finnhub_client import set_rate_limit_callback
         set_rate_limit_callback(None)
 
-    # --- Watch creation (if high confidence) ---
-    # NOTE: This creates watches based on signal confidence threshold.
-    # Phase 2 will replace this with LivePortfolioManager, which applies
-    # the full backtest filter set + allocation strategy from LiveConfig.
-    if (
-        settings.watch_enabled
-        and signal is not None
-        and signal.direction != "neutral"
-        and signal.confidence >= settings.watch_confidence_threshold
-    ):
+    # --- Watch creation ---
+    # If a LiveConfig is active, use LivePortfolioManager (applies full
+    # backtest filter set + allocation strategy). Otherwise, fall back to
+    # the legacy signal-confidence-threshold approach.
+    watch_was_created = False
+    if settings.watch_enabled and signal is not None and signal.direction != "neutral":
         try:
-            holding_count = count_holding_watches(db)
-            if holding_count >= settings.watch_max_concurrent:
-                if DEBUG:
-                    print(f"SKIP watch: {holding_count} concurrent watches (max {settings.watch_max_concurrent})")
-            else:
-                entry_price = _extract_entry_price(snapshot, symbol)
-                if entry_price is not None:
-                    wb = WatchBuilder.create_from_signal(
-                        snapshot_id=snapshot.snapshot_id,
-                        symbol=symbol,
-                        entry_price=entry_price,
-                        signal=signal,
-                    )
-                    watch = wb.to_watch()
-                    watch_path = Path(settings.data_dir) / "watches" / f"{watch.watch_id}.json"
-                    insert_watch(db, watch=watch.to_dict())
-                    watch.persist(watch_path)
-                    bus.publish(PipelineEvent(
-                        type="watch_created",
-                        payload={
-                            "watch_id": watch.watch_id,
-                            "symbol": watch.symbol,
-                            "direction": watch.entry.direction,
-                            "confidence": watch.entry.confidence,
-                            "entry_price": watch.entry.price,
-                            "snapshot_id": snapshot.snapshot_id,
-                        },
-                    ))
-                elif DEBUG:
-                    print(f"SKIP watch: could not extract entry price for {symbol}")
+            from trader.db.database import get_active_live_config
+            active_cfg = get_active_live_config(db)
+
+            if active_cfg:
+                # Live trading mode: use LivePortfolioManager
+                from trader.online.live_monitor import LivePortfolioManager
+                pm = LivePortfolioManager(db=db, bus=bus, data_dir=settings.data_dir)
+                watch_was_created = pm.evaluate_snapshot(
+                    snapshot=snapshot.to_dict() if hasattr(snapshot, "to_dict") else snapshot,
+                    symbol=symbol,
+                )
+            elif signal.confidence >= settings.watch_confidence_threshold:
+                # Legacy mode: simple confidence threshold
+                holding_count = count_holding_watches(db)
+                if holding_count >= settings.watch_max_concurrent:
+                    if DEBUG:
+                        print(f"SKIP watch: {holding_count} concurrent watches (max {settings.watch_max_concurrent})")
+                else:
+                    entry_price = _extract_entry_price(snapshot, symbol)
+                    if entry_price is not None:
+                        wb = WatchBuilder.create_from_signal(
+                            snapshot_id=snapshot.snapshot_id,
+                            symbol=symbol,
+                            entry_price=entry_price,
+                            signal=signal,
+                        )
+                        watch = wb.to_watch()
+                        watch_path = Path(settings.data_dir) / "watches" / f"{watch.watch_id}.json"
+                        insert_watch(db, watch=watch.to_dict())
+                        watch.persist(watch_path)
+                        bus.publish(PipelineEvent(
+                            type="watch_created",
+                            payload={
+                                "watch_id": watch.watch_id,
+                                "symbol": watch.symbol,
+                                "direction": watch.entry.direction,
+                                "confidence": watch.entry.confidence,
+                                "entry_price": watch.entry.price,
+                                "snapshot_id": snapshot.snapshot_id,
+                            },
+                        ))
+                        watch_was_created = True
+                    elif DEBUG:
+                        print(f"SKIP watch: could not extract entry price for {symbol}")
         except Exception as e:
             if DEBUG:
                 raise
             print(f"WARN: Watch creation failed: {e}")
-
-    # --- Follow-up for no-buy decisions ---
-    watch_was_created = (
-        settings.watch_enabled
-        and signal is not None
-        and signal.direction != "neutral"
-        and signal.confidence >= settings.watch_confidence_threshold
-    )
     if settings.follow_up_enabled and not watch_was_created:
         try:
             from trader.db.database import insert_follow_up
@@ -1228,6 +1230,19 @@ def run_watch_loop(
         )
         monitor_thread.start()
         bus.publish(PipelineEvent(type="monitoring_started", payload={}))
+
+    # Live exit monitor thread (mechanical exit strategies, same as backtest)
+    if settings.watch_enabled:
+        from trader.online.live_monitor import LiveExitMonitor, live_monitoring_loop
+
+        live_monitor = LiveExitMonitor(db=db, bus=bus, data_dir=settings.data_dir)
+        live_monitor_thread = threading.Thread(
+            target=live_monitoring_loop,
+            args=(live_monitor,),
+            daemon=True,
+        )
+        live_monitor_thread.start()
+        bus.publish(PipelineEvent(type="live_monitor_started", payload={}))
 
     # Follow-up collector thread
     if settings.follow_up_enabled:
