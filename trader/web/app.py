@@ -1423,20 +1423,21 @@ def create_app(
     @app.get("/api/activity-panel", response_class=HTMLResponse)
     async def api_activity_panel(request: Request):
         activities = tracker.get_all() if tracker else []
-        active_fus = get_active_follow_ups(db)
-        # Enrich follow-ups with schedule progress info
         fu_summaries = []
-        for fu in active_fus:
-            fj = fu.get("follow_up_json", fu) if isinstance(fu, dict) else fu
-            schedule = fj.get("schedule", [])
-            collections = fj.get("collections", [])
-            fu_summaries.append({
-                "symbols": fj.get("symbols", []),
-                "reason": fj.get("reason", ""),
-                "collections_done": len(collections),
-                "total_scheduled": len(schedule),
-                "next_offset": schedule[len(collections)] if len(collections) < len(schedule) else "done",
-            })
+        if app.state.settings.follow_up_enabled:
+            active_fus = get_active_follow_ups(db)
+            # Enrich follow-ups with schedule progress info
+            for fu in active_fus:
+                fj = fu.get("follow_up_json", fu) if isinstance(fu, dict) else fu
+                schedule = fj.get("schedule", [])
+                collections = fj.get("collections", [])
+                fu_summaries.append({
+                    "symbols": fj.get("symbols", []),
+                    "reason": fj.get("reason", ""),
+                    "collections_done": len(collections),
+                    "total_scheduled": len(schedule),
+                    "next_offset": schedule[len(collections)] if len(collections) < len(schedule) else "done",
+                })
         return templates.TemplateResponse(
             request=request,
             name="partials/_activity_panel.html",

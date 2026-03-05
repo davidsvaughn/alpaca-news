@@ -534,7 +534,19 @@ class LivePortfolioManager:
         Falls back through multiple sources.
         """
         # Try price_context first (current price — always available at seal time)
+        # Structure: {per_symbol: {SYMBOL: {last_price: ...}}} or flat {lastPrice: ...}
         price_ctx = snapshot.get("price_context") or {}
+
+        # Check nested per_symbol structure first (Schwab format)
+        per_sym = price_ctx.get("per_symbol") or {}
+        sym_data = per_sym.get(symbol.upper()) or per_sym.get(symbol) or {}
+        for key in ("last_price", "lastPrice", "mark", "regularMarketPrice"):
+            if key in sym_data:
+                val = sym_data[key]
+                if val and float(val) > 0:
+                    return float(val)
+
+        # Check flat structure (legacy/fallback)
         for key in ("lastPrice", "last_price", "regularMarketPrice"):
             if key in price_ctx:
                 val = price_ctx[key]
