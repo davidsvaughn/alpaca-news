@@ -35,19 +35,21 @@
       <td><strong>{{ w.symbol }}</strong></td>
       <td>{% if w.entry.direction == 'bullish' %}<span class="text-success">&#9650;</span>{% else %}<span class="text-danger">&#9660;</span>{% endif %}</td>
       <td>${{ "%.2f"|format(w.entry.price) }}</td>
+      {% set cur = w.current_price if w.current_price is defined else none %}
+      {% set pnl = w.unrealized_pnl if w.unrealized_pnl is defined else none %}
       <td>
-        {% if w.current_price %}
-          <span class="{% if w._unrealized_pnl is not none and w._unrealized_pnl >= 0 %}pnl-positive{% elif w._unrealized_pnl is not none %}pnl-negative{% endif %}">
-            ${{ "%.2f"|format(w.current_price) }}
+        {% if cur %}
+          <span class="{% if pnl is not none and pnl >= 0 %}pnl-positive{% elif pnl is not none %}pnl-negative{% endif %}">
+            ${{ "%.2f"|format(cur) }}
           </span>
         {% else %}
           <span class="text-muted">&mdash;</span>
         {% endif %}
       </td>
       <td>
-        {% if w._unrealized_pnl is not none %}
-          <span class="{% if w._unrealized_pnl >= 0 %}pnl-positive{% else %}pnl-negative{% endif %}">
-            {{ "%+.2f"|format(w._unrealized_pnl) }}%
+        {% if pnl is not none %}
+          <span class="{% if pnl >= 0 %}pnl-positive{% else %}pnl-negative{% endif %}">
+            {{ "%+.2f"|format(pnl) }}%
           </span>
         {% else %}
           <span class="text-muted">&mdash;</span>

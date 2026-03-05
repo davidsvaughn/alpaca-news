@@ -906,7 +906,8 @@
     "BTDR",
     "RIOT",
     "STOK",
-    "BIIB"
+    "BIIB",
+    "KHC"
   ],
   "crypto": [],
   "rejected": [
@@ -1019,5 +1020,5 @@
     "GRS",
     "SAMHI"
   ],
-  "last_updated": "2026-03-05T20:35:01.498327+00:00"
+  "last_updated": "2026-03-05T20:41:25.890309+00:00"
 }
