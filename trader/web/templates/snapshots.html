@@ -342,6 +342,7 @@
             <button id="bt-run-btn" class="btn btn-primary" onclick="runBacktest()" disabled>Run</button>
             <button id="bt-abort-btn" class="btn btn-outline-danger d-none" onclick="abortBacktest()">Abort</button>
             <button id="bt-clear-btn" class="btn btn-outline-secondary d-none" onclick="clearBacktest()">Clear</button>
+            <button id="bt-golive-btn" class="btn btn-success" onclick="goLive()" disabled>Go Live</button>
           </div>
           <span id="bt-spinner" class="spinner-border spinner-border-sm text-primary d-none"></span>
         </div>
@@ -940,6 +941,7 @@ function onStrategyChange() {
   var paramsDiv = document.getElementById('bt-params');
   paramsDiv.innerHTML = '';
   document.getElementById('bt-run-btn').disabled = !key;
+  document.getElementById('bt-golive-btn').disabled = !key;
 
   if (!key || !_btStrategies[key]) return;
 
@@ -1138,6 +1140,61 @@ function runBacktest() {
     console.error('Backtest error:', err);
     alert('Backtest failed. Check console for details.');
     _btSetRunning(false);
+  });
+}
+
+function goLive() {
+  var strategy = _btCurrentStrategy;
+  if (!strategy) return;
+  var params = _collectParams();
+  var allocParams = _collectAllocParams();
+  var filters = _collectBacktestFilters();
+  var marketClose = _getMarketClose();
+  var minHold = parseInt(document.getElementById('bt-min-hold').value) || 5;
+  var guardStop = parseFloat(document.getElementById('bt-guard-stop').value) || 0;
+  var guardTarget = parseFloat(document.getElementById('bt-guard-target').value) || 0;
+  var simStart = parseFloat(document.getElementById('bt-sim-start').value) || 100000;
+  var priceDelay = parseInt(document.getElementById('bt-sim-delay').value) || 10;
+
+  var configName = strategy + ' (live)';
+  var body = {
+    name: configName,
+    filters: filters,
+    allocation: _btCurrentAllocation || 'none',
+    allocation_params: allocParams,
+    starting_capital: simStart,
+    exit_strategy: strategy,
+    exit_params: params,
+    guard_stop_pct: guardStop,
+    guard_target_pct: guardTarget,
+    min_hold: minHold,
+    price_delay_minutes: priceDelay,
+    market_close: marketClose,
+  };
+
+  if (!confirm('Go live with ' + strategy + '?\n\nThis will create and activate a live config. New snapshots matching your filters will be traded automatically (virtual positions).')) return;
+
+  fetch('/api/live/config', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify(body),
+  })
+  .then(function(r) { return r.json(); })
+  .then(function(cfg) {
+    if (cfg.error) { alert('Error: ' + cfg.error); return; }
+    // Activate immediately
+    return fetch('/api/live/config/' + cfg.config_id + '/activate', {method: 'POST'})
+      .then(function(r) { return r.json(); })
+      .then(function() {
+        alert('Live config activated: ' + configName + '\n\nCheck the Positions tab to monitor.');
+        document.getElementById('bt-golive-btn').textContent = 'Live!';
+        document.getElementById('bt-golive-btn').classList.replace('btn-success', 'btn-outline-success');
+        document.getElementById('bt-golive-btn').disabled = true;
+      });
+  })
+  .catch(function(err) {
+    console.error('Go Live error:', err);
+    alert('Failed to go live. Check console.');
   });
 }
 
@@ -1526,6 +1583,25 @@ document.body.addEventListener('sse:snapshot_sealed', function() {
       localStorage.removeItem('bt_summary');
     }
   }
+
+  // Check if a live config is already active and update Go Live button
+  fetch('/api/live/config')
+    .then(function(r) { return r.json(); })
+    .then(function(cfg) {
+      var btn = document.getElementById('bt-golive-btn');
+      if (cfg && cfg.config_id) {
+        btn.textContent = 'Live: ' + (cfg.name || 'active');
+        btn.classList.replace('btn-success', 'btn-outline-success');
+        btn.disabled = false;
+        btn.onclick = function() {
+          if (confirm('Deactivate current live config "' + cfg.name + '"?')) {
+            fetch('/api/live/config/' + cfg.config_id + '/deactivate', {method: 'POST'})
+              .then(function() { location.reload(); });
+          }
+        };
+      }
+    })
+    .catch(function() {});
 })();
 </script>
 {% endblock %}

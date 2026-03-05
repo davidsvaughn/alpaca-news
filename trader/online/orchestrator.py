@@ -36,6 +36,7 @@ from trader.db.database import (
     Database,
     count_holding_watches,
     delete_snapshot,
+    get_active_watches,
     get_recently_explored_symbols,
     insert_snapshot,
     insert_watch,
