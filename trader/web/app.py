@@ -536,6 +536,18 @@ def create_app(
             context={"active_page": "dashboard", "x_stream_enabled": settings.x_stream_enabled},
         )
 
+    @app.get("/positions", response_class=HTMLResponse)
+    async def positions_page(request: Request):
+        active_cfg = get_active_live_config(db)
+        return templates.TemplateResponse(
+            request=request,
+            name="positions.html",
+            context={
+                "active_page": "positions",
+                "live_config": _DictObj(active_cfg) if active_cfg else None,
+            },
+        )
+
     @app.get("/watches", response_class=HTMLResponse)
     async def watches_page(request: Request, status: str | None = None):
         total = count_all_watches(db, status=status)
@@ -1215,6 +1227,70 @@ def create_app(
         if task and not task.done():
             task.cancel()
         return {"status": "aborted"}
+
+    # ------------------------------------------------------------------
+    # Positions page (HTMX endpoints)
+    # ------------------------------------------------------------------
+
+    @app.get("/api/positions", response_class=HTMLResponse)
+    async def api_positions(request: Request, section: str | None = None):
+        """Render positions table partial for HTMX.
+
+        Sections: 'holding', 'cooling_off', 'closed', or None (all).
+        """
+        watches = get_all_watches(db, limit=200)
+        active_cfg = get_active_live_config(db)
+
+        holding = []
+        cooling = []
+        closed = []
+
+        for w in watches:
+            status = w.get("status", "")
+            if status == "holding":
+                holding.append(w)
+            elif status in ("exited", "cooling_off"):
+                cooling.append(w)
+            elif status in ("sealed", "retrospective"):
+                closed.append(w)
+
+        # Compute portfolio stats
+        total_realized_pnl = 0.0
+        wins = 0
+        losses = 0
+        for w in closed:
+            exit_data = w.get("exit")
+            if exit_data and exit_data.get("realized_pnl_pct") is not None:
+                pnl = float(exit_data["realized_pnl_pct"])
+                total_realized_pnl += pnl
+                if pnl >= 0:
+                    wins += 1
+                else:
+                    losses += 1
+
+        total_trades = wins + losses
+        win_rate = (wins / total_trades * 100) if total_trades > 0 else 0.0
+
+        context = {
+            "holding": [_DictObj(w) for w in holding],
+            "cooling": [_DictObj(w) for w in cooling],
+            "closed": [_DictObj(w) for w in closed[:50]],  # limit closed to most recent 50
+            "stats": {
+                "holding_count": len(holding),
+                "cooling_count": len(cooling),
+                "closed_count": len(closed),
+                "total_realized_pnl": round(total_realized_pnl, 2),
+                "win_rate": round(win_rate, 1),
+                "wins": wins,
+                "losses": losses,
+            },
+            "live_config": _DictObj(active_cfg) if active_cfg else None,
+        }
+        return templates.TemplateResponse(
+            request=request,
+            name="partials/_positions_table.html",
+            context=context,
+        )
 
     # ------------------------------------------------------------------
     # Live config endpoints

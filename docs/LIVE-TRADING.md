@@ -97,11 +97,12 @@ Post-exit: streaming continues for configurable period (default 24 market hours)
 - [x] Integrate with Schwab streaming (add/remove symbols on buy/sell)
 - [x] Integrate with shadow collector (continue during cooling_off)
 
-### Phase 3: Positions UI
-- [ ] Backend: API endpoints for positions data + portfolio stats
-- [ ] Frontend: Positions tab with open/exited/closed sections
-- [ ] Frontend: LiveConfig editor (save backtest config as live config)
-- [ ] Frontend: Activate/deactivate live config
+### Phase 3: Positions UI (DONE)
+- [x] Backend: API endpoint `/api/positions` with portfolio stats
+- [x] Frontend: Positions tab with open/exited/closed sections
+- [x] Frontend: LiveConfig summary + deactivate button
+- [ ] Frontend: LiveConfig editor (save backtest config as live config) — deferred
+- [ ] Frontend: Activate from saved configs list — deferred
 
 ### Phase 4: Alpaca Paper Trading
 - [ ] Alpaca paper trading credentials + config
@@ -546,3 +547,13 @@ For VDD: use Schwab (full exchange volume, already integrated). Alpaca for order
 - On seal (`LiveExitMonitor._seal_watch`): `collector.save_daily()` + remove symbol if no other active watches need it
 - Module-level `_live_collector` and `_live_market` shared between orchestrator and LivePortfolioManager
 - Collector runs throughout cooling_off period, accumulating tick-level data for post-mortem
+
+| 2026-03-05 | Phase 3: Positions UI | Done |
+
+### Phase 3 Details (2026-03-05)
+- `trader/web/templates/positions.html` — main page with LiveConfig summary card, deactivate button, HTMX-loaded positions content
+- `trader/web/templates/partials/_positions_table.html` — three-section table (Open, Recently Exited, Closed) with portfolio stats cards (open count, cooling count, closed count, win rate, total P&L, W/L)
+- `GET /api/positions` endpoint computes stats from all watches, splits by status, renders partial
+- Nav bar updated with Positions link (between Dashboard and Watches)
+- `cooling_off` badge style added (cyan)
+- Positions page auto-refreshes via HTMX (`every 30s` + SSE events)

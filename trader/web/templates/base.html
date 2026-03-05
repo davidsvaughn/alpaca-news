@@ -37,6 +37,7 @@
     }
     .badge-holding { background-color: #0d6efd; }
     .badge-exited { background-color: #ffc107; color: #000; }
+    .badge-cooling_off { background-color: #0dcaf0; color: #000; }
     .badge-retrospective { background-color: #6f42c1; }
     .badge-sealed { background-color: #6c757d; }
     .pnl-positive { color: #198754; font-weight: 600; }
@@ -61,6 +62,7 @@
       <h5 class="mb-3 px-1">alpaca-news</h5>
       <ul class="nav flex-column flex-grow-1">
         <li class="nav-item"><a href="/" class="nav-link{% if active_page == 'dashboard' %} active{% endif %}">Dashboard</a></li>
+        <li class="nav-item"><a href="/positions" class="nav-link{% if active_page == 'positions' %} active{% endif %}">Positions</a></li>
         <li class="nav-item"><a href="/watches" class="nav-link{% if active_page == 'watches' %} active{% endif %}">Watches</a></li>
         <li class="nav-item"><a href="/snapshots" class="nav-link{% if active_page == 'snapshots' %} active{% endif %}">Snapshots</a></li>
         <li class="nav-item"><a href="/strategies" class="nav-link{% if active_page == 'strategies' %} active{% endif %}">Strategies</a></li>
