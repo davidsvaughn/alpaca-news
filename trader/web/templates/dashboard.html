@@ -40,13 +40,18 @@
 
 <!-- Active Watches -->
 <div class="d-flex align-items-center mb-2 mt-2">
-  <h5 class="mb-0">Active Watches</h5>
+  <h5 class="mb-0" style="cursor:pointer;" data-bs-toggle="collapse" data-bs-target="#active-watches-collapse" aria-expanded="false">
+    <span class="collapse-arrow" style="display:inline-block;transition:transform .2s;transform:rotate(0deg);font-size:0.7em;vertical-align:middle;">&#9654;</span>
+    Active Watches
+  </h5>
 </div>
-<div id="active-watches"
-     hx-get="/api/watches/active"
-     hx-trigger="load, every 15s, sse-refresh from:body"
-     hx-swap="innerHTML">
-  <div class="text-center text-muted py-3">Loading watches...</div>
+<div id="active-watches-collapse" class="collapse">
+  <div id="active-watches"
+       hx-get="/api/watches/active"
+       hx-trigger="load, every 15s, sse-refresh from:body"
+       hx-swap="innerHTML">
+    <div class="text-center text-muted py-3">Loading watches...</div>
+  </div>
 </div>
 
 <!-- Manual Explore -->
@@ -91,6 +96,17 @@
 {% endblock %}
 
 {% block scripts %}
+<script>
+// Rotate arrow on Active Watches collapse toggle
+(function() {
+  var el = document.getElementById('active-watches-collapse');
+  if (el) {
+    var arrow = el.previousElementSibling.querySelector('.collapse-arrow');
+    el.addEventListener('show.bs.collapse', function() { arrow.style.transform = 'rotate(90deg)'; });
+    el.addEventListener('hide.bs.collapse', function() { arrow.style.transform = 'rotate(0deg)'; });
+  }
+})();
+</script>
 <script>
 // Observer mode toggle button
 (function() {

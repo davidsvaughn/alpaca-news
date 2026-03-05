@@ -1316,6 +1316,46 @@ def create_app(
         # Legacy watches (no config)
         legacy_data = _compute_stats(legacy_watches)
 
+        # Fetch current prices for all holding symbols
+        all_holding_symbols = set()
+        for p in portfolios:
+            for w in p["holding"]:
+                all_holding_symbols.add(w["symbol"])
+        for w in legacy_data["holding"]:
+            all_holding_symbols.add(w["symbol"])
+
+        prices: dict[str, float] = {}
+        if all_holding_symbols:
+            try:
+                market = getattr(app.state, "market", None)
+                if market and hasattr(market, "get_quotes"):
+                    quotes = market.get_quotes(list(all_holding_symbols))
+                    if isinstance(quotes, dict):
+                        for sym, q in quotes.items():
+                            if isinstance(q, dict):
+                                p_val = q.get("lastPrice") or q.get("last_price") or q.get("mark")
+                                if p_val:
+                                    prices[sym.upper()] = float(p_val)
+            except Exception:
+                pass  # prices stay empty — template handles gracefully
+
+        # Inject current price + unrealized P&L into holding watches
+        def _enrich_holding(w: dict) -> dict:
+            sym = w.get("symbol", "").upper()
+            entry_price = w.get("entry", {}).get("price", 0)
+            cur = prices.get(sym)
+            w["current_price"] = cur
+            if cur and entry_price and entry_price > 0:
+                pnl = (cur - entry_price) / entry_price * 100
+                w["unrealized_pnl"] = round(pnl, 2)
+            else:
+                w["unrealized_pnl"] = None
+            return w
+
+        for p in portfolios:
+            p["holding"] = [_enrich_holding(w) for w in p["holding"]]
+        legacy_data["holding"] = [_enrich_holding(w) for w in legacy_data["holding"]]
+
         # Wrap for Jinja
         for p in portfolios:
             p["config"] = _DictObj(p["config"])

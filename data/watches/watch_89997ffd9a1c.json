@@ -1,0 +1,28 @@
+{
+  "watch_id": "watch_89997ffd9a1c",
+  "symbol": "BTDR",
+  "status": "holding",
+  "entry": {
+    "snapshot_id": "cbfa2924_BTDR",
+    "price": 7.765,
+    "time": "2026-03-05T20:36:41.779385+00:00",
+    "confidence": 0.85,
+    "direction": "bullish",
+    "horizon": "1d",
+    "thesis": "live_trading"
+  },
+  "exit": null,
+  "created_at": "2026-03-05T20:36:41.779427+00:00",
+  "last_checkin_at": null,
+  "lifecycle_sealed_at": null,
+  "live_config_id": "lc_4eba845ea079",
+  "exit_strategy": "volume_delta_divergence",
+  "exit_params": {
+    "lookback": 80
+  },
+  "cooling_off_until": null,
+  "monitoring_snapshot_ids": [],
+  "retrospective_snapshot_ids": [],
+  "checkin_history": [],
+  "retrospective_data": null
+}

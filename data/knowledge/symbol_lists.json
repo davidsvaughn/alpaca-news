@@ -901,7 +901,12 @@
     "SNTX",
     "CMLS",
     "HEI",
-    "XPL"
+    "XPL",
+    "CLSK",
+    "BTDR",
+    "RIOT",
+    "STOK",
+    "BIIB"
   ],
   "crypto": [],
   "rejected": [
@@ -1014,5 +1019,5 @@
     "GRS",
     "SAMHI"
   ],
-  "last_updated": "2026-03-05T20:26:18.456394+00:00"
+  "last_updated": "2026-03-05T20:35:01.498327+00:00"
 }

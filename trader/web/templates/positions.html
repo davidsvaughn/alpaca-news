@@ -1,17 +1,14 @@
 {% extends "base.html" %}
 
-{% block title %}alpaca-news | Positions{% endblock %}
+{% block title %}alpaca-news | Portfolios{% endblock %}
 
 {% block extra_css %}
-.config-card { border-left: 4px solid #0d6efd; }
-.config-card.inactive { border-left-color: #6c757d; opacity: 0.7; }
 .config-badge { font-size: 0.75rem; }
-.portfolio-section { margin-bottom: 1.5rem; }
 {% endblock %}
 
 {% block content %}
 <div class="d-flex align-items-center mb-3">
-  <h2 class="mb-0 me-3">Positions</h2>
+  <h2 class="mb-0 me-3">Portfolios</h2>
   {% if live_configs %}
     <span class="badge bg-success config-badge">{{ live_configs|length }} portfolio{{ 's' if live_configs|length > 1 else '' }} active</span>
   {% else %}
@@ -19,57 +16,17 @@
   {% endif %}
 </div>
 
-<!-- Active Portfolio Config Cards -->
-{% if live_configs %}
-  {% for cfg in live_configs %}
-  <div class="card config-card mb-2">
-    <div class="card-body py-2 px-3">
-      <div class="row small g-2 mb-1">
-        <div class="col-auto"><strong>{{ cfg.name }}</strong></div>
-        <div class="col-auto text-muted">{{ cfg.exit_strategy }}</div>
-        <div class="col-auto text-muted">Stop: {{ cfg.guard_stop_pct }}%</div>
-        <div class="col-auto text-muted">{{ cfg.allocation }}</div>
-        <div class="col-auto text-muted">${{ "{:,.0f}".format(cfg.starting_capital) }}</div>
-        <div class="col-auto text-muted" style="font-size:.7rem"><code>{{ cfg.config_id }}</code> | {{ cfg.created_at[:16] }}</div>
-        <div class="col-auto">
-          <button class="btn btn-sm btn-outline-danger py-0 px-1"
-                  hx-post="/api/live/config/{{ cfg.config_id }}/deactivate"
-                  hx-swap="none"
-                  hx-confirm="Deactivate '{{ cfg.name }}'?"
-                  onclick="setTimeout(() => location.reload(), 500)"
-                  style="font-size: 0.7rem;">Deactivate</button>
-        </div>
-      </div>
-      {% set f = cfg.filters %}
-      {% set af = [] %}
-      {% if f.conf_min %}{% set _ = af.append('Conf>=' + f.conf_min|string + '%') %}{% endif %}
-      {% if f.price_min %}{% set _ = af.append('Price>=$' + f.price_min|string) %}{% endif %}
-      {% if f.price_max %}{% set _ = af.append('Price<=$' + f.price_max|string) %}{% endif %}
-      {% if f.avg_vol_min %}{% set _ = af.append('Vol>=' + f.avg_vol_min|string + 'M') %}{% endif %}
-      {% if f.avg_vol_max %}{% set _ = af.append('Vol<=' + f.avg_vol_max|string + 'M') %}{% endif %}
-      {% if f.mkt_cap_min %}{% set _ = af.append('Cap>=' + f.mkt_cap_min|string + 'B') %}{% endif %}
-      {% if f.mkt_cap_max %}{% set _ = af.append('Cap<=' + f.mkt_cap_max|string + 'B') %}{% endif %}
-      {% if f.pe_min %}{% set _ = af.append('PE>=' + f.pe_min|string) %}{% endif %}
-      {% if f.pe_max %}{% set _ = af.append('PE<=' + f.pe_max|string) %}{% endif %}
-      {% if f.price_10_min %}{% set _ = af.append('P@x>=$' + f.price_10_min|string) %}{% endif %}
-      {% if f.symbol %}{% set _ = af.append(f.symbol) %}{% endif %}
-      {% if af %}
-      <div class="small text-muted">{{ af | join(' | ') }}</div>
-      {% endif %}
-    </div>
-  </div>
-  {% endfor %}
-{% else %}
+{% if not live_configs %}
 <div class="alert alert-secondary small mb-3">
   No active portfolios. Go to <a href="/snapshots">Snapshots</a>, configure your backtest, and click <strong>Go Live</strong>.
 </div>
 {% endif %}
 
-<!-- Positions content (loaded via HTMX) -->
+<!-- All portfolio content (loaded via HTMX) -->
 <div id="positions-content"
      hx-get="/api/positions"
      hx-trigger="load, every 30s, sse-refresh from:body"
      hx-swap="innerHTML">
-  <div class="text-center text-muted py-3">Loading positions...</div>
+  <div class="text-center text-muted py-3">Loading portfolios...</div>
 </div>
 {% endblock %}

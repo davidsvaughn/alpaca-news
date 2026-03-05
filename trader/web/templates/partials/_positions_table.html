@@ -27,7 +27,7 @@
 <div class="table-responsive">
   <table class="table table-sm table-hover align-middle mb-1">
     <thead class="table-light"><tr>
-      <th>Symbol</th><th>Dir</th><th>Entry</th><th>Conf</th><th>Strategy</th><th>Entered</th><th></th>
+      <th>Symbol</th><th>Dir</th><th>Entry</th><th>Current</th><th>P&L</th><th>Conf</th><th>Strategy</th><th>Entered</th><th></th>
     </tr></thead>
     <tbody>
     {% for w in watches %}
@@ -35,6 +35,24 @@
       <td><strong>{{ w.symbol }}</strong></td>
       <td>{% if w.entry.direction == 'bullish' %}<span class="text-success">&#9650;</span>{% else %}<span class="text-danger">&#9660;</span>{% endif %}</td>
       <td>${{ "%.2f"|format(w.entry.price) }}</td>
+      <td>
+        {% if w.current_price %}
+          <span class="{% if w._unrealized_pnl is not none and w._unrealized_pnl >= 0 %}pnl-positive{% elif w._unrealized_pnl is not none %}pnl-negative{% endif %}">
+            ${{ "%.2f"|format(w.current_price) }}
+          </span>
+        {% else %}
+          <span class="text-muted">&mdash;</span>
+        {% endif %}
+      </td>
+      <td>
+        {% if w._unrealized_pnl is not none %}
+          <span class="{% if w._unrealized_pnl >= 0 %}pnl-positive{% else %}pnl-negative{% endif %}">
+            {{ "%+.2f"|format(w._unrealized_pnl) }}%
+          </span>
+        {% else %}
+          <span class="text-muted">&mdash;</span>
+        {% endif %}
+      </td>
       <td>{{ "%.0f"|format(w.entry.confidence * 100) }}%</td>
       <td class="small text-muted">{{ w.exit_strategy or 'legacy' }}</td>
       <td class="small text-muted">{{ w.created_at[:16] }}</td>
@@ -109,15 +127,43 @@
 
 <!-- Render portfolios -->
 {% for p in portfolios %}
-<div class="portfolio-section">
-  <h5 class="mb-1">
-    {{ p.config.name }}
-    {% if p.config.active %}<span class="badge bg-success" style="font-size:.65rem">active</span>
-    {% else %}<span class="badge bg-secondary" style="font-size:.65rem">inactive</span>{% endif %}
-  </h5>
-  <div class="small text-muted mb-2">
+<div class="card mb-3" style="border-left: 4px solid {% if p.config.active %}#198754{% else %}#6c757d{% endif %};">
+  <div class="card-body py-3 px-3">
+  <!-- Header: name + config summary + deactivate -->
+  <div class="d-flex align-items-center mb-1">
+    <h5 class="mb-0 me-2">{{ p.config.name }}</h5>
+    {% if p.config.active %}<span class="badge bg-success me-2" style="font-size:.65rem">active</span>
+    {% else %}<span class="badge bg-secondary me-2" style="font-size:.65rem">inactive</span>{% endif %}
+    <span class="small text-muted me-2">{{ p.config.exit_strategy }}</span>
+    <span class="small text-muted me-2">Stop: {{ p.config.guard_stop_pct }}%</span>
+    <span class="small text-muted me-2">{{ p.config.allocation }}</span>
+    <span class="small text-muted me-2">${{ "{:,.0f}".format(p.config.starting_capital) }}</span>
+    {% if p.config.active %}
+    <button class="btn btn-sm btn-outline-danger py-0 px-1 ms-auto"
+            hx-post="/api/live/config/{{ p.config.config_id }}/deactivate"
+            hx-swap="none"
+            hx-confirm="Deactivate '{{ p.config.name }}'?"
+            onclick="setTimeout(() => location.reload(), 500)"
+            style="font-size: 0.7rem;">Deactivate</button>
+    {% endif %}
+  </div>
+  <div class="small text-muted mb-1">
     <code>{{ p.config.config_id }}</code>
     {% if p.config.created_at %} | started {{ p.config.created_at[:16] }}{% endif %}
+    {% set f = p.config.filters %}
+    {% set af = [] %}
+    {% if f.conf_min %}{% set _ = af.append('Conf>=' + f.conf_min|string + '%') %}{% endif %}
+    {% if f.price_min %}{% set _ = af.append('Price>=$' + f.price_min|string) %}{% endif %}
+    {% if f.price_max %}{% set _ = af.append('Price<=$' + f.price_max|string) %}{% endif %}
+    {% if f.avg_vol_min %}{% set _ = af.append('Vol>=' + f.avg_vol_min|string + 'M') %}{% endif %}
+    {% if f.avg_vol_max %}{% set _ = af.append('Vol<=' + f.avg_vol_max|string + 'M') %}{% endif %}
+    {% if f.mkt_cap_min %}{% set _ = af.append('Cap>=' + f.mkt_cap_min|string + 'B') %}{% endif %}
+    {% if f.mkt_cap_max %}{% set _ = af.append('Cap<=' + f.mkt_cap_max|string + 'B') %}{% endif %}
+    {% if f.pe_min %}{% set _ = af.append('PE>=' + f.pe_min|string) %}{% endif %}
+    {% if f.pe_max %}{% set _ = af.append('PE<=' + f.pe_max|string) %}{% endif %}
+    {% if f.price_10_min %}{% set _ = af.append('P@x>=$' + f.price_10_min|string) %}{% endif %}
+    {% if f.symbol %}{% set _ = af.append(f.symbol) %}{% endif %}
+    {% if af %} | {{ af | join(' | ') }}{% endif %}
   </div>
   {{ stats_row(p.stats) }}
 
@@ -140,7 +186,7 @@
   <p class="text-muted small">No positions yet for this portfolio.</p>
   {% endif %}
 
-  {% if not loop.last %}<hr class="my-2">{% endif %}
+  </div>
 </div>
 {% endfor %}
 
