@@ -82,11 +82,11 @@ Post-exit: streaming continues for configurable period (default 24 market hours)
 
 ## Implementation Phases
 
-### Phase 1: Foundation
-- [ ] Extract exit strategy functions from backtest.py for standalone use
-- [ ] Create LiveConfig model + SQLite storage + API endpoints
-- [ ] Modify Watch model (add `cooling_off` state, simplify fields)
-- [ ] Fence off legacy WatchMonitor LLM check-in code
+### Phase 1: Foundation (DONE)
+- [x] Extract exit strategy functions from backtest.py for standalone use
+- [x] Create LiveConfig model + SQLite storage + API endpoints
+- [x] Modify Watch model (add `cooling_off` state, simplify fields)
+- [x] Fence off legacy WatchMonitor LLM check-in code
 
 ### Phase 2: Core Live Loop
 - [ ] Implement LiveExitMonitor (daemon thread, bar-based exit evaluation)
@@ -510,4 +510,17 @@ For VDD: use Schwab (full exchange volume, already integrated). Alpaca for order
 | 2026-03-04 | Shadow collector implementation | Done |
 | 2026-03-04 | Live trading plan (initial) | Done |
 | 2026-03-05 | Consolidated plan document | Done |
-| 2026-03-05 | Phase 1: Foundation | Not started |
+| 2026-03-05 | Phase 1: Foundation | Done |
+
+### Phase 1 Details (2026-03-05)
+- `evaluate_exit()` public API added to `trader/market/backtest.py` — thin wrapper around existing strategy runners for live use
+- `ExitResult` dataclass added for clean return type
+- `trader/models/live_config.py` created — `LiveConfig` dataclass with all backtest-mirroring parameters
+- `live_configs` SQLite table + full CRUD in `trader/db/database.py` (insert, update, get, list, activate, deactivate, delete)
+- API endpoints in `trader/web/app.py`: `GET/POST /api/live/config`, `GET /api/live/configs`, activate/deactivate/delete
+- Watch model updated: `cooling_off` status, `live_config_id`, `exit_strategy`, `exit_params`, `cooling_off_until` fields
+- `WatchBuilder.create_from_live_config()` factory method added
+- `WatchBuilder.start_cooling_off()` method added
+- Full backward compatibility with existing watch DB records
+- Legacy WatchMonitor fenced off (requires `WATCH_LEGACY_MONITOR=1` env var to activate)
+- `watcher.py` docstring updated with legacy notice

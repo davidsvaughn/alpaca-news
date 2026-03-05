@@ -623,6 +623,9 @@ def _run_single_exploration_body(
         set_rate_limit_callback(None)
 
     # --- Watch creation (if high confidence) ---
+    # NOTE: This creates watches based on signal confidence threshold.
+    # Phase 2 will replace this with LivePortfolioManager, which applies
+    # the full backtest filter set + allocation strategy from LiveConfig.
     if (
         settings.watch_enabled
         and signal is not None
@@ -1207,8 +1210,14 @@ def run_watch_loop(
     fs_observer.start()
     bus.publish(PipelineEvent(type="watching", payload={"dir": ", ".join(str(d) for d in watch_dirs)}))
 
-    # Monitoring thread for active watches
-    if settings.watch_enabled:
+    # ================================================================
+    # LEGACY: LLM-based watch monitoring (disabled since 2026-03-05)
+    # Replaced by LiveExitMonitor which uses mechanical exit strategies
+    # (same math as backtest). See trader/online/live_monitor.py.
+    # The code below is preserved but not executed.
+    # To re-enable, set WATCH_LEGACY_MONITOR=1 in .env.
+    # ================================================================
+    if settings.watch_enabled and os.getenv("WATCH_LEGACY_MONITOR", "").lower() in ("1", "true", "yes"):
         from trader.online.watcher import WatchMonitor, monitoring_loop
 
         monitor = WatchMonitor(settings=settings, db=db, bus=bus, observer=observer)

@@ -1,11 +1,18 @@
-"""Watch monitoring scheduler.
+"""Watch monitoring scheduler (LEGACY — disabled since 2026-03-05).
 
-Periodically checks on all active watches:
+This module contains the LLM-based watch check-in system. It has been
+replaced by the LiveExitMonitor (trader/online/live_monitor.py) which
+uses mechanical exit strategies (same math as backtest) instead of
+periodic LLM calls.
+
+This code is preserved but NOT started by the orchestrator unless the
+env var WATCH_LEGACY_MONITOR=1 is set. Do NOT import or activate this
+module for the live trading system.
+
+Original behavior:
 - Holding: lightweight or agent check-ins (price, LLM hold/exit decision)
 - Exited: immediate transition to retrospective phase
 - Retrospective: lightweight price tracking (MFE/MAE), auto-seal after max duration
-
-Runs as a daemon thread alongside the news processing worker.
 """
 
 from __future__ import annotations
