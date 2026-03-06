@@ -201,17 +201,21 @@ class LiveExitMonitor:
             # If broker is connected, close Alpaca position and cancel stop order
             broker = self._get_broker_for_watch(watch_dict)
             if broker and watch_dict.get("alpaca_buy_order_id"):
+                # Cancel the server-side stop order FIRST (prevent race with stop fill)
+                stop_id = watch_dict.get("alpaca_stop_order_id")
+                if stop_id:
+                    broker.cancel_order(stop_id)
+                    builder.alpaca_stop_order_id = None
+
+                # Close position and WAIT for sell confirmation
                 try:
-                    close_result = broker.close_position(symbol)
-                    if close_result and close_result.filled_avg_price:
-                        exit_price = close_result.filled_avg_price
-                    # Cancel the server-side stop order (no longer needed)
-                    stop_id = watch_dict.get("alpaca_stop_order_id")
-                    if stop_id:
-                        broker.cancel_order(stop_id)
-                        builder.alpaca_stop_order_id = None
+                    sell_confirmed = broker.close_position_and_confirm(symbol)
+                    if sell_confirmed and sell_confirmed.filled_avg_price:
+                        exit_price = sell_confirmed.filled_avg_price
+                        log.info("ALPACA SELL CONFIRMED: %s price=%.2f qty=%s",
+                                 symbol, exit_price, sell_confirmed.filled_qty)
                 except Exception:
-                    log.exception("Alpaca close/cancel failed for %s — proceeding with exit", symbol)
+                    log.exception("Alpaca sell failed for %s — using bar price %.2f", symbol, exit_price)
 
             builder.record_exit(price=exit_price, reason=result.reason)
             log.info(
@@ -521,29 +525,46 @@ class LivePortfolioManager:
         # --- Execute Alpaca orders (if broker connected to this config) ---
         broker = self.broker_pool.get(cfg.alpaca_account_id) if self.broker_pool and cfg.alpaca_account_id else None
         if broker:
+            alloc_pct = float((cfg.allocation_params or {}).get("alloc_pct", 5))
+            position_size = cfg.starting_capital * alloc_pct / 100.0
+
+            # Submit market buy and WAIT for fill confirmation
             try:
-                # Calculate position size
-                alloc_pct = float((cfg.allocation_params or {}).get("alloc_pct", 5))
-                position_size = cfg.starting_capital * alloc_pct / 100.0
-
-                # Submit market buy order
-                buy_result = broker.buy(symbol, notional=position_size)
-                wb.alpaca_buy_order_id = buy_result.order_id
-                log.info("ALPACA BUY: %s order=%s notional=%.2f", symbol, buy_result.order_id, position_size)
-
-                # Submit server-side stop-loss order (if guard_stop_pct > 0)
-                if cfg.guard_stop_pct > 0:
-                    # We need the qty from the buy to set the stop.
-                    # For market orders, use notional / entry_price as estimate.
-                    # The actual qty will be updated when the buy fill arrives.
-                    est_qty = round(position_size / entry_price, 6)
-                    stop_price = round(entry_price * (1 - cfg.guard_stop_pct / 100), 2)
-                    stop_result = broker.set_stop(symbol, qty=est_qty, stop_price=stop_price)
-                    wb.alpaca_stop_order_id = stop_result.order_id
-                    log.info("ALPACA STOP: %s order=%s qty=%.4f stop=%.2f",
-                             symbol, stop_result.order_id, est_qty, stop_price)
+                buy_confirmed = broker.buy_and_confirm(symbol, notional=position_size)
             except Exception:
-                log.exception("ALPACA ORDER FAILED for %s — watch created without Alpaca orders", symbol)
+                log.exception("ALPACA BUY FAILED for %s — skipping (no watch created)", symbol)
+                return False
+
+            wb.alpaca_buy_order_id = buy_confirmed.order_id
+
+            # Use ACTUAL fill price and qty (not estimates)
+            if buy_confirmed.filled_avg_price and buy_confirmed.filled_avg_price > 0:
+                entry_price = buy_confirmed.filled_avg_price
+                from trader.models.watch import WatchEntry
+                wb.entry = WatchEntry(
+                    snapshot_id=wb.entry.snapshot_id,
+                    price=entry_price,
+                    time=wb.entry.time,
+                    confidence=wb.entry.confidence,
+                    direction=wb.entry.direction,
+                    horizon=wb.entry.horizon,
+                    thesis=wb.entry.thesis,
+                )
+            actual_qty = buy_confirmed.filled_qty or 0
+
+            log.info("ALPACA BUY CONFIRMED: %s order=%s qty=%.4f fill_price=%.2f notional=%.2f",
+                     symbol, buy_confirmed.order_id, actual_qty, entry_price, position_size)
+
+            # Submit server-side stop-loss with ACTUAL qty from confirmed fill
+            if cfg.guard_stop_pct > 0 and actual_qty > 0:
+                stop_price = round(entry_price * (1 - cfg.guard_stop_pct / 100), 2)
+                try:
+                    stop_confirmed = broker.set_stop(symbol, qty=actual_qty, stop_price=stop_price)
+                    wb.alpaca_stop_order_id = stop_confirmed.order_id
+                    log.info("ALPACA STOP SET: %s order=%s qty=%.4f stop=%.2f",
+                             symbol, stop_confirmed.order_id, actual_qty, stop_price)
+                except Exception:
+                    log.exception("ALPACA STOP FAILED for %s — position open without stop protection!", symbol)
 
         watch = wb.to_watch()
 

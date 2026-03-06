@@ -82,6 +82,18 @@ def main() -> None:
 
     _kill_stale_servers()
 
+    # Make this process a session leader so all child processes (websockets,
+    # threads) share our process group.  Killing the group kills everything.
+    import signal
+    os.setpgrp()
+
+    def _kill_group(signum: int, _frame: object) -> None:
+        # Kill entire process group (us + all children) then exit
+        os.killpg(os.getpgid(os.getpid()), signal.SIGKILL)
+
+    signal.signal(signal.SIGTERM, _kill_group)
+    signal.signal(signal.SIGINT, _kill_group)
+
     settings = load_settings()
     observer = ObserverMode(enabled=args.observer or settings.observer_mode)
     if observer.enabled:

@@ -1262,7 +1262,7 @@ def create_app(
                 elif s in ("sealed", "retrospective"):
                     closed.append(w)
             total_pnl, wins, losses = 0.0, 0, 0
-            for w in closed:
+            for w in cooling + closed:
                 ex = w.get("exit")
                 if ex and ex.get("realized_pnl_pct") is not None:
                     pnl = float(ex["realized_pnl_pct"])
@@ -1618,10 +1618,22 @@ def create_app(
                         name=creds.name,
                     )
                     acct = broker.get_account()
+                    positions = broker.get_positions()
                     info.update({
                         "equity": acct.equity,
                         "cash": acct.cash,
                         "buying_power": acct.buying_power,
+                        "positions": [
+                            {
+                                "symbol": p.symbol,
+                                "qty": p.qty,
+                                "avg_entry_price": p.avg_entry_price,
+                                "market_value": p.market_value,
+                                "unrealized_pl": p.unrealized_pl,
+                                "current_price": p.current_price,
+                            }
+                            for p in positions
+                        ],
                     })
                 except Exception as e:
                     info["error"] = str(e)

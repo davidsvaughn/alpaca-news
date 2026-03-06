@@ -6,7 +6,7 @@
     ('Cooling', stats.cooling_count, ''),
     ('Closed', stats.closed_count, ''),
     ('Win Rate', stats.win_rate|string + '%', ''),
-    ('P&L', ('%+.2f'|format(stats.total_realized_pnl)) + '%', 'pnl-positive' if stats.total_realized_pnl >= 0 else 'pnl-negative'),
+    ('Realized', ('%+.2f'|format(stats.total_realized_pnl)) + '%', 'pnl-positive' if stats.total_realized_pnl >= 0 else 'pnl-negative'),
     ('W/L', stats.wins|string + '/' + stats.losses|string, ''),
   ] %}
   <div class="col-auto">
@@ -148,6 +148,13 @@
             hx-confirm="Deactivate '{{ p.config.name }}'?"
             onclick="setTimeout(() => location.reload(), 500)"
             style="font-size: 0.7rem;">Deactivate</button>
+    {% else %}
+    <button class="btn btn-sm btn-outline-danger py-0 px-1 ms-auto"
+            hx-delete="/api/live/config/{{ p.config.config_id }}"
+            hx-swap="none"
+            hx-confirm="Delete '{{ p.config.name }}'? This cannot be undone."
+            onclick="setTimeout(() => location.reload(), 500)"
+            style="font-size: 0.7rem;">Delete</button>
     {% endif %}
   </div>
 
@@ -250,22 +257,28 @@
 
   {{ stats_row(p.stats) }}
 
-  {% if p.holding %}
-  <h6 class="text-muted small mb-1">Open</h6>
-  {{ holdings_table(p.holding) }}
-  {% endif %}
+  {% if p.holding or p.cooling or p.closed %}
+  <a data-bs-toggle="collapse" href="#positions-{{ loop.index }}" role="button"
+     class="text-decoration-none small text-muted" style="font-size:.75rem">
+    positions &#9662;
+  </a>
+  <div class="collapse" id="positions-{{ loop.index }}">
+    {% if p.holding %}
+    <h6 class="text-muted small mb-1 mt-2">Open</h6>
+    {{ holdings_table(p.holding) }}
+    {% endif %}
 
-  {% if p.cooling %}
-  <h6 class="text-muted small mb-1">Recently Exited</h6>
-  {{ cooling_table(p.cooling) }}
-  {% endif %}
+    {% if p.cooling %}
+    <h6 class="text-muted small mb-1">Recently Exited</h6>
+    {{ cooling_table(p.cooling) }}
+    {% endif %}
 
-  {% if p.closed %}
-  <h6 class="text-muted small mb-1">Closed ({{ p.stats.closed_count }})</h6>
-  {{ closed_table(p.closed, p.stats.closed_count) }}
-  {% endif %}
-
-  {% if not p.holding and not p.cooling and not p.closed %}
+    {% if p.closed %}
+    <h6 class="text-muted small mb-1">Closed ({{ p.stats.closed_count }})</h6>
+    {{ closed_table(p.closed, p.stats.closed_count) }}
+    {% endif %}
+  </div>
+  {% else %}
   <p class="text-muted small">No positions yet for this portfolio.</p>
   {% endif %}
 
@@ -296,3 +309,29 @@
 {% if not portfolios and not legacy.holding and not legacy.cooling and not legacy.closed %}
 <p class="text-muted">No positions. Activate a portfolio and wait for matching snapshots.</p>
 {% endif %}
+
+<script>
+// Persist collapse state in localStorage
+(function() {
+  var KEY = 'positions_collapse_state';
+  var state = JSON.parse(localStorage.getItem(KEY) || '{}');
+
+  // Restore saved state
+  Object.keys(state).forEach(function(id) {
+    var el = document.getElementById(id);
+    if (el && state[id]) el.classList.add('show');
+  });
+
+  // Listen for collapse/expand events
+  document.querySelectorAll('[id^="positions-"], [id^="cfg-detail-"]').forEach(function(el) {
+    el.addEventListener('shown.bs.collapse', function() {
+      state[el.id] = true;
+      localStorage.setItem(KEY, JSON.stringify(state));
+    });
+    el.addEventListener('hidden.bs.collapse', function() {
+      state[el.id] = false;
+      localStorage.setItem(KEY, JSON.stringify(state));
+    });
+  });
+})();
+</script>

@@ -1248,7 +1248,7 @@ def run_watch_loop(
     # Live exit monitor thread (mechanical exit strategies, same as backtest)
     # Also sets up the shadow collector for real-time volume delta tracking,
     # and optionally the Alpaca broker + trade stream for order execution.
-    global _live_collector, _live_market, _live_broker
+    global _live_collector, _live_market, _broker_pool
     if settings.watch_enabled:
         from trader.online.live_monitor import LiveExitMonitor, live_monitoring_loop
 

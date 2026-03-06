@@ -344,6 +344,83 @@ class AlpacaBroker:
         return results
 
     # ------------------------------------------------------------------
+    # Confirmed execution — wait for fills
+    # ------------------------------------------------------------------
+
+    def wait_for_fill(
+        self,
+        order_id: str,
+        timeout_s: float = 15.0,
+        poll_interval_s: float = 0.5,
+    ) -> OrderResult:
+        """Poll an order until it fills, fails, or times out.
+
+        Returns the final OrderResult. Raises TimeoutError if not
+        filled within timeout_s.
+        """
+        import time
+
+        deadline = time.monotonic() + timeout_s
+        while time.monotonic() < deadline:
+            result = self.get_order(order_id)
+            if result is None:
+                raise RuntimeError(f"Order {order_id} not found")
+            status = result.status.lower()
+            if status == "filled":
+                return result
+            if status in ("canceled", "expired", "rejected", "suspended"):
+                raise RuntimeError(f"Order {order_id} terminal status: {status}")
+            time.sleep(poll_interval_s)
+
+        # Final check
+        result = self.get_order(order_id)
+        if result and result.status.lower() == "filled":
+            return result
+        raise TimeoutError(
+            f"Order {order_id} not filled after {timeout_s}s (status={result.status if result else 'unknown'})"
+        )
+
+    def buy_and_confirm(
+        self,
+        symbol: str,
+        *,
+        notional: float | None = None,
+        qty: float | None = None,
+        timeout_s: float = 15.0,
+    ) -> OrderResult:
+        """Submit a market buy and wait for fill confirmation.
+
+        Returns OrderResult with actual filled_avg_price and filled_qty.
+        Raises on rejection, cancellation, or timeout.
+        """
+        result = self.buy(symbol, notional=notional, qty=qty)
+        confirmed = self.wait_for_fill(result.order_id, timeout_s=timeout_s)
+        log.info(
+            "BUY CONFIRMED: %s order=%s qty=%s avg_price=%s",
+            symbol, confirmed.order_id, confirmed.filled_qty, confirmed.filled_avg_price,
+        )
+        return confirmed
+
+    def close_position_and_confirm(
+        self,
+        symbol: str,
+        timeout_s: float = 15.0,
+    ) -> OrderResult | None:
+        """Close a position and wait for sell fill confirmation.
+
+        Returns OrderResult with actual exit price, or None if no position.
+        """
+        result = self.close_position(symbol)
+        if result is None:
+            return None
+        confirmed = self.wait_for_fill(result.order_id, timeout_s=timeout_s)
+        log.info(
+            "SELL CONFIRMED: %s order=%s qty=%s avg_price=%s",
+            symbol, confirmed.order_id, confirmed.filled_qty, confirmed.filled_avg_price,
+        )
+        return confirmed
+
+    # ------------------------------------------------------------------
     # Internals
     # ------------------------------------------------------------------
 

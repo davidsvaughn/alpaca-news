@@ -37,11 +37,22 @@ To run in the background:
 BACKFILL_ON_START=false nohup uv run python -m trader.main > /tmp/alpaca-dashboard.log 2>&1 &
 ```
 
-To stop:
+To stop (kills app + all child processes):
 
 ```bash
 pkill -f "trader.main"
 ```
+
+The app uses a process group, so SIGTERM to the main process kills all children
+(websockets, worker threads, etc.) automatically. If that doesn't work (e.g. the
+process hung and the signal handler didn't fire), use the manual fallback:
+
+```bash
+pkill -f "trader.main"; pkill -f "insight_sentry_news"; pkill -f "alpaca_news.py"
+```
+
+On startup, the app also kills any stale Python servers left on ports 8000/8765
+from previous sessions.
 
 ### News websockets
 

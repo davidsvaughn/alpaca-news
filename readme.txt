@@ -5,11 +5,15 @@ uv run python -u websocket/insight_sentry_news.py
 nohup uv run python -u websocket/insight_sentry_news.py > /tmp/insight-sentry.log 2>&1 &
 
 
-# Kill existing
+# Kill everything (process group handles children automatically)
 pkill -f "trader.main"
 
-# launch
-uv run python -m trader.main
+# Manual fallback if children survive
+pkill -f "trader.main"; pkill -f "insight_sentry_news"; pkill -f "alpaca_news.py"
+
+# Kill and relaunch
+pkill -f "trader.main"; sleep 1; uv run python -m trader.main
+
 
 # Relaunch
 BACKFILL_ON_START=false nohup uv run python -m trader.main > /tmp/alpaca-dashboard.log 2>&1 &
