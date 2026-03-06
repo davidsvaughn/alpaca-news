@@ -1,10 +1,10 @@
 # Alpaca Paper Trading Integration
 
 > Technical reference for the Alpaca order execution layer.
-> Covers architecture, multi-account setup, order lifecycle, reconciliation,
-> edge cases, and future considerations.
+> Covers architecture, multi-account setup, confirmed execution,
+> account sync, reconciliation, edge cases, and future considerations.
 >
-> Created: 2026-03-06
+> Created: 2026-03-06 | Last updated: 2026-03-06
 
 ---
 
@@ -14,17 +14,21 @@
 2. [Multi-Account Architecture](#multi-account-architecture)
 3. [Environment Configuration](#environment-configuration)
 4. [Key Files](#key-files)
-5. [Order Lifecycle](#order-lifecycle)
-6. [Two Exit Paths](#two-exit-paths)
-7. [Trade Update Stream](#trade-update-stream)
-8. [Reconciliation](#reconciliation)
-9. [Portfolio ↔ Account Linking](#portfolio--account-linking)
-10. [Position Sizing](#position-sizing)
-11. [Data Source Separation](#data-source-separation)
-12. [Edge Cases & Complications](#edge-cases--complications)
-13. [Design Decisions](#design-decisions)
-14. [PDT Considerations](#pdt-considerations)
-15. [Future Work](#future-work)
+5. [Go Live Flow](#go-live-flow)
+6. [Account Sync on Connect](#account-sync-on-connect)
+7. [Confirmed Execution](#confirmed-execution)
+8. [Order Lifecycle: Entry](#order-lifecycle-entry)
+9. [Order Lifecycle: Exit](#order-lifecycle-exit)
+10. [Two Exit Paths](#two-exit-paths)
+11. [Trade Update Stream](#trade-update-stream)
+12. [Reconciliation](#reconciliation)
+13. [Portfolio ↔ Account Linking](#portfolio--account-linking)
+14. [Position Sizing](#position-sizing)
+15. [Data Source Separation](#data-source-separation)
+16. [Edge Cases & Complications](#edge-cases--complications)
+17. [Design Decisions](#design-decisions)
+18. [PDT Considerations](#pdt-considerations)
+19. [Future Work](#future-work)
 
 ---
 
@@ -32,12 +36,15 @@
 
 Alpaca provides paper trading accounts that simulate real brokerage execution. Our system optionally connects a LiveConfig portfolio to an Alpaca paper account. When connected:
 
-- **Buy signals** submit real market orders to Alpaca
+- **Buy signals** submit real market orders to Alpaca, **wait for fill confirmation**, then record actual fill price/qty
 - **Guard stops** become server-side Alpaca stop orders (survive process crashes)
-- **VDD exits** close the Alpaca position and cancel the stop order
+- **VDD exits** close the Alpaca position (confirmed), cancel the stop order
 - **Alpaca-triggered stops** are detected via WebSocket and update the watch
+- **Account state is synced** on connect — starting capital matches actual equity
 
 When NOT connected, portfolios run in virtual-only mode (same as before Phase 4). The `alpaca_account_id` field on LiveConfig is `None` and no orders are placed.
+
+**Core principle: nothing is recorded until Alpaca confirms it happened.** No phantom positions, no estimated prices, no assumed fills.
 
 ---
 
@@ -100,60 +107,128 @@ All 4 vars (`NAME`, `ACCOUNT`, `API_KEY`, `SECRET_KEY`) must be set for an accou
 
 | File | Purpose |
 |------|---------|
-| `trader/market/alpaca_broker.py` | `AlpacaAccount`, `AlpacaAccountRegistry`, `AlpacaBrokerPool`, `AlpacaBroker` |
-| `trader/market/alpaca_stream.py` | `AlpacaTradeStream` — WebSocket listener for fill/cancel events |
-| `trader/market/alpaca_reconcile.py` | `reconcile()` — syncs Alpaca positions with watch state |
+| `trader/market/alpaca_broker.py` | `AlpacaAccount`, `AlpacaAccountRegistry`, `AlpacaBrokerPool`, `AlpacaBroker` (incl. `buy_and_confirm`, `close_position_and_confirm`, `wait_for_fill`) |
+| `trader/market/alpaca_stream.py` | `AlpacaTradeStream` — WebSocket listener for fill/cancel events (one per account) |
+| `trader/market/alpaca_reconcile.py` | `reconcile()` — syncs Alpaca positions with watch state on startup |
 | `trader/models/live_config.py` | `LiveConfig.alpaca_account_id` field |
 | `trader/models/watch.py` | `Watch.alpaca_buy_order_id`, `Watch.alpaca_stop_order_id` |
 | `trader/online/live_monitor.py` | `LivePortfolioManager` (buy path), `LiveExitMonitor` (exit path) |
 | `trader/online/orchestrator.py` | Startup: pool init, reconciliation, stream launch |
-| `trader/web/app.py` | `/api/alpaca/status`, config creation constraint |
-| `trader/web/templates/snapshots.html` | "Go Live" account selection UI |
+| `trader/web/app.py` | `/api/alpaca/status` (positions included), config creation (sync + purge), one-to-one constraint |
+| `trader/web/templates/snapshots.html` | "Go Live" account selection + purge prompt |
 | `trader/web/templates/partials/_positions_table.html` | Alpaca badge on linked portfolios |
 
 ---
 
-## Order Lifecycle
+## Go Live Flow
 
-### Entry (Buy)
+When the user clicks "Go Live" from the backtest page:
+
+```
+1. UI fetches GET /api/alpaca/status
+   → Returns all accounts with equity, cash, positions, linked status
+
+2. UI shows account selection prompt
+   → Free accounts shown with position count and equity
+   → User picks account or "0 = virtual only"
+
+3. If selected account has existing positions:
+   → UI shows position list + asks "Sell all? (YES/NO)"
+   → YES → body.purge_existing = true
+   → NO → keep positions, start with current state
+
+4. UI sends POST /api/live/config
+   → Server syncs starting_capital from actual Alpaca equity
+   → If purge_existing: sells all positions (confirmed fills)
+   → Creates LiveConfig with actual equity as starting_capital
+   → Returns config + alpaca_sync info
+
+5. UI sends POST /api/live/config/{id}/activate
+   → Portfolio goes live
+
+6. UI shows confirmation with synced equity, purge results
+```
+
+---
+
+## Account Sync on Connect
+
+When a portfolio is linked to an Alpaca account at creation time, the server:
+
+1. **Reads actual account state** — equity, cash, buying power, open positions
+2. **Overrides `starting_capital`** with the real Alpaca equity (not the UI slider value)
+3. **Optionally purges existing positions** — sells each with confirmed fills via `close_position_and_confirm()`
+4. **Re-reads account state** after purge to get updated cash/equity
+5. **Returns sync info** to the UI — synced equity, cash, purged positions, remaining positions
+
+This ensures the portfolio's `starting_capital` reflects reality. If the account has $98,500 from prior trades, that's the starting point — not the UI default of $100,000.
+
+---
+
+## Confirmed Execution
+
+**Every order waits for fill confirmation before proceeding.** No fire-and-forget.
+
+### `wait_for_fill(order_id, timeout_s=15)`
+
+Polls `get_order(order_id)` every 0.5s until:
+- `status == "filled"` → returns `OrderResult` with actual `filled_avg_price` and `filled_qty`
+- `status in ("canceled", "expired", "rejected", "suspended")` → raises `RuntimeError`
+- Timeout exceeded → raises `TimeoutError`
+
+### `buy_and_confirm(symbol, notional=...)`
+
+`buy()` + `wait_for_fill()`. Returns confirmed fill with actual price and quantity.
+
+### `close_position_and_confirm(symbol)`
+
+`close_position()` + `wait_for_fill()`. Returns confirmed sell with actual exit price.
+
+---
+
+## Order Lifecycle: Entry
 
 ```
 Snapshot sealed
     → LivePortfolioManager._evaluate_for_config()
     → Passes filters + allocation check
-    → Creates WatchBuilder
+    → Creates WatchBuilder (with snapshot price as initial estimate)
     → If cfg.alpaca_account_id is set:
-        1. broker.buy(symbol, notional=position_size)
-           → Alpaca MarketOrderRequest (DAY)
-           → Records alpaca_buy_order_id on watch
-        2. broker.set_stop(symbol, qty=est_qty, stop_price=...)
+        1. broker.buy_and_confirm(symbol, notional=position_size)
+           → Submits Alpaca MarketOrderRequest (DAY)
+           → WAITS for fill confirmation (up to 15s)
+           → If REJECTED/TIMEOUT: return False (NO watch created)
+        2. Updates watch entry price with ACTUAL fill price
+        3. broker.set_stop(symbol, qty=ACTUAL_FILLED_QTY, stop_price=...)
            → Alpaca StopOrderRequest (GTC, server-side)
-           → Records alpaca_stop_order_id on watch
-    → Persists watch to DB + JSON
+           → Uses exact qty from confirmed buy fill (not an estimate)
+    → Persists watch to DB + JSON (only after buy confirmed)
 ```
 
-**Position sizing**: `notional = starting_capital * alloc_pct / 100`. Uses dollar-based ordering (fractional shares supported).
+**Key behavior**: If the buy order fails (rejected, insufficient funds, timeout), **no watch is created at all**. The portfolio only contains positions that actually exist on Alpaca.
 
-**Stop qty estimation**: At order time, we don't know the fill qty yet (market order hasn't filled). We estimate: `qty = notional / entry_price`. When the buy fill arrives via the trade stream, the entry price is updated to the actual fill price.
+---
 
-### Exit (VDD signal)
+## Order Lifecycle: Exit
+
+### VDD-triggered exit
 
 ```
 LiveExitMonitor._check_holding()
     → evaluate_exit() returns should_exit=True
-    → broker.close_position(symbol)
-       → Alpaca close_position (market sell)
-    → broker.cancel_order(stop_order_id)
-       → Cancels the GTC stop (no longer needed)
-    → Records exit on watch with fill price
+    → Cancel stop order FIRST (prevent race condition)
+    → broker.close_position_and_confirm(symbol)
+       → WAITS for sell fill confirmation
+       → Exit price = actual Alpaca fill price
+    → Records exit on watch with confirmed price
 ```
 
-### Exit (Alpaca-triggered stop)
+### Alpaca-triggered stop exit
 
 ```
 AlpacaTradeStream._handle_sell_fill()
     → Matches order_id to watch.alpaca_stop_order_id
-    → Records exit with fill price and reason "alpaca_stop_fill"
+    → Records exit with actual fill price and reason "alpaca_stop_fill"
     → Watch transitions: holding → exited → cooling_off → sealed
 ```
 
@@ -165,14 +240,14 @@ A position can be closed by either of two independent mechanisms:
 
 | Trigger | Who initiates | What happens |
 |---------|--------------|--------------|
-| **VDD divergence** | Our LiveExitMonitor (every ~60s) | `close_position()` + `cancel_order(stop_id)` |
+| **VDD divergence** | Our LiveExitMonitor (every ~60s) | Cancel stop → `close_position_and_confirm()` |
 | **Guard stop hit** | Alpaca server-side | Stop order fills, trade stream notifies us |
 
-**Race condition**: Both could fire near-simultaneously. This is handled gracefully:
-- If VDD fires first: `close_position()` sells the shares, then `cancel_order()` cancels the stop. If the stop was already triggered, the cancel is a no-op.
-- If stop fires first: The trade stream marks the watch as exited. When VDD next checks, the watch is no longer `"holding"`, so it's skipped. The `close_position()` would return `None` (no position to close).
+**Race condition handling**:
+- VDD fires first: Cancels stop (may already be triggered — cancel is no-op), sells position (confirmed). Clean.
+- Stop fires first: Trade stream marks watch exited. VDD sees watch is no longer `"holding"`, skips it.
 
-**No double-sell risk**: Alpaca prevents selling more shares than you hold. If both fire at the same instant, one will succeed and the other will get a "position does not exist" error, which we handle gracefully.
+**No double-sell risk**: Alpaca prevents selling more shares than you hold. If both fire simultaneously, one succeeds and the other gets "position does not exist", handled gracefully.
 
 ---
 
@@ -182,7 +257,7 @@ Each linked Alpaca account gets its own `AlpacaTradeStream` running in a daemon 
 
 | Event | Action |
 |-------|--------|
-| `fill` (buy side) | Update watch entry price with actual fill price |
+| `fill` (buy side) | Update watch entry price with actual fill price (backup for confirmed flow) |
 | `fill` (sell side) | If matched to `alpaca_stop_order_id`: record exit on watch |
 | `canceled` | Log warning |
 | `rejected` | Log warning |
@@ -191,6 +266,8 @@ Each linked Alpaca account gets its own `AlpacaTradeStream` running in a daemon 
 All events are published to the event bus as `alpaca_trade_update` for UI refresh.
 
 **Reconnection**: If the WebSocket disconnects, the stream auto-reconnects after 5 seconds (infinite retry loop).
+
+**Note**: With confirmed execution, the trade stream's buy-fill handler is mostly a safety net. The primary path already has the fill data from `buy_and_confirm()`. The stream is critical for stop-loss fills triggered by Alpaca.
 
 ---
 
@@ -206,8 +283,8 @@ Runs on startup for each linked account. Alpaca is always the source of truth.
 | Entry price differs by > $0.01 | Update watch entry to match Alpaca's `avg_entry_price` |
 
 **When would these happen?**
-- Process crash during a buy (order submitted, watch not persisted)
-- Process crash during an exit (position closed, watch not updated)
+- Process crash between buy confirmation and watch persist (unlikely but possible)
+- Process crash during an exit
 - Manual position changes on Alpaca dashboard
 - Stop order filled while process was down
 
@@ -225,7 +302,6 @@ Runs on startup for each linked account. Alpaca is always the source of truth.
 ### Enforcement
 
 - **On create**: `POST /api/live/config` checks all active configs. If the requested `alpaca_account_id` is already linked, returns 409.
-- **On activate**: No additional check needed — the create-time check is sufficient because we activate immediately after creation.
 - **UI**: The "Go Live" dialog fetches `/api/alpaca/status`, which returns each account's `linked` flag. Already-linked accounts are excluded from the selection list.
 
 ---
@@ -239,15 +315,12 @@ notional = starting_capital * alloc_pct / 100
 ```
 
 Where:
-- `starting_capital` comes from the LiveConfig (e.g., $100,000)
+- `starting_capital` = actual Alpaca equity at time of portfolio creation (synced, not a UI guess)
 - `alloc_pct` comes from `allocation_params.alloc_pct` (e.g., 5 = 5%)
 
-**Important**: This uses the *configured* starting capital, not the actual Alpaca account equity. This means:
-- Winning trades don't compound (position size stays the same)
-- Losing trades don't shrink position size
-- The Alpaca account equity may diverge from the configured capital over time
+**Current behavior**: Position size is fixed based on the synced starting capital. Wins/losses don't compound.
 
-**Future consideration**: Use Alpaca's actual `buying_power` or `equity` for position sizing. This would enable compounding but adds complexity (need to handle margin, concurrent position sizing, etc.).
+**Future consideration**: Use Alpaca's real-time `equity` for position sizing to enable compounding.
 
 ---
 
@@ -258,52 +331,48 @@ Where:
 | **VDD exit signals** | Schwab 1-min bars | Matches backtest exactly (full exchange volume) |
 | **Guard stop execution** | Alpaca server-side | Survives process crashes |
 | **Order execution** | Alpaca API | Paper trading |
-| **Entry/exit prices** | Alpaca fill prices | Actual execution prices (slippage tracking) |
+| **Entry/exit prices** | Alpaca confirmed fill prices | Actual execution prices (slippage tracking) |
 | **Market data for filters** | Schwab/MarketDataService | Same as backtest |
 
-Alpaca's free data is IEX-only (~2-5% of exchange volume), which is insufficient for VDD calculations. We only use Alpaca for orders, not data.
+Alpaca's free data is IEX-only (~2-5% of exchange volume), insufficient for VDD. We only use Alpaca for orders, not data.
 
 ---
 
 ## Edge Cases & Complications
 
-### 1. Stop order qty mismatch
+### 1. Buy rejected or timeout
 
-When we submit a buy as a notional (dollar) amount, we don't know the exact share qty until the fill. We estimate `qty = notional / entry_price` for the stop order. If the fill qty differs (due to price movement between order and fill), the stop order qty may be slightly wrong.
+If `buy_and_confirm()` raises (rejected, timeout, insufficient funds), **no watch is created**. The portfolio only tracks confirmed positions. Logged as `ALPACA BUY FAILED`.
 
-**Impact**: Minor. The stop might try to sell slightly more or fewer shares than we actually hold. Alpaca will adjust to the actual position size.
+### 2. Stop order submission fails after buy succeeds
 
-**Future fix**: Wait for the buy fill (via trade stream), then submit the stop with the actual filled qty.
+The position exists on Alpaca but has no stop protection. Logged as `ALPACA STOP FAILED ... position open without stop protection!`. The VDD exit monitor still runs, but there's no server-side crash protection.
 
-### 2. Partial fills
+### 3. Partial fills
 
-Market orders are almost always fully filled immediately on paper trading. But in theory, a partial fill could occur. Currently we treat partial fills the same as full fills.
+Market orders are almost always fully filled immediately on paper trading. The `wait_for_fill` only checks for `"filled"` status, not `"partially_filled"`. If a partial fill occurs, the timeout will eventually fire.
 
-### 3. Stale stop orders on process restart
+### 4. Stale stop orders on process restart
 
-If the process crashes, GTC stop orders remain active on Alpaca's servers. On restart, reconciliation ensures our watches match. If a stop fired while we were down, reconciliation will force-exit the watch.
+GTC stop orders remain active on Alpaca's servers across restarts. Reconciliation on startup handles this — if a stop fired while we were down, the position will be gone and the watch gets force-exited.
 
-### 4. Multiple watches for the same symbol
+### 5. Multiple watches for the same symbol
 
 If two portfolios (on different accounts) both buy the same symbol, they have separate Alpaca positions on separate accounts. No conflict.
 
-If the same portfolio somehow creates two watches for the same symbol (shouldn't happen, but defensively): the stop order matching uses `alpaca_stop_order_id`, which is unique per watch, so fills are matched correctly.
+### 6. Extended hours
 
-### 5. Extended hours
-
-Alpaca supports extended hours trading. Our system currently only monitors during regular hours + 30 min after close. Stop orders are GTC and will execute during extended hours if the price is hit, even if our monitor isn't running.
-
-### 6. Day trade restrictions (PDT)
-
-See [PDT Considerations](#pdt-considerations).
+Alpaca stop orders (GTC) execute during extended hours. Our monitor only runs during regular hours + 30 min. Stop fills during extended hours are caught by the trade stream.
 
 ### 7. Account equity drift
 
-Over time, wins/losses cause the Alpaca account equity to diverge from the portfolio's `starting_capital`. The portfolio simulation tracks its own P&L independently. The Alpaca account is the financial source of truth; the portfolio sim is for analytics.
+Over time, the actual Alpaca equity diverges from `starting_capital`. The portfolio sim tracks its own P&L. Alpaca is the financial source of truth; the portfolio sim is for analytics.
 
-### 8. Order rejection
+### 8. Existing positions on Go Live
 
-If Alpaca rejects a buy order (insufficient buying power, symbol not tradeable, etc.), the watch is still created but without Alpaca order IDs. It becomes a virtual-only position. The error is logged.
+When connecting to an account with existing positions, the user chooses:
+- **Purge**: All positions sold (confirmed), portfolio starts fresh with cash
+- **Keep**: Portfolio starts with current equity; existing positions are NOT tracked as watches (only new strategy buys get watched)
 
 ---
 
@@ -311,16 +380,19 @@ If Alpaca rejects a buy order (insufficient buying power, symbol not tradeable, 
 
 | Decision | Choice | Rationale |
 |----------|--------|-----------|
-| Multi-account vs single | Multi (up to 5) | Alpaca allows 3 paper accounts; enables A/B testing of strategies |
-| Broker pool vs singleton | Pool (one per account) | Each account has its own credentials and TradingClient |
-| Optional linking | Yes | Portfolios work without Alpaca; Alpaca is opt-in per portfolio |
+| Confirmed execution | Wait for fill before persisting | No phantom positions; actual prices/qty everywhere |
+| Buy failure = no watch | Yes | Portfolio must match Alpaca reality |
+| Stop uses actual fill qty | Yes | No estimation; exact qty from confirmed buy fill |
+| Account sync on connect | Override starting_capital from equity | Portfolio starts from reality, not UI defaults |
+| Purge option | User chooses at Go Live time | Clean start or inherit existing positions |
+| Cancel stop before VDD sell | Yes | Prevent race condition with stop fill |
+| Multi-account | Up to 5 (Alpaca allows 3 paper) | A/B testing of strategies on isolated accounts |
+| Optional linking | Yes | Portfolios work without Alpaca; opt-in per portfolio |
 | Stop orders | Server-side GTC | Survives crashes; Alpaca handles execution |
-| Position sizing | Notional (dollar-based) | Simpler than qty; supports fractional shares |
-| Entry price | Updated from fill | Slippage tracking; actual execution price is what matters |
-| Reconciliation | On startup only | Minimizes API calls; most drift is caught by trade stream |
+| Position sizing | Notional (dollar-based) | Supports fractional shares |
+| Reconciliation | On startup per linked account | Catches drift from crashes, manual changes |
 | Data source for VDD | Schwab (not Alpaca) | Full exchange volume; matches backtest exactly |
-| One account per portfolio | Enforced at API level | Prevents confusion; clean position tracking |
-| Trade stream per account | Separate threads | Each account's WebSocket is independent |
+| Trade stream per account | Separate daemon threads | Each account's WebSocket is independent |
 
 ---
 
@@ -341,18 +413,17 @@ The Pattern Day Trader (PDT) rule applies to accounts under $25,000.
 
 ## Future Work
 
-### Phase 4 completion
-- [ ] Wait for buy fill before submitting stop order (exact qty)
-- [ ] Handle partial fills explicitly
+### Short-term
+- [ ] Handle partial fills explicitly in `wait_for_fill`
 - [ ] Periodic reconciliation (not just on startup)
-- [ ] Track slippage: expected vs actual fill prices in watch data
+- [ ] Track slippage: snapshot price vs actual fill price in watch data
 
-### Phase 5: Validation
+### Validation
 - [ ] Compare Alpaca P&L to portfolio simulation P&L
 - [ ] Slippage analysis: how much do fill prices differ from snapshot prices?
 - [ ] Guard stop effectiveness: how often does the stop fire vs VDD?
 
-### Phase 6: Paper → Live
+### Paper to Live transition
 - [ ] Circuit breakers (daily loss limit, max trades, equity floor)
 - [ ] `ALPACA_PAPER=false` with live credentials
 - [ ] Start with reduced position size (1% instead of 5%)
