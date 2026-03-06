@@ -1309,14 +1309,15 @@ def create_app(
         # Inactive portfolios with watches
         for cid, ws in by_config.items():
             if cid not in cfg_map:
-                data = _compute_stats(ws)
-                data["config"] = get_live_config(db, cid) or {
-                    "config_id": cid, "name": cid, "active": False,
-                    "starting_capital": 0, "guard_stop_pct": 0, "guard_target_pct": 0,
-                    "allocation": "unknown", "allocation_params": {},
-                    "exit_strategy": "", "exit_params": {}, "filters": {},
-                }
-                portfolios.append(data)
+                cfg_dict = get_live_config(db, cid)
+                if cfg_dict:
+                    # Config still exists (just inactive) — show as portfolio
+                    data = _compute_stats(ws)
+                    data["config"] = cfg_dict
+                    portfolios.append(data)
+                else:
+                    # Config was deleted — treat watches as legacy
+                    legacy_watches.extend(ws)
 
         # Legacy watches (no config)
         legacy_data = _compute_stats(legacy_watches)

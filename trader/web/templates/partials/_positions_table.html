@@ -291,18 +291,24 @@
 <div class="portfolio-section">
   <h5 class="mb-2 text-muted">Legacy Watches <span class="badge bg-secondary" style="font-size:.65rem">no config</span></h5>
   {{ stats_row(legacy.stats) }}
-  {% if legacy.holding %}
-  <h6 class="text-muted small mb-1">Open</h6>
-  {{ holdings_table(legacy.holding) }}
-  {% endif %}
-  {% if legacy.cooling %}
-  <h6 class="text-muted small mb-1">Recently Exited</h6>
-  {{ cooling_table(legacy.cooling) }}
-  {% endif %}
-  {% if legacy.closed %}
-  <h6 class="text-muted small mb-1">Closed ({{ legacy.stats.closed_count }})</h6>
-  {{ closed_table(legacy.closed, legacy.stats.closed_count) }}
-  {% endif %}
+  <a data-bs-toggle="collapse" href="#positions-legacy" role="button"
+     class="text-decoration-none small text-muted" style="font-size:.75rem">
+    positions &#9662;
+  </a>
+  <div class="collapse" id="positions-legacy">
+    {% if legacy.holding %}
+    <h6 class="text-muted small mb-1 mt-2">Open</h6>
+    {{ holdings_table(legacy.holding) }}
+    {% endif %}
+    {% if legacy.cooling %}
+    <h6 class="text-muted small mb-1">Recently Exited</h6>
+    {{ cooling_table(legacy.cooling) }}
+    {% endif %}
+    {% if legacy.closed %}
+    <h6 class="text-muted small mb-1">Closed ({{ legacy.stats.closed_count }})</h6>
+    {{ closed_table(legacy.closed, legacy.stats.closed_count) }}
+    {% endif %}
+  </div>
 </div>
 {% endif %}
 
