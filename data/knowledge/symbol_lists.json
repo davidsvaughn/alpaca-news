@@ -967,7 +967,20 @@
     "CAC",
     "AQN",
     "MEOH",
-    "DTI"
+    "DTI",
+    "ARM",
+    "CSLLY",
+    "OMDA",
+    "HWNI",
+    "MKZR",
+    "GROV",
+    "CYH",
+    "DUOL",
+    "NRIM",
+    "TGNA",
+    "NXST",
+    "MAN",
+    "HURC"
   ],
   "crypto": [],
   "rejected": [
@@ -1084,5 +1097,5 @@
     "MCC",
     "BDGI"
   ],
-  "last_updated": "2026-03-06T18:34:17.705273+00:00"
+  "last_updated": "2026-03-06T19:28:35.403844+00:00"
 }

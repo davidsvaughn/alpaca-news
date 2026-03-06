@@ -13,8 +13,8 @@ Architecture (native SDK runners):
 PydanticAI fallback runner is available for testing (TestModel) and
 watcher check-ins.
 
-Graceful degradation: if an agent fails, partial traces are preserved
-and the pipeline continues to the next agent.
+If an agent fails, the pipeline aborts — downstream agents are NOT run.
+Partial traces from earlier agents are preserved in the result.
 """
 
 from __future__ import annotations
@@ -700,7 +700,10 @@ async def run_pipeline(
         prefetched_market_data=prefetch_text,
     )
 
+    pipeline_aborted = False
     for round_num in range(config.max_rounds):
+        if pipeline_aborted:
+            break
         for i, spec in enumerate(config.agents):
             # Cost-based skip
             if not spec.is_final and cumulative_cost >= config.max_cost_usd > 0:
@@ -760,7 +763,9 @@ async def run_pipeline(
                 raise  # propagate abort immediately — don't treat as degradation
 
             except (TimeoutError, Exception) as e:
-                # Graceful degradation
+                # Agent failure — record the error and abort the pipeline.
+                # We do NOT continue to downstream agents because they depend
+                # on the investigation data from prior agents.
                 elapsed = round(time.time() - start_time, 1)
                 error_msg = str(e)
                 round_record = {
@@ -779,9 +784,10 @@ async def run_pipeline(
                 all_rounds.append(round_record)
                 print(
                     f"[Pipeline] Agent {spec.name} ({model_name}) FAILED "
-                    f"after {elapsed}s: {type(e).__name__}: {error_msg}"
+                    f"after {elapsed}s: {type(e).__name__}: {error_msg} — aborting pipeline"
                 )
-                continue
+                pipeline_aborted = True
+                break
 
             elapsed = round(time.time() - start_time, 1)
 

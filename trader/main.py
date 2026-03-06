@@ -96,6 +96,9 @@ def main() -> None:
 
     settings = load_settings()
     observer = ObserverMode(enabled=args.observer or settings.observer_mode)
+    if settings.observer_auto_market_hours:
+        observer.start_auto_market_hours()
+        print("OBSERVER MODE: auto market hours enabled (ON outside 9:30-16:00 ET)")
     if observer.enabled:
         print("OBSERVER MODE: active — no new jobs will be launched")
     db = open_sqlite(settings.sqlite_path)
