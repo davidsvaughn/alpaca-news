@@ -131,7 +131,7 @@
 {% for p in portfolios %}
 <div class="card mb-3" style="border-left: 4px solid {% if p.config.active %}#198754{% else %}#6c757d{% endif %};">
   <div class="card-body py-3 px-3">
-  <!-- Header: name + config summary + deactivate -->
+  <!-- Header: name + status + sim value + deactivate -->
   <div class="d-flex align-items-center mb-1">
     <h5 class="mb-0 me-2">{{ p.config.name }}</h5>
     {% if p.config.active %}<span class="badge bg-success me-2" style="font-size:.65rem">active</span>
@@ -149,6 +149,31 @@
             style="font-size: 0.7rem;">Deactivate</button>
     {% endif %}
   </div>
+
+  <!-- Sim value display -->
+  {% if p.sim and p.sim.sim_trades %}
+  <div class="mb-1" style="font-size:.85rem">
+    <span class="text-muted">Sim:</span>
+    <span class="fw-bold">${{ "{:,.0f}".format(p.sim.sim_starting) }}</span>
+    <span class="text-muted">&rarr;</span>
+    <span class="fw-bold {% if p.sim.sim_return_pct >= 0 %}pnl-positive{% else %}pnl-negative{% endif %}">
+      ${{ "{:,.2f}".format(p.sim.sim_ending) }}
+    </span>
+    <span class="{% if p.sim.sim_return_pct >= 0 %}pnl-positive{% else %}pnl-negative{% endif %}">
+      ({{ "%+.1f"|format(p.sim.sim_return_pct) }}%)
+    </span>
+    <span class="text-muted">({{ p.sim.sim_trades }} trades)</span>
+    {% if p.sim.sim_daily_pct is not none and p.sim.sim_span_days is not none %}
+    <span class="ms-2 text-muted">Daily:</span>
+    <span class="fw-bold {% if p.sim.sim_daily_pct >= 0 %}pnl-positive{% else %}pnl-negative{% endif %}">
+      {{ "%+.3f"|format(p.sim.sim_daily_pct) }}%/day
+    </span>
+    <span class="text-muted">({{ p.sim.sim_span_days }}d span)</span>
+    {% endif %}
+  </div>
+  {% endif %}
+
+  <!-- Config ID + collapsible details -->
   <div class="small text-muted mb-1">
     <code>{{ p.config.config_id }}</code>
     {% if p.config.created_at %} | started {{ p.config.created_at[:16] }}{% endif %}
@@ -166,7 +191,62 @@
     {% if f.price_10_min %}{% set _ = af.append('P@x>=$' + f.price_10_min|string) %}{% endif %}
     {% if f.symbol %}{% set _ = af.append(f.symbol) %}{% endif %}
     {% if af %} | {{ af | join(' | ') }}{% endif %}
+    {% if p.config.exit_strategy is defined %}
+    | <a data-bs-toggle="collapse" href="#cfg-detail-{{ loop.index }}" role="button"
+         class="text-decoration-none" style="font-size:.7rem">details &#9662;</a>
+    {% endif %}
   </div>
+
+  <!-- Collapsible config details -->
+  {% if p.config.exit_strategy is defined %}
+  <div class="collapse small text-muted mb-2" id="cfg-detail-{{ loop.index }}">
+    <div class="card card-body py-2 px-3 bg-light border-0" style="font-size:.75rem">
+      <div class="row g-3">
+        <div class="col-auto">
+          <strong>Exit Strategy</strong><br>
+          {{ p.config.exit_strategy }}
+          {% if p.config.exit_params is defined and p.config.exit_params %}
+            {% for k, v in p.config.exit_params.items() %}
+              <br><span class="text-muted">{{ k }}:</span> {{ v }}
+            {% endfor %}
+          {% endif %}
+        </div>
+        <div class="col-auto">
+          <strong>Allocation</strong><br>
+          {{ p.config.allocation }}
+          {% if p.config.allocation_params is defined and p.config.allocation_params %}
+            {% for k, v in p.config.allocation_params.items() %}
+              <br><span class="text-muted">{{ k }}:</span> {{ v }}
+            {% endfor %}
+          {% endif %}
+          {% if p.config.starting_capital is defined %}
+          <br><span class="text-muted">Starting:</span> ${{ "{:,.0f}".format(p.config.starting_capital) }}
+          {% endif %}
+        </div>
+        <div class="col-auto">
+          <strong>Execution</strong><br>
+          <span class="text-muted">Min Hold:</span> {{ p.config.min_hold|default(5) }}m
+          <br><span class="text-muted">Delay:</span> {{ p.config.price_delay_minutes|default(10) }}m
+          <br><span class="text-muted">Close:</span> {{ p.config.market_close|default('Extended') or 'Extended' }}
+        </div>
+        <div class="col-auto">
+          <strong>Guards</strong><br>
+          <span class="text-muted">Stop:</span> {{ p.config.guard_stop_pct|default(0) }}%
+          <br><span class="text-muted">Target:</span> {{ p.config.guard_target_pct|default(0) }}%
+        </div>
+        {% if af %}
+        <div class="col-auto">
+          <strong>Filters</strong><br>
+          {% for item in af %}
+            {{ item }}<br>
+          {% endfor %}
+        </div>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+  {% endif %}
+
   {{ stats_row(p.stats) }}
 
   {% if p.holding %}

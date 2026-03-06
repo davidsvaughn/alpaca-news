@@ -143,6 +143,122 @@ volatility, trend, momentum, volume, adaptive). Each parameterized with `ParamDe
 
 ---
 
+## Allocation Strategies
+
+Allocation strategies control **how many positions can be open simultaneously** and
+**what happens when a new signal arrives while at capacity**. They sit in the
+post-processing pipeline between `run_backtest()` and the portfolio simulation.
+
+**File:** `trader/market/backtest.py` — `apply_allocation()`, `_try_replace()`, ranking helpers.
+
+### Walk-Forward Simulation
+
+Allocation is evaluated **chronologically** (sorted by entry time). At each new signal:
+
+1. Positions that have already exited by this entry time are evicted from the open set.
+2. If capacity is available, the trade is taken.
+3. If at capacity, behavior depends on the strategy's "When Full" setting.
+
+### Strategies
+
+#### 1. None (Unlimited)
+
+- **Key:** `none`
+- No capital constraints. Every signal is traded independently.
+- Useful as a baseline — shows raw strategy performance without portfolio effects.
+
+#### 2. Fixed Dollar Per Trade
+
+- **Key:** `fixed_dollar`
+- **Params:** `alloc_pct` (default 5%) — percentage of initial capital per trade.
+- Max concurrent positions = `floor(100 / alloc_pct)` (e.g., 5% → 20 positions).
+- **When full: always skip.** No replacement logic.
+
+#### 3. Max Positions
+
+- **Key:** `max_positions`
+- **Params:**
+  - `max_pos` (default 10) — hard cap on concurrent open positions.
+  - `when_full` — `"skip"` (default) or `"replace"` (Replace Weakest).
+  - `rank_method` — ranking function used for replacement decisions (see below).
+  - `composite_weight` — only used when `rank_method = "composite"`.
+- **When full = Skip:** new signals are discarded (exit_reason = `"skipped"`).
+- **When full = Replace Weakest:** triggers the replacement logic (see below).
+
+#### 4. Ranking-Based Reallocation
+
+- **Key:** `ranking_realloc`
+- **Params:** `alloc_pct`, `rank_method`, `composite_weight`.
+- Max concurrent = `floor(100 / alloc_pct)`, same as Fixed Dollar.
+- **Always replaces** when full — there is no "skip" option.
+- Otherwise identical to Max Positions with Replace Weakest.
+
+---
+
+### Replacement Logic (`_try_replace`)
+
+When the portfolio is full and replacement is enabled, the system decides whether to
+swap out an existing position for the new signal:
+
+1. **Score all open positions** using the selected ranking method.
+2. **Score the incoming signal** using the same method.
+3. **Find the weakest** (lowest-scoring) open position.
+4. **Replace only if the new signal's score strictly exceeds the weakest position's score.**
+   If not, the new signal is skipped (exit_reason = `"skipped"`).
+
+When a position is replaced:
+- The victim is **early-exited** at its interpolated price at the new signal's entry time.
+- The victim's exit_reason is set to `"replaced"`.
+- The new signal takes the victim's slot.
+
+### Ranking Methods
+
+#### Unrealized P&L (`momentum`)
+
+Scores each open position by its **unrealized return** at the time of the new signal:
+
+```
+score = (current_price - entry_price) / entry_price
+```
+
+**Critical detail:** A newly arriving signal has no price history, so it is scored
+as **`0.0`** (zero unrealized P&L). This means:
+
+- **Losing position** (negative P&L) → **replaced** (0.0 > negative).
+- **Break-even position** (P&L = 0.0) → **NOT replaced** (0.0 is not > 0.0).
+- **Winning position** (positive P&L) → **NOT replaced** (0.0 < positive).
+
+**In practice:** if all existing positions are profitable or break-even, new signals
+are skipped. New signals only displace positions that are currently underwater.
+
+#### Signal Confidence (`confidence`)
+
+Scores each position by its **original signal confidence** (the LLM-assigned probability
+at entry time). The incoming signal uses its own confidence score.
+
+A new signal replaces the weakest position only if its confidence is strictly higher.
+Unlike momentum, this comparison is between two meaningful values, so replacement
+happens whenever the new signal is more confident than the least-confident open position.
+
+#### Composite (`composite`)
+
+Blends confidence and momentum using z-score normalization:
+
+```
+score = weight * Z(confidence) + (1 - weight) * Z(momentum)
+```
+
+- `composite_weight` controls the blend (0 = pure momentum, 1 = pure confidence).
+- Requires at least 2 open positions to compute z-scores; falls back to momentum otherwise.
+- The incoming signal's composite score uses its confidence component only (momentum = 0).
+
+### Stats
+
+`apply_allocation()` returns counts: `taken` (accepted), `skipped` (at capacity),
+`replaced` (victim early-exited to make room). These appear in the backtest summary.
+
+---
+
 ## Snapshot auto-refresh
 
 The snapshots table auto-refreshes when new snapshots are sealed:

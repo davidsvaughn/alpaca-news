@@ -1356,12 +1356,91 @@ def create_app(
             p["holding"] = [_enrich_holding(w) for w in p["holding"]]
         legacy_data["holding"] = [_enrich_holding(w) for w in legacy_data["holding"]]
 
+        # Compute portfolio dollar value for each portfolio
+        def _compute_sim(p: dict) -> dict[str, Any]:
+            """Simple portfolio dollar simulation: equal-weight positions."""
+            cfg = p["config"]
+            starting = cfg.get("starting_capital", 0) if isinstance(cfg, dict) else getattr(cfg, "starting_capital", 0)
+            if not starting or starting <= 0:
+                return {}
+
+            alloc = cfg.get("allocation", "") if isinstance(cfg, dict) else getattr(cfg, "allocation", "")
+            alloc_params = cfg.get("allocation_params", {}) if isinstance(cfg, dict) else getattr(cfg, "allocation_params", {})
+
+            # Derive max concurrent positions (same logic as live_monitor)
+            if alloc == "max_positions":
+                max_pos = int((alloc_params or {}).get("max_pos", 10))
+            elif alloc in ("fixed_dollar", "ranking_realloc"):
+                alloc_pct = float((alloc_params or {}).get("alloc_pct", 5))
+                max_pos = max(1, int(100 / alloc_pct))
+            else:
+                max_pos = 20
+
+            pos_size = starting / max_pos
+            total_dollar_pnl = 0.0
+            trade_count = 0
+
+            # Closed trades: realized P&L
+            for w in p.get("closed", []) + p.get("cooling", []):
+                wd = w if isinstance(w, dict) else w.__dict__ if hasattr(w, "__dict__") else {}
+                ex = wd.get("exit") if isinstance(wd, dict) else getattr(wd, "exit", None)
+                if ex:
+                    ex_d = ex if isinstance(ex, dict) else getattr(ex, "__dict__", {})
+                    rpnl = ex_d.get("realized_pnl_pct")
+                    if rpnl is not None:
+                        total_dollar_pnl += pos_size * float(rpnl) / 100
+                        trade_count += 1
+
+            # Open trades: unrealized P&L
+            for w in p.get("holding", []):
+                wd = w if isinstance(w, dict) else w.__dict__ if hasattr(w, "__dict__") else {}
+                upnl = wd.get("unrealized_pnl")
+                if upnl is not None:
+                    total_dollar_pnl += pos_size * float(upnl) / 100
+                    trade_count += 1
+
+            ending = starting + total_dollar_pnl
+            return_pct = (ending - starting) / starting * 100 if starting > 0 else 0.0
+
+            # Daily return (CAGR-based) over trading-day span
+            sim_daily_pct = None
+            sim_span_days = None
+            created_at = cfg.get("created_at", "") if isinstance(cfg, dict) else getattr(cfg, "created_at", "")
+            if trade_count > 0 and created_at and ending > 0:
+                try:
+                    from datetime import datetime as _dt
+                    import numpy as _np
+                    dt_start = _dt.fromisoformat(created_at.replace("Z", "+00:00"))
+                    dt_now = _dt.now(tz=dt_start.tzinfo or __import__("datetime").timezone.utc)
+                    bdays = int(_np.busday_count(dt_start.date(), dt_now.date()))
+                    trading_days = max(bdays, 0.5)
+                    sim_span_days = round(trading_days, 1)
+                    ratio = ending / starting
+                    if ratio > 0 and trading_days > 0:
+                        sim_daily_pct = round((ratio ** (1 / trading_days) - 1) * 100, 4)
+                except (ValueError, OverflowError, ImportError):
+                    pass
+
+            return {
+                "sim_starting": round(starting, 2),
+                "sim_ending": round(ending, 2),
+                "sim_return_pct": round(return_pct, 2),
+                "sim_trades": trade_count,
+                "sim_daily_pct": sim_daily_pct,
+                "sim_span_days": sim_span_days,
+            }
+
+        for p in portfolios:
+            p["sim"] = _compute_sim(p)
+
         # Wrap for Jinja
         for p in portfolios:
             p["config"] = _DictObj(p["config"])
             p["holding"] = [_DictObj(w) for w in p["holding"]]
             p["cooling"] = [_DictObj(w) for w in p["cooling"]]
             p["closed"] = [_DictObj(w) for w in p["closed"]]
+            if p.get("sim"):
+                p["sim"] = _DictObj(p["sim"])
 
         context = {
             "portfolios": portfolios,
