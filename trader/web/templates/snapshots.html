@@ -1208,7 +1208,12 @@ function goLive() {
         var choice = prompt(
           'Connect to Alpaca paper account?\n\n' +
           freeAccounts.map(function(a, i) {
-            return (i + 1) + ' = ' + a.name + ' (' + a.account_id + ', $' + (a.equity || 0).toLocaleString() + ')';
+            var posInfo = '';
+            if (a.positions && a.positions.length > 0) {
+              posInfo = ' [' + a.positions.length + ' positions]';
+            }
+            return (i + 1) + ' = ' + a.name + ' (' + a.account_id +
+              ', $' + (a.equity || 0).toLocaleString() + posInfo + ')';
           }).join('\n') +
           '\n0 = Virtual tracking only (no orders)' +
           '\n\nEnter number (0-' + freeAccounts.length + '):'
@@ -1219,8 +1224,29 @@ function goLive() {
         if (idx > 0 && idx <= freeAccounts.length) {
           var selected = freeAccounts[idx - 1];
           body.alpaca_account_id = selected.account_id;
+          // starting_capital will be overridden by actual equity on the server
           configName = strategy + ' (' + selected.name + ')';
           body.name = configName;
+
+          // If account has existing positions, ask about purging
+          if (selected.positions && selected.positions.length > 0) {
+            var posLines = selected.positions.map(function(p) {
+              return '  ' + p.symbol + ': ' + p.qty + ' shares @ $' +
+                p.avg_entry_price.toFixed(2) + ' ($' + p.market_value.toFixed(0) + ')';
+            }).join('\n');
+            var purge = confirm(
+              selected.name + ' has ' + selected.positions.length + ' existing position(s):\n\n' +
+              posLines +
+              '\n\nCash: $' + (selected.cash || 0).toLocaleString() +
+              '\nEquity: $' + (selected.equity || 0).toLocaleString() +
+              '\n\nSell all existing positions before starting?\n\n' +
+              'YES = Sell everything, start fresh with cash\n' +
+              'NO = Keep positions, start with current state'
+            );
+            if (purge) {
+              body.purge_existing = true;
+            }
+          }
         }
       }
 
@@ -1232,12 +1258,26 @@ function goLive() {
       .then(function(r) { return r.json(); })
       .then(function(cfg) {
         if (cfg.error) { alert('Error: ' + cfg.error); return; }
+        var syncInfo = cfg.alpaca_sync || {};
         // Activate immediately
         return fetch('/api/live/config/' + cfg.config_id + '/activate', {method: 'POST'})
           .then(function(r) { return r.json(); })
           .then(function() {
-            var alpacaNote = body.alpaca_account_id ? '\nConnected to Alpaca: ' + body.alpaca_account_id : '';
-            alert('Portfolio added: ' + configName + alpacaNote + '\n\nCheck the Positions tab to monitor.');
+            var msg = 'Portfolio added: ' + configName;
+            if (syncInfo.synced_equity) {
+              msg += '\n\nAlpaca synced:';
+              msg += '\n  Equity: $' + syncInfo.synced_equity.toLocaleString();
+              msg += '\n  Cash: $' + (syncInfo.synced_cash || 0).toLocaleString();
+              if (syncInfo.purged && syncInfo.purged.length > 0) {
+                msg += '\n  Purged: ' + syncInfo.purged.length + ' position(s)';
+              }
+              if (syncInfo.existing_positions && syncInfo.existing_positions.length > 0) {
+                msg += '\n  Existing: ' + syncInfo.existing_positions.length + ' position(s) kept';
+              }
+            }
+            msg += '\n\nStarting capital: $' + cfg.starting_capital.toLocaleString();
+            msg += '\n\nCheck the Positions tab to monitor.';
+            alert(msg);
             _updateGoLiveBtn();
           });
       });

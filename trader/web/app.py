@@ -1310,7 +1310,12 @@ def create_app(
         for cid, ws in by_config.items():
             if cid not in cfg_map:
                 data = _compute_stats(ws)
-                data["config"] = get_live_config(db, cid) or {"config_id": cid, "name": cid, "active": False}
+                data["config"] = get_live_config(db, cid) or {
+                    "config_id": cid, "name": cid, "active": False,
+                    "starting_capital": 0, "guard_stop_pct": 0, "guard_target_pct": 0,
+                    "allocation": "unknown", "allocation_params": {},
+                    "exit_strategy": "", "exit_params": {}, "filters": {},
+                }
                 portfolios.append(data)
 
         # Legacy watches (no config)
@@ -1539,13 +1544,61 @@ def create_app(
                             "error": f"Alpaca account {alpaca_id} is already linked to portfolio '{existing_cfg.get('name')}'"
                         }, status_code=409)
 
+            # If linking to Alpaca, sync starting_capital from actual account equity
+            # and optionally purge existing holdings
+            starting_capital = float(body.get("starting_capital", 100000))
+            alpaca_sync_info: dict[str, Any] = {}
+            if alpaca_id:
+                try:
+                    from trader.market.alpaca_broker import AlpacaAccountRegistry, AlpacaBroker
+                    registry = AlpacaAccountRegistry()
+                    creds = registry.get(alpaca_id)
+                    if creds:
+                        broker = AlpacaBroker(
+                            api_key=creds.api_key, secret_key=creds.secret_key,
+                            paper=creds.paper, account_id=alpaca_id, name=creds.name,
+                        )
+
+                        # Purge existing positions if requested
+                        if body.get("purge_existing"):
+                            positions = broker.get_positions()
+                            purged = []
+                            for pos in positions:
+                                try:
+                                    sell = broker.close_position_and_confirm(pos.symbol)
+                                    purged.append({
+                                        "symbol": pos.symbol,
+                                        "qty": pos.qty,
+                                        "price": sell.filled_avg_price if sell else None,
+                                    })
+                                except Exception as e:
+                                    purged.append({"symbol": pos.symbol, "error": str(e)})
+                            if purged:
+                                alpaca_sync_info["purged"] = purged
+                                print(f"ALPACA PURGE: sold {len(purged)} positions on {alpaca_id}")
+
+                        # Read actual account state (after purge if any)
+                        acct = broker.get_account()
+                        starting_capital = acct.equity
+                        alpaca_sync_info["synced_equity"] = acct.equity
+                        alpaca_sync_info["synced_cash"] = acct.cash
+                        remaining = broker.get_positions()
+                        if remaining:
+                            alpaca_sync_info["existing_positions"] = [
+                                {"symbol": p.symbol, "qty": p.qty, "value": p.market_value}
+                                for p in remaining
+                            ]
+                        print(f"ALPACA SYNC: {alpaca_id} equity=${acct.equity:.2f} cash=${acct.cash:.2f} positions={len(remaining)}")
+                except Exception as e:
+                    print(f"ALPACA SYNC failed for {alpaca_id}: {e} — using UI starting_capital")
+
             # Create new
             cfg = LiveConfig.create(
                 name=body.get("name", "Untitled"),
                 filters=body.get("filters", {}),
                 allocation=body.get("allocation", "none"),
                 allocation_params=body.get("allocation_params", {}),
-                starting_capital=float(body.get("starting_capital", 100000)),
+                starting_capital=starting_capital,
                 exit_strategy=body.get("exit_strategy", "volume_delta_divergence"),
                 exit_params=body.get("exit_params", {}),
                 guard_stop_pct=float(body.get("guard_stop_pct", 0)),
@@ -1557,7 +1610,10 @@ def create_app(
                 alpaca_account_id=body.get("alpaca_account_id"),
             )
             insert_live_config(db, config=cfg.to_dict())
-            return cfg.to_dict()
+            result = cfg.to_dict()
+            if alpaca_sync_info:
+                result["alpaca_sync"] = alpaca_sync_info
+            return result
 
     @app.post("/api/live/config/{config_id}/activate")
     async def api_live_config_activate(config_id: str):
