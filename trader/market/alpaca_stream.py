@@ -86,12 +86,13 @@ class AlpacaTradeStream:
 
     async def _handle_update(self, data: Any) -> None:
         try:
-            event = data.event
+            event_raw = data.event
+            event = event_raw.value if hasattr(event_raw, "value") else str(event_raw)
             order = data.order
             symbol = str(order.symbol)
             order_id = str(order.id)
-            side = str(order.side)
-            status = str(order.status)
+            side = order.side.value if hasattr(order.side, "value") else str(order.side)
+            status = order.status.value if hasattr(order.status, "value") else str(order.status)
 
             log.info(
                 "ALPACA EVENT [%s]: %s %s %s side=%s status=%s filled_qty=%s avg_price=%s",

@@ -244,6 +244,7 @@ This is the most impactful single upgrade for our pipeline, since analyst upgrad
 
 | Endpoint | Description | Tier |
 |----------|-------------|------|
+| `/stock/candle` | OHLCV candle data (1m, 5m, 15m, 30m, 60m, D, W, M) | **Paid** (403 on free) |
 | `/stock/insider-sentiment` | Net insider buying/selling aggregates | Paid |
 | `/stock/price-target` | Analyst consensus target, high, low, median | Paid |
 | `/stock/upgrade-downgrade` | Recent analyst rating changes | Paid |
@@ -255,6 +256,8 @@ This is the most impactful single upgrade for our pipeline, since analyst upgrad
 | `/news` | General market news (not company-specific) | Free |
 | `/calendar/ipo` | IPO calendar | Free |
 | `/stock/revenue-breakdown` | Revenue by segment/geography | Paid |
+
+> **Note**: `/stock/candle` (stock OHLCV bars) returns 403 on the free tier — confirmed 2026-03-06. Use Schwab or yfinance for candle data instead.
 
 ### Free Endpoints We Could Add
 

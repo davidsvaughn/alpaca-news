@@ -425,11 +425,17 @@ class AlpacaBroker:
     # ------------------------------------------------------------------
 
     def _to_result(self, order: Any) -> OrderResult:
+        # Use .value for enums (e.g. OrderStatus.FILLED → "filled")
+        # to avoid str(enum) returning "OrderStatus.FILLED"
+        status = order.status
+        status_str = status.value if hasattr(status, "value") else str(status)
+        side = order.side
+        side_str = side.value if hasattr(side, "value") else str(side)
         return OrderResult(
             order_id=str(order.id),
             symbol=str(order.symbol),
-            side=str(order.side),
-            status=str(order.status),
+            side=side_str,
+            status=status_str,
             qty=float(order.qty) if order.qty else None,
             notional=float(order.notional) if order.notional else None,
             filled_avg_price=float(order.filled_avg_price) if order.filled_avg_price else None,

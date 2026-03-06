@@ -78,10 +78,24 @@ yfinance is our **free fallback market data source**. It provides comprehensive 
 | `v` | int | Volume |
 
 **Supported params**:
-- `period`: "1d", "5d", "1mo", "3mo", "6mo", "1y"
-- `interval`: "1m", "5m", "15m", "1h", "1d"
+- `period`: "1d", "5d", "1mo", "3mo", "6mo", "1y", "2y", "max"
+- `interval`: "1m", "2m", "5m", "15m", "30m", "1h", "1d"
 
 **Fallback role**: Schwab handles intraday 1-min candles; yfinance handles all other periods/intervals.
+
+**Intraday data limits** (confirmed 2026-03-06):
+
+| Interval | Max Lookback | Bars (typical) | Notes |
+|----------|-------------|----------------|-------|
+| 1m | **8 calendar days** | ~2,800 | Yahoo enforces hard limit; >8d returns empty |
+| 2m | 60 days | ~4,200 | Supported but we don't currently use |
+| 5m | **60 days** | ~4,500 | Hard limit; >60d returns empty |
+| 15m | 60 days | ~1,500 | Same 60-day limit as 5m |
+| 30m | 60 days | ~750 | Same 60-day limit |
+| 1h | **~730 days (2y)** | ~3,500–5,000 | `period="max"` returns ~2 years |
+| 1d | unlimited | varies | Full history available |
+
+**Key takeaway for incoming signal scoring:** To get recent bar history for a brand-new symbol, yfinance can provide **5 days of 5-min bars (~336 bars)** or **8 days of 1-min bars (~2,800 bars)** with no API key required. This is enough to compute trailing momentum, volume trends, RSI, etc.
 
 ### 4. Financial Statements
 

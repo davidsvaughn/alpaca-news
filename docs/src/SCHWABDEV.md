@@ -58,6 +58,21 @@ Two methods wrap this endpoint:
 
 **Used by**: `check_price_spike()`, `check_volume_regime()`, `compute_volume_delta()`, `get_price_history` tool, `price_10min.py`
 
+**Period/Frequency matrix** (from Schwab Trader API docs):
+
+| `periodType` | Valid `period` | Valid `frequencyType` | Valid `frequency` |
+|-------------|---------------|----------------------|-------------------|
+| `"day"` | 1, 2, 3, 4, 5, **10** | `"minute"` | 1, 5, 10, 15, 30 |
+| `"month"` | 1, 2, 3, 6 | `"daily"`, `"weekly"` | 1 |
+| `"year"` | 1, 2, 3, 5, 10, 15, 20 | `"daily"`, `"weekly"`, `"monthly"` | 1 |
+| `"ytd"` | 1 | `"daily"`, `"weekly"`, `"monthly"` | 1 |
+
+Alternatively, use `startDate`/`endDate` (datetime or UNIX epoch) instead of period — our `get_candles_by_date_range()` does this.
+
+**Key limits**: Intraday minute data is limited to **10 trading days** max (`periodType="day"`, `period=10`). Beyond that, only daily/weekly/monthly bars are available. Within the 10-day window, Schwab provides real-time data including extended hours.
+
+**Key advantage over yfinance**: Schwab's 10-day intraday data includes **extended hours** (pre-market + after-hours), and the bars are cached locally so data collected within this window remains available for backtesting months later.
+
 ### 3. Option Chains (`client.option_chains()`)
 
 **Our method**: `SchwabMarketClient.check_options_activity(symbol)`
@@ -249,6 +264,7 @@ There are **no monthly fees, no per-call charges, and no minimum account balance
 
 ### Limitations
 
+- **Intraday minute data capped at 10 trading days** — beyond that, only daily/weekly/monthly
 - No historical options pricing data
 - Some data feeds may have 15-minute delays
 - OAuth token refresh requires periodic re-authentication
