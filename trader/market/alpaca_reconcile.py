@@ -20,6 +20,17 @@ from typing import Any
 log = logging.getLogger(__name__)
 
 
+def _log_tx(db: Any, account_id: str, event: str, symbol: str, **kwargs: Any) -> None:
+    """Log a reconciliation transaction."""
+    if not db:
+        return
+    try:
+        from trader.db.database import log_alpaca_transaction
+        log_alpaca_transaction(db, account_id=account_id, event=event, symbol=symbol, **kwargs)
+    except Exception:
+        log.warning("Failed to log reconcile transaction: %s %s", event, symbol)
+
+
 def reconcile(
     *,
     broker: Any,  # AlpacaBroker
@@ -32,6 +43,8 @@ def reconcile(
     """
     from trader.db.database import get_active_watches, update_watch
     from trader.models.watch import WatchBuilder
+
+    account_id = getattr(broker, "account_id", None) or "unknown"
 
     summary: dict[str, Any] = {
         "ok": [],
@@ -85,8 +98,13 @@ def reconcile(
             })
             log.info("RECONCILE: %s entry price updated %.2f → %.2f",
                      symbol, entry_price, pos.avg_entry_price)
+            _log_tx(db, account_id, "reconcile_price_updated", symbol,
+                    detail={"old_price": entry_price, "new_price": pos.avg_entry_price,
+                            "watch_id": watch["watch_id"]})
         else:
             summary["ok"].append(symbol)
+            _log_tx(db, account_id, "reconcile_ok", symbol,
+                    detail={"entry_price": entry_price, "watch_id": watch["watch_id"]})
 
     # Rule 3: We have a watch but Alpaca has no position → force-exit
     for symbol in watch_symbols - alpaca_symbols:
@@ -103,18 +121,28 @@ def reconcile(
         })
         log.warning("RECONCILE: %s watch %s force-exited (no Alpaca position)",
                     symbol, watch["watch_id"])
+        _log_tx(db, account_id, "reconcile_force_exit", symbol,
+                detail={"watch_id": watch["watch_id"], "exit_price": exit_price})
 
     # Rule 2: Alpaca has a position but we have no watch → close on Alpaca
     for symbol in alpaca_symbols - watch_symbols:
+        pos = alpaca_positions[symbol]
         if close_orphans:
             try:
                 broker.close_position(symbol)
                 summary["alpaca_orphan_closed"].append(symbol)
                 log.warning("RECONCILE: %s closed orphan Alpaca position", symbol)
-            except Exception:
+                _log_tx(db, account_id, "reconcile_orphan_closed", symbol,
+                        detail={"qty": pos.qty, "avg_entry_price": pos.avg_entry_price,
+                                "market_value": pos.market_value})
+            except Exception as e:
                 log.exception("RECONCILE: failed to close orphan %s on Alpaca", symbol)
+                _log_tx(db, account_id, "reconcile_orphan_close_failed", symbol,
+                        detail={"error": str(e), "qty": pos.qty})
         else:
             log.warning("RECONCILE: %s orphan Alpaca position (not closing)", symbol)
+            _log_tx(db, account_id, "reconcile_orphan_skipped", symbol,
+                    detail={"qty": pos.qty, "avg_entry_price": pos.avg_entry_price})
 
     total_actions = (
         len(summary["watch_force_exited"])

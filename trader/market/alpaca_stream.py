@@ -32,6 +32,7 @@ class AlpacaTradeStream:
         secret_key: str,
         paper: bool = True,
         account_label: str = "",
+        account_id: str = "",
         on_fill: Callable[[dict[str, Any]], None] | None = None,
     ) -> None:
         self.db = db
@@ -41,6 +42,7 @@ class AlpacaTradeStream:
         self._secret_key = secret_key
         self._paper = paper
         self._label = account_label
+        self._account_id = account_id or account_label
         self._thread: threading.Thread | None = None
         self._stream: Any = None
 
@@ -100,6 +102,20 @@ class AlpacaTradeStream:
                 order.filled_qty, order.filled_avg_price,
             )
 
+            # Log every event to the transaction log
+            self._log_tx(
+                event=f"stream_{event}",
+                symbol=symbol,
+                order_id=order_id,
+                status=status,
+                detail={
+                    "side": side,
+                    "filled_qty": float(order.filled_qty) if order.filled_qty else None,
+                    "filled_avg_price": float(order.filled_avg_price) if order.filled_avg_price else None,
+                    "stop_price": float(order.stop_price) if order.stop_price else None,
+                },
+            )
+
             if event == "fill":
                 fill_info = {
                     "event": event,
@@ -142,6 +158,22 @@ class AlpacaTradeStream:
 
         except Exception:
             log.exception("Error handling Alpaca trade update [%s]", self._label)
+
+    def _log_tx(self, event: str, symbol: str, **kwargs: Any) -> None:
+        """Log a transaction to the database."""
+        if not self.db:
+            return
+        try:
+            from trader.db.database import log_alpaca_transaction
+            log_alpaca_transaction(
+                self.db,
+                account_id=self._account_id,
+                event=event,
+                symbol=symbol,
+                **kwargs,
+            )
+        except Exception:
+            log.warning("Failed to log stream transaction: %s %s", event, symbol)
 
     def _handle_sell_fill(self, fill: dict[str, Any]) -> None:
         """Handle a sell fill — likely a stop-loss triggered by Alpaca."""

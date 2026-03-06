@@ -1281,7 +1281,7 @@ def run_watch_loop(
         # Alpaca broker pool + trade streams (one per account in use)
         try:
             from trader.market.alpaca_broker import AlpacaBrokerPool
-            _broker_pool = AlpacaBrokerPool()
+            _broker_pool = AlpacaBrokerPool(db=db)
 
             if _broker_pool.registry:
                 print(f"Alpaca accounts configured: {len(_broker_pool.registry)} "
@@ -1315,6 +1315,7 @@ def run_watch_loop(
                                 secret_key=acct_creds.secret_key,
                                 paper=acct_creds.paper,
                                 account_label=acct_creds.name,
+                                account_id=acct_id,
                             )
                             stream.start()
 

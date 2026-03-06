@@ -131,9 +131,10 @@ class AlpacaAccountRegistry:
 class AlpacaBrokerPool:
     """Manages AlpacaBroker instances, one per account."""
 
-    def __init__(self, registry: AlpacaAccountRegistry | None = None) -> None:
+    def __init__(self, registry: AlpacaAccountRegistry | None = None, db: Any = None) -> None:
         self.registry = registry or AlpacaAccountRegistry()
         self._brokers: dict[str, AlpacaBroker] = {}
+        self._db = db
 
     def get(self, account_id: str) -> AlpacaBroker | None:
         """Get or create broker for the given account. Returns None if unknown."""
@@ -149,6 +150,7 @@ class AlpacaBrokerPool:
             paper=acct.paper,
             account_id=acct.account_id,
             name=acct.name,
+            db=self._db,
         )
         self._brokers[account_id] = broker
         return broker
@@ -176,6 +178,7 @@ class AlpacaBroker:
         paper: bool | None = None,
         account_id: str | None = None,
         name: str | None = None,
+        db: Any = None,  # Database for transaction logging (optional)
     ) -> None:
         from alpaca.trading.client import TradingClient
 
@@ -186,6 +189,7 @@ class AlpacaBroker:
         self._paper = paper
         self.account_id = account_id
         self.name = name or "default"
+        self._db = db
 
         self._client = TradingClient(
             api_key=self._api_key,
@@ -193,6 +197,22 @@ class AlpacaBroker:
             paper=self._paper,
         )
         log.info("AlpacaBroker initialized: %s/%s (paper=%s)", self.name, account_id, self._paper)
+
+    def _log_tx(self, event: str, symbol: str, **kwargs: Any) -> None:
+        """Log an Alpaca transaction to the database (if db is set)."""
+        if not self._db:
+            return
+        try:
+            from trader.db.database import log_alpaca_transaction
+            log_alpaca_transaction(
+                self._db,
+                account_id=self.account_id or "unknown",
+                event=event,
+                symbol=symbol,
+                **kwargs,
+            )
+        except Exception:
+            log.warning("Failed to log Alpaca transaction: %s %s", event, symbol)
 
     @property
     def client(self) -> Any:
@@ -302,9 +322,13 @@ class AlpacaBroker:
             raise ValueError("Must provide either notional or qty")
 
         order = self._client.submit_order(order_data=MarketOrderRequest(**kwargs))
+        result = self._to_result(order)
         log.info("BUY order submitted: %s %s notional=%s qty=%s -> %s",
-                 symbol, order.id, notional, qty, order.status)
-        return self._to_result(order)
+                 symbol, order.id, notional, qty, result.status)
+        self._log_tx("buy_submit", symbol.upper(), order_id=result.order_id, status=result.status,
+                     detail={"notional": notional, "qty": qty, "kwargs_qty": kwargs.get("qty"),
+                             "kwargs_notional": kwargs.get("notional"), "fractionable": "qty" not in kwargs or qty is not None})
+        return result
 
     def _get_latest_price(self, symbol: str) -> float | None:
         """Get latest trade price from Alpaca for qty conversion."""
@@ -343,20 +367,29 @@ class AlpacaBroker:
                 stop_price=round(stop_price, 2),
             )
         )
+        result = self._to_result(order)
         log.info("STOP order submitted: %s %s qty=%s stop=%.2f -> %s",
-                 symbol, order.id, qty, stop_price, order.status)
-        return self._to_result(order)
+                 symbol, order.id, qty, stop_price, result.status)
+        self._log_tx("stop_submit", symbol.upper(), order_id=result.order_id, status=result.status,
+                     detail={"qty": qty, "stop_price": stop_price})
+        return result
 
     def close_position(self, symbol: str) -> OrderResult | None:
         """Close an entire position (market sell). Returns None if no position."""
         try:
             order = self._client.close_position(symbol.upper())
+            result = self._to_result(order)
             log.info("CLOSE position: %s -> order %s", symbol, order.id)
-            return self._to_result(order)
+            self._log_tx("sell_submit", symbol.upper(), order_id=result.order_id, status=result.status)
+            return result
         except Exception as e:
             if "position does not exist" in str(e).lower():
                 log.warning("No position to close for %s", symbol)
+                self._log_tx("sell_failed", symbol.upper(), status="no_position",
+                             detail={"error": str(e)})
                 return None
+            self._log_tx("sell_failed", symbol.upper(), status="error",
+                         detail={"error": str(e)})
             raise
 
     def cancel_order(self, order_id: str) -> bool:
@@ -364,9 +397,12 @@ class AlpacaBroker:
         try:
             self._client.cancel_order_by_id(order_id)
             log.info("Cancelled order %s", order_id)
+            self._log_tx("stop_cancel", "", order_id=order_id, status="cancelled")
             return True
         except Exception as e:
             log.warning("Could not cancel order %s: %s", order_id, e)
+            self._log_tx("stop_cancel", "", order_id=order_id, status="failed",
+                         detail={"error": str(e)})
             return False
 
     def get_order(self, order_id: str) -> OrderResult | None:
@@ -440,11 +476,19 @@ class AlpacaBroker:
         Raises on rejection, cancellation, or timeout.
         """
         result = self.buy(symbol, notional=notional, qty=qty)
-        confirmed = self.wait_for_fill(result.order_id, timeout_s=timeout_s)
+        try:
+            confirmed = self.wait_for_fill(result.order_id, timeout_s=timeout_s)
+        except Exception as e:
+            self._log_tx("buy_failed", symbol.upper(), order_id=result.order_id, status="timeout_or_error",
+                         detail={"error": str(e), "notional": notional, "qty": qty})
+            raise
         log.info(
             "BUY CONFIRMED: %s order=%s qty=%s avg_price=%s",
             symbol, confirmed.order_id, confirmed.filled_qty, confirmed.filled_avg_price,
         )
+        self._log_tx("buy_confirmed", symbol.upper(), order_id=confirmed.order_id, status="filled",
+                     detail={"filled_qty": confirmed.filled_qty, "filled_avg_price": confirmed.filled_avg_price,
+                             "notional": notional, "qty": qty})
         return confirmed
 
     def close_position_and_confirm(
@@ -459,11 +503,18 @@ class AlpacaBroker:
         result = self.close_position(symbol)
         if result is None:
             return None
-        confirmed = self.wait_for_fill(result.order_id, timeout_s=timeout_s)
+        try:
+            confirmed = self.wait_for_fill(result.order_id, timeout_s=timeout_s)
+        except Exception as e:
+            self._log_tx("sell_failed", symbol.upper(), order_id=result.order_id, status="timeout_or_error",
+                         detail={"error": str(e)})
+            raise
         log.info(
             "SELL CONFIRMED: %s order=%s qty=%s avg_price=%s",
             symbol, confirmed.order_id, confirmed.filled_qty, confirmed.filled_avg_price,
         )
+        self._log_tx("sell_confirmed", symbol.upper(), order_id=confirmed.order_id, status="filled",
+                     detail={"filled_qty": confirmed.filled_qty, "filled_avg_price": confirmed.filled_avg_price})
         return confirmed
 
     # ------------------------------------------------------------------

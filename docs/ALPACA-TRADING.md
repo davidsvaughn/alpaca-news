@@ -109,9 +109,10 @@ All 4 vars (`NAME`, `ACCOUNT`, `API_KEY`, `SECRET_KEY`) must be set for an accou
 
 | File | Purpose |
 |------|---------|
-| `trader/market/alpaca_broker.py` | `AlpacaAccount`, `AlpacaAccountRegistry`, `AlpacaBrokerPool`, `AlpacaBroker` (incl. `buy_and_confirm`, `close_position_and_confirm`, `wait_for_fill`) |
+| `trader/market/alpaca_broker.py` | `AlpacaAccount`, `AlpacaAccountRegistry`, `AlpacaBrokerPool`, `AlpacaBroker` (incl. `buy_and_confirm`, `close_position_and_confirm`, `wait_for_fill`, `is_fractionable`) |
 | `trader/market/alpaca_stream.py` | `AlpacaTradeStream` — WebSocket listener for fill/cancel events (one per account) |
 | `trader/market/alpaca_reconcile.py` | `reconcile()` — syncs Alpaca positions with watch state on startup |
+| `trader/db/database.py` | `alpaca_transactions` table, `log_alpaca_transaction()`, `get_alpaca_transactions()` |
 | `trader/models/live_config.py` | `LiveConfig.alpaca_account_id` field |
 | `trader/models/watch.py` | `Watch.alpaca_buy_order_id`, `Watch.alpaca_stop_order_id` |
 | `trader/online/live_monitor.py` | `LivePortfolioManager` (buy path), `LiveExitMonitor` (exit path) |
@@ -416,6 +417,74 @@ The Pattern Day Trader (PDT) rule applies to accounts under $25,000.
 **Current approach**: Paper accounts start with $100,000 (above PDT threshold). If account equity drops below $25,000, PDT becomes a concern.
 
 **Future**: Track `daytrade_count` from Alpaca account info and pause trading if approaching the limit.
+
+---
+
+## Transaction Log
+
+Every Alpaca interaction is recorded in the `alpaca_transactions` SQLite table for audit, debugging, and post-mortem analysis.
+
+### Schema
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `id` | INTEGER | Auto-increment primary key |
+| `created_at` | DATETIME | When the event was logged (UTC) |
+| `account_id` | STRING | Alpaca account ID (e.g., `PA31QXNAPB1H`) |
+| `event` | STRING | Event type (see below) |
+| `symbol` | STRING | Stock symbol |
+| `order_id` | STRING | Alpaca order UUID (if applicable) |
+| `status` | STRING | Order status at time of logging |
+| `detail_json` | JSON | Full request/response data |
+
+### Event Types
+
+| Source | Event | When |
+|--------|-------|------|
+| **Broker** | `buy_submit` | Market buy order submitted |
+| **Broker** | `buy_confirmed` | Buy fill confirmed (includes `filled_qty`, `filled_avg_price`) |
+| **Broker** | `buy_failed` | Buy timed out or was rejected |
+| **Broker** | `sell_submit` | Close-position order submitted |
+| **Broker** | `sell_confirmed` | Sell fill confirmed (includes exit price) |
+| **Broker** | `sell_failed` | Sell failed (no position, timeout, error) |
+| **Broker** | `stop_submit` | Stop-loss order submitted |
+| **Broker** | `stop_cancel` | Stop-loss order cancelled (before VDD exit) |
+| **Stream** | `stream_fill` | WebSocket fill event (buy or sell side) |
+| **Stream** | `stream_canceled` | WebSocket cancel event |
+| **Stream** | `stream_rejected` | WebSocket reject event |
+| **Stream** | `stream_expired` | WebSocket expiry event |
+| **Reconcile** | `reconcile_ok` | Position matches watch — no action |
+| **Reconcile** | `reconcile_price_updated` | Entry price corrected to match Alpaca |
+| **Reconcile** | `reconcile_force_exit` | Watch force-exited (Alpaca has no position) |
+| **Reconcile** | `reconcile_orphan_closed` | Orphan Alpaca position closed |
+
+### Querying
+
+```python
+from trader.db.database import get_alpaca_transactions
+
+# All transactions for a symbol
+txns = get_alpaca_transactions(db, symbol="MMED")
+
+# All failures across all accounts
+txns = get_alpaca_transactions(db, event="buy_failed")
+
+# Everything for one account
+txns = get_alpaca_transactions(db, account_id="PA31QXNAPB1H")
+```
+
+Or directly via SQLite:
+
+```sql
+-- Recent failures
+SELECT created_at, account_id, event, symbol, status, detail_json
+FROM alpaca_transactions
+WHERE event LIKE '%failed%'
+ORDER BY id DESC LIMIT 20;
+
+-- Full history for a symbol
+SELECT * FROM alpaca_transactions WHERE symbol = 'MMED' ORDER BY id;
+```
 
 ---
 
