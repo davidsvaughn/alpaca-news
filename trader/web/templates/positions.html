@@ -25,8 +25,46 @@
 <!-- All portfolio content (loaded via HTMX) -->
 <div id="positions-content"
      hx-get="/api/positions"
-     hx-trigger="load, every 30s, sse-refresh from:body"
+     hx-trigger="load, every 30s"
      hx-swap="innerHTML">
   <div class="text-center text-muted py-3">Loading portfolios...</div>
 </div>
+
+<script>
+// Toggle state manager — lives in the parent page, survives HTMX swaps.
+// Uses event delegation so it works on dynamically replaced DOM elements.
+(function() {
+  var KEY = 'positions_collapse_state';
+  function getState() { return JSON.parse(localStorage.getItem(KEY) || '{}'); }
+  function saveState(s) { localStorage.setItem(KEY, JSON.stringify(s)); }
+
+  // Restore open sections after every HTMX swap
+  function restoreState() {
+    var state = getState();
+    document.querySelectorAll('._toggle-section').forEach(function(el) {
+      if (state[el.id]) el.style.display = '';
+    });
+  }
+
+  // Event delegation on the container — handles clicks on toggle links
+  var container = document.getElementById('positions-content');
+  if (container) {
+    container.addEventListener('click', function(e) {
+      var link = e.target.closest('._toggle-link');
+      if (!link) return;
+      e.preventDefault();
+      var target = document.getElementById(link.dataset.target);
+      if (!target) return;
+      var open = target.style.display !== 'none';
+      target.style.display = open ? 'none' : '';
+      var state = getState();
+      state[target.id] = !open;
+      saveState(state);
+    });
+
+    // Restore after each HTMX swap (including initial load)
+    container.addEventListener('htmx:afterSwap', restoreState);
+  }
+})();
+</script>
 {% endblock %}

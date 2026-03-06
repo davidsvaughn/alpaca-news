@@ -258,11 +258,10 @@
   {{ stats_row(p.stats) }}
 
   {% if p.holding or p.cooling or p.closed %}
-  <a data-bs-toggle="collapse" href="#positions-{{ loop.index }}" role="button"
-     class="text-decoration-none small text-muted" style="font-size:.75rem">
+  <a href="#" class="text-decoration-none small text-muted _toggle-link" data-target="positions-{{ loop.index }}" style="font-size:.75rem">
     positions &#9662;
   </a>
-  <div class="collapse" id="positions-{{ loop.index }}">
+  <div id="positions-{{ loop.index }}" class="_toggle-section" style="display:none">
     {% if p.holding %}
     <h6 class="text-muted small mb-1 mt-2">Open</h6>
     {{ holdings_table(p.holding) }}
@@ -291,11 +290,10 @@
 <div class="portfolio-section">
   <h5 class="mb-2 text-muted">Legacy Watches <span class="badge bg-secondary" style="font-size:.65rem">no config</span></h5>
   {{ stats_row(legacy.stats) }}
-  <a data-bs-toggle="collapse" href="#positions-legacy" role="button"
-     class="text-decoration-none small text-muted" style="font-size:.75rem">
+  <a href="#" class="text-decoration-none small text-muted _toggle-link" data-target="positions-legacy" style="font-size:.75rem">
     positions &#9662;
   </a>
-  <div class="collapse" id="positions-legacy">
+  <div id="positions-legacy" class="_toggle-section" style="display:none">
     {% if legacy.holding %}
     <h6 class="text-muted small mb-1 mt-2">Open</h6>
     {{ holdings_table(legacy.holding) }}
@@ -316,28 +314,3 @@
 <p class="text-muted">No positions. Activate a portfolio and wait for matching snapshots.</p>
 {% endif %}
 
-<script>
-// Persist collapse state in localStorage
-(function() {
-  var KEY = 'positions_collapse_state';
-  var state = JSON.parse(localStorage.getItem(KEY) || '{}');
-
-  // Restore saved state
-  Object.keys(state).forEach(function(id) {
-    var el = document.getElementById(id);
-    if (el && state[id]) el.classList.add('show');
-  });
-
-  // Listen for collapse/expand events
-  document.querySelectorAll('[id^="positions-"], [id^="cfg-detail-"]').forEach(function(el) {
-    el.addEventListener('shown.bs.collapse', function() {
-      state[el.id] = true;
-      localStorage.setItem(KEY, JSON.stringify(state));
-    });
-    el.addEventListener('hidden.bs.collapse', function() {
-      state[el.id] = false;
-      localStorage.setItem(KEY, JSON.stringify(state));
-    });
-  });
-})();
-</script>
