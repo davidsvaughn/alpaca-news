@@ -780,6 +780,7 @@ def _ensure_stops_if_needed(monitor: LiveExitMonitor, last_date: str | None) -> 
                 continue
             cfg = LiveConfig.from_dict(cfg_dict)
             ensure_stops(broker=broker, db=monitor.db,
+                         live_config_id=cfg.config_id,
                          guard_stop_pct=cfg.guard_stop_pct)
         return today
     except Exception:

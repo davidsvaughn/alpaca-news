@@ -125,10 +125,20 @@ def reconcile(
                 detail={"watch_id": watch["watch_id"], "exit_price": exit_price})
 
     # Rule 2: Alpaca has a position but we have no watch → close on Alpaca
+    # First, get all open orders so we can cancel stops before closing
+    all_open_orders = broker.get_open_orders()
+    open_orders_by_symbol: dict[str, list] = {}
+    for o in all_open_orders:
+        open_orders_by_symbol.setdefault(o.symbol, []).append(o)
+
     for symbol in alpaca_symbols - watch_symbols:
         pos = alpaca_positions[symbol]
         if close_orphans:
             try:
+                # Cancel any open orders first (stops hold shares, preventing close)
+                for o in open_orders_by_symbol.get(symbol, []):
+                    broker.cancel_order(o.order_id)
+                    log.info("RECONCILE: cancelled order %s for orphan %s", o.order_id, symbol)
                 broker.close_position(symbol)
                 summary["alpaca_orphan_closed"].append(symbol)
                 log.warning("RECONCILE: %s closed orphan Alpaca position", symbol)
@@ -163,6 +173,7 @@ def ensure_stops(
     *,
     broker: Any,  # AlpacaBroker
     db: Any,      # Database
+    live_config_id: str | None = None,  # filter watches to this config only
     guard_stop_pct: float = 0.0,  # fallback if watch has no persisted stop_price
 ) -> dict[str, Any]:
     """Ensure every holding watch with an Alpaca position has an active stop order.
@@ -171,9 +182,9 @@ def ensure_stops(
     For each holding watch:
       - Uses watch.alpaca_stop_price (persisted at buy time) as the stop price
       - Falls back to entry_price * (1 - guard_stop_pct/100) for legacy watches
-      - If existing stop order is still open → skip
-      - If expired/missing → submit new stop (DAY for fractional, GTC for whole)
-      - Update watch with new order ID + stop price
+      - Checks Alpaca open orders as definitive source (not just watch metadata)
+      - If stop exists on Alpaca → skip (and update watch metadata if stale)
+      - If missing → submit new stop (DAY for fractional, GTC for whole)
 
     Returns summary of actions taken.
     """
@@ -185,7 +196,21 @@ def ensure_stops(
 
     alpaca_positions = {p.symbol: p for p in broker.get_positions()}
     all_watches = get_active_watches(db)
-    holding_watches = [w for w in all_watches if w.get("status") == "holding" and w.get("alpaca_buy_order_id")]
+    holding_watches = [w for w in all_watches
+                       if w.get("status") == "holding" and w.get("alpaca_buy_order_id")]
+
+    # Filter to this config's watches only (prevents cross-account confusion)
+    if live_config_id:
+        holding_watches = [w for w in holding_watches
+                           if w.get("live_config_id") == live_config_id]
+
+    # Get ALL open orders once (cheaper than per-symbol lookups)
+    all_open_orders = broker.get_open_orders()
+    # Build symbol → open stop order mapping
+    open_stops_by_symbol: dict[str, Any] = {}
+    for o in all_open_orders:
+        if o.side == "sell" and o.stop_price is not None:
+            open_stops_by_symbol[o.symbol] = o
 
     for watch in holding_watches:
         symbol = watch["symbol"]
@@ -206,13 +231,19 @@ def ensure_stops(
             log.warning("ENSURE-STOPS: %s has no stop_price and guard_stop_pct=0 — UNPROTECTED!", symbol)
             continue
 
-        # Check if existing stop order is still open
-        existing_stop_id = watch.get("alpaca_stop_order_id")
-        if existing_stop_id:
-            existing = broker.get_order(existing_stop_id)
-            if existing and existing.status.lower() in ("new", "accepted", "pending_new"):
-                summary["already_open"].append(symbol)
-                continue
+        # Check Alpaca directly for an open stop on this symbol
+        existing_stop = open_stops_by_symbol.get(symbol)
+        if existing_stop:
+            # Update watch metadata if stale (e.g. stop was set by fix script
+            # but watch metadata was overwritten by concurrent reconcile)
+            if watch.get("alpaca_stop_order_id") != existing_stop.order_id:
+                builder = WatchBuilder.from_dict(watch)
+                builder.alpaca_stop_order_id = existing_stop.order_id
+                builder.alpaca_stop_price = stop_price
+                updated = builder.to_watch()
+                update_watch(db, watch_id, updated.to_dict())
+            summary["already_open"].append(symbol)
+            continue
 
         # Submit stop order
         try:

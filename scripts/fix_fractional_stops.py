@@ -98,7 +98,8 @@ def main() -> None:
             has_active_stop = False
             if existing_stop_id:
                 existing = broker.get_order(existing_stop_id)
-                if existing and existing.status.lower() in ("new", "accepted", "pending_new"):
+                _terminal = {"filled", "canceled", "expired", "rejected", "suspended", "replaced"}
+                if existing and existing.status.lower() not in _terminal:
                     has_active_stop = True
 
             print(f"\n  {symbol}:")

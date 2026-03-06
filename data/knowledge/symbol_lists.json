@@ -966,7 +966,8 @@
     "ASPI",
     "CAC",
     "AQN",
-    "MEOH"
+    "MEOH",
+    "DTI"
   ],
   "crypto": [],
   "rejected": [
@@ -1083,5 +1084,5 @@
     "MCC",
     "BDGI"
   ],
-  "last_updated": "2026-03-06T17:46:53.018386+00:00"
+  "last_updated": "2026-03-06T18:34:17.705273+00:00"
 }

@@ -6,13 +6,25 @@ import asyncio
 import json
 from typing import AsyncIterator
 
+import numpy as np
 from fastapi.responses import StreamingResponse
 
 from trader.online.event_bus import EventBus, PipelineEvent
 
 
+class _NumpyEncoder(json.JSONEncoder):
+    def default(self, obj: object) -> object:
+        if isinstance(obj, np.integer):
+            return int(obj)
+        if isinstance(obj, np.floating):
+            return float(obj)
+        if isinstance(obj, np.ndarray):
+            return obj.tolist()
+        return super().default(obj)
+
+
 def sse_format(*, event: str, data: dict) -> str:
-    payload = json.dumps(data, ensure_ascii=False)
+    payload = json.dumps(data, ensure_ascii=False, cls=_NumpyEncoder)
     return f"event: {event}\ndata: {payload}\n\n"
 
 

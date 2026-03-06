@@ -283,7 +283,7 @@ Runs on startup for each linked account. Alpaca is always the source of truth.
 |----------|--------|
 | Alpaca has position + we have matching watch | OK (update entry price if mismatched) |
 | We have watch + Alpaca has no position | Force-exit the watch (`reconcile_no_alpaca_position`) |
-| Alpaca has position + we have no watch | Close the orphan position on Alpaca |
+| Alpaca has position + we have no watch | Cancel open orders (stops hold shares), then close the orphan position on Alpaca |
 | Entry price differs by > $0.01 | Update watch entry to match Alpaca's `avg_entry_price` |
 
 **When would these happen?**
@@ -575,6 +575,16 @@ This means the actual allocation is `qty * price` which may be less than the tar
 - `whole_shares`: `buy()` converts notional to whole shares before ordering, ensuring all stops can use GTC.
 
 **Files**: `trader/market/alpaca_broker.py`, `trader/online/live_monitor.py`, `trader/market/alpaca_reconcile.py`
+
+### Orphan position close blocked by active stop (2026-03-06)
+
+**Symptom**: `RECONCILE: failed to close orphan AQN on Alpaca` with `403: insufficient qty available for order` — all shares held for an active stop order.
+
+**Root cause**: `reconcile()` tried to close an orphan position via `close_position()`, but the position had an active stop order (set by the fix script). Alpaca reserves all shares for the stop, so the close-position order had 0 shares available.
+
+**Fix**: Before closing an orphan position, `reconcile()` now fetches all open orders and cancels any for the orphan symbol. This releases the held shares so the close can proceed.
+
+**Files**: `trader/market/alpaca_reconcile.py`
 
 ---
 

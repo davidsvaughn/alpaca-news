@@ -1313,6 +1313,7 @@ def run_watch_loop(
                             from trader.models.live_config import LiveConfig
                             _cfg = LiveConfig.from_dict(cfg_dict)
                             ensure_stops(broker=broker, db=db,
+                                         live_config_id=_cfg.config_id,
                                          guard_stop_pct=_cfg.guard_stop_pct)
 
                         # Start trade stream for this account
