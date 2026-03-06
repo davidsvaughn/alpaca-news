@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import argparse
 import atexit
+import os
 import subprocess
 import sys
 import threading
@@ -32,11 +33,54 @@ from trader.online.x_stream_service import XStreamGuards, XStreamService
 from trader.web.app import create_app
 
 
+def _kill_stale_servers(primary_port: int = 8000, legacy_port: int = 8765) -> None:
+    """Kill any orphaned Python server processes listening on our ports.
+
+    Prevents stale servers (from previous sessions or standalone launches)
+    from hogging the Schwab websocket or causing port conflicts.
+    Only targets Python processes (safe — won't kill unrelated services).
+    """
+    import re
+    import signal
+
+    for port in (primary_port, legacy_port):
+        try:
+            result = subprocess.run(
+                ["ss", "-tlnp", f"sport = :{port}"],
+                capture_output=True, text=True, timeout=5,
+            )
+            for line in result.stdout.splitlines():
+                if f":{port}" not in line:
+                    continue
+                # Only kill python processes — pattern: ("python3",pid=XXXX,fd=YY)
+                if "python" not in line.lower():
+                    continue
+                match = re.search(r"pid=(\d+)", line)
+                if not match:
+                    continue
+                pid = int(match.group(1))
+                if pid == os.getpid():
+                    continue
+                print(f"Killing stale Python server on port {port} (PID {pid})")
+                os.kill(pid, signal.SIGTERM)
+                time.sleep(1)
+                try:
+                    os.kill(pid, 0)  # check if still alive
+                    os.kill(pid, signal.SIGKILL)
+                    print(f"  Force-killed PID {pid}")
+                except OSError:
+                    pass  # already dead
+        except Exception as e:
+            print(f"WARN: stale server check on port {port} failed: {e}")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="alpaca-news trader")
     parser.add_argument("--observer", action="store_true",
                         help="Start in observer mode (no new jobs launched)")
     args = parser.parse_args()
+
+    _kill_stale_servers()
 
     settings = load_settings()
     observer = ObserverMode(enabled=args.observer or settings.observer_mode)

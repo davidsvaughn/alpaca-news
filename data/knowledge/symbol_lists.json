@@ -934,7 +934,8 @@
     "GPRK",
     "BR",
     "ASLE",
-    "MRVL"
+    "MRVL",
+    "AHT"
   ],
   "crypto": [],
   "rejected": [
@@ -1049,5 +1050,5 @@
     "ERJ",
     "PXT"
   ],
-  "last_updated": "2026-03-06T14:58:28.181554+00:00"
+  "last_updated": "2026-03-06T15:05:32.941332+00:00"
 }
