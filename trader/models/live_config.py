@@ -53,6 +53,9 @@ class LiveConfig:
     # Post-exit
     cooling_off_market_hours: float = 24.0  # market hours to keep streaming after exit
 
+    # Alpaca paper trading (optional — when set, orders are executed via Alpaca)
+    alpaca_account_id: str | None = None  # e.g. "PA31QXNAPB1H"
+
     # Metadata
     created_at: str = ""
     updated_at: str = ""

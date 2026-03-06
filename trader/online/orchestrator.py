@@ -78,6 +78,7 @@ _in_flight_lock = threading.Lock()
 # Shared live trading state, initialised by run_watch_loop.
 _live_collector: Any = None   # VolumeDeltaCollector
 _live_market: Any = None      # MarketDataService (for streaming)
+_broker_pool: Any = None      # AlpacaBrokerPool (multi-account order execution)
 
 
 def _describe_api_error(e: Exception) -> str:
@@ -647,6 +648,7 @@ def _run_single_exploration_body(
                 pm = LivePortfolioManager(
                     db=db, bus=bus, data_dir=settings.data_dir,
                     collector=_live_collector, market=_live_market,
+                    broker_pool=_broker_pool,
                 )
                 watch_was_created = pm.evaluate_snapshot(
                     snapshot=snapshot.to_dict() if hasattr(snapshot, "to_dict") else snapshot,
@@ -1244,8 +1246,9 @@ def run_watch_loop(
         bus.publish(PipelineEvent(type="monitoring_started", payload={}))
 
     # Live exit monitor thread (mechanical exit strategies, same as backtest)
-    # Also sets up the shadow collector for real-time volume delta tracking.
-    global _live_collector, _live_market
+    # Also sets up the shadow collector for real-time volume delta tracking,
+    # and optionally the Alpaca broker + trade stream for order execution.
+    global _live_collector, _live_market, _live_broker
     if settings.watch_enabled:
         from trader.online.live_monitor import LiveExitMonitor, live_monitoring_loop
 
@@ -1275,8 +1278,58 @@ def run_watch_loop(
         except Exception as e:
             print(f"WARN: Live market/stream init failed: {e}")
 
+        # Alpaca broker pool + trade streams (one per account in use)
+        try:
+            from trader.market.alpaca_broker import AlpacaBrokerPool
+            _broker_pool = AlpacaBrokerPool()
+
+            if _broker_pool.registry:
+                print(f"Alpaca accounts configured: {len(_broker_pool.registry)} "
+                      f"({', '.join(_broker_pool.registry.list_ids())})")
+
+                # Initialize brokers for accounts linked to active configs
+                from trader.db.database import get_active_live_configs
+                active_cfgs = get_active_live_configs(db)
+                linked_accounts = {c["alpaca_account_id"] for c in active_cfgs
+                                   if c.get("alpaca_account_id")}
+
+                from trader.market.alpaca_reconcile import reconcile
+                from trader.market.alpaca_stream import AlpacaTradeStream
+
+                for acct_id in linked_accounts:
+                    broker = _broker_pool.get(acct_id)
+                    if broker:
+                        acct_info = broker.get_account()
+                        print(f"  {acct_info.name} ({acct_id}): equity=${acct_info.equity:,.2f} "
+                              f"cash=${acct_info.cash:,.2f}")
+
+                        # Reconcile this account
+                        reconcile(broker=broker, db=db)
+
+                        # Start trade stream for this account
+                        acct_creds = _broker_pool.registry.get(acct_id)
+                        if acct_creds:
+                            stream = AlpacaTradeStream(
+                                db=db, bus=bus,
+                                api_key=acct_creds.api_key,
+                                secret_key=acct_creds.secret_key,
+                                paper=acct_creds.paper,
+                                account_label=acct_creds.name,
+                            )
+                            stream.start()
+
+                if linked_accounts:
+                    bus.publish(PipelineEvent(type="alpaca_connected", payload={
+                        "accounts": list(linked_accounts),
+                    }))
+        except Exception as e:
+            print(f"WARN: Alpaca broker pool init failed: {e}")
+            import traceback
+            traceback.print_exc()
+
         live_monitor = LiveExitMonitor(
-            db=db, bus=bus, data_dir=settings.data_dir, collector=_live_collector,
+            db=db, bus=bus, data_dir=settings.data_dir,
+            collector=_live_collector, broker_pool=_broker_pool,
         )
         live_monitor_thread = threading.Thread(
             target=live_monitoring_loop,

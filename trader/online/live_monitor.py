@@ -57,14 +57,31 @@ class LiveExitMonitor:
         bus: Any = None,
         data_dir: str = "data",
         collector: Any = None,  # VolumeDeltaCollector (optional)
+        broker_pool: Any = None,  # AlpacaBrokerPool (optional)
     ) -> None:
         self.db = db
         self.bus = bus
         self.data_dir = data_dir
         self.collector = collector
+        self.broker_pool = broker_pool  # When set, exits close Alpaca positions
         # Per-symbol indicator cache (reused across cycles to avoid
         # recomputing indicators on unchanged bar history).
         self._indicator_caches: dict[str, dict[tuple[Any, ...], Any]] = {}
+
+    def _get_broker_for_watch(self, watch_dict: dict[str, Any]) -> Any:
+        """Look up the Alpaca broker for a watch's LiveConfig. Returns None if not linked."""
+        if not self.broker_pool:
+            return None
+        config_id = watch_dict.get("live_config_id")
+        if not config_id:
+            return None
+        config_dict = get_active_live_config(self.db)
+        if not config_dict:
+            return None
+        acct_id = config_dict.get("alpaca_account_id")
+        if not acct_id:
+            return None
+        return self.broker_pool.get(acct_id)
 
     def run_cycle(self) -> None:
         """Run one check cycle across all active watches."""
@@ -180,6 +197,22 @@ class LiveExitMonitor:
 
         if result.should_exit:
             exit_price = result.exit_price or float(bars.iloc[-1]["Close"])
+
+            # If broker is connected, close Alpaca position and cancel stop order
+            broker = self._get_broker_for_watch(watch_dict)
+            if broker and watch_dict.get("alpaca_buy_order_id"):
+                try:
+                    close_result = broker.close_position(symbol)
+                    if close_result and close_result.filled_avg_price:
+                        exit_price = close_result.filled_avg_price
+                    # Cancel the server-side stop order (no longer needed)
+                    stop_id = watch_dict.get("alpaca_stop_order_id")
+                    if stop_id:
+                        broker.cancel_order(stop_id)
+                        builder.alpaca_stop_order_id = None
+                except Exception:
+                    log.exception("Alpaca close/cancel failed for %s — proceeding with exit", symbol)
+
             builder.record_exit(price=exit_price, reason=result.reason)
             log.info(
                 "LIVE EXIT: %s %s — reason=%s, price=%.2f, bars_held=%d",
@@ -335,12 +368,14 @@ class LivePortfolioManager:
         data_dir: str = "data",
         collector: Any = None,  # VolumeDeltaCollector (optional)
         market: Any = None,     # MarketDataService (optional, for streaming)
+        broker_pool: Any = None,  # AlpacaBrokerPool (optional)
     ) -> None:
         self.db = db
         self.bus = bus
         self.data_dir = data_dir
         self.collector = collector
         self.market = market
+        self.broker_pool = broker_pool  # When set, buys execute Alpaca orders
 
     def evaluate_snapshot(
         self,
@@ -482,6 +517,34 @@ class LivePortfolioManager:
             exit_strategy=cfg.exit_strategy,
             exit_params=cfg.exit_params,
         )
+
+        # --- Execute Alpaca orders (if broker connected to this config) ---
+        broker = self.broker_pool.get(cfg.alpaca_account_id) if self.broker_pool and cfg.alpaca_account_id else None
+        if broker:
+            try:
+                # Calculate position size
+                alloc_pct = float((cfg.allocation_params or {}).get("alloc_pct", 5))
+                position_size = cfg.starting_capital * alloc_pct / 100.0
+
+                # Submit market buy order
+                buy_result = broker.buy(symbol, notional=position_size)
+                wb.alpaca_buy_order_id = buy_result.order_id
+                log.info("ALPACA BUY: %s order=%s notional=%.2f", symbol, buy_result.order_id, position_size)
+
+                # Submit server-side stop-loss order (if guard_stop_pct > 0)
+                if cfg.guard_stop_pct > 0:
+                    # We need the qty from the buy to set the stop.
+                    # For market orders, use notional / entry_price as estimate.
+                    # The actual qty will be updated when the buy fill arrives.
+                    est_qty = round(position_size / entry_price, 6)
+                    stop_price = round(entry_price * (1 - cfg.guard_stop_pct / 100), 2)
+                    stop_result = broker.set_stop(symbol, qty=est_qty, stop_price=stop_price)
+                    wb.alpaca_stop_order_id = stop_result.order_id
+                    log.info("ALPACA STOP: %s order=%s qty=%.4f stop=%.2f",
+                             symbol, stop_result.order_id, est_qty, stop_price)
+            except Exception:
+                log.exception("ALPACA ORDER FAILED for %s — watch created without Alpaca orders", symbol)
+
         watch = wb.to_watch()
 
         # Persist
@@ -490,8 +553,9 @@ class LivePortfolioManager:
         watch.persist(watch_path)
 
         log.info(
-            "LIVE BUY: %s %s — conf=%.2f, price=%.2f, strategy=%s",
+            "LIVE BUY: %s %s — conf=%.2f, price=%.2f, strategy=%s, alpaca=%s",
             symbol, watch.watch_id, confidence, entry_price, cfg.exit_strategy,
+            "yes" if wb.alpaca_buy_order_id else "no",
         )
 
         # Start streaming for this symbol (shadow collector + Schwab stream)

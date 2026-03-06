@@ -1177,28 +1177,75 @@ function goLive() {
     market_close: marketClose,
   };
 
-  if (!confirm('Add portfolio: ' + strategy + '?\n\nThis creates a new virtual portfolio. Multiple portfolios can run simultaneously. Check the Positions tab to monitor.')) return;
+  // Check if Alpaca paper trading is available
+  fetch('/api/alpaca/status')
+    .then(function(r) { return r.json(); })
+    .then(function(alpaca) {
+      // Build account selection prompt
+      var freeAccounts = [];
+      if (alpaca.available && alpaca.accounts) {
+        freeAccounts = alpaca.accounts.filter(function(a) { return !a.linked && !a.error; });
+      }
 
-  fetch('/api/live/config', {
-    method: 'POST',
-    headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify(body),
-  })
-  .then(function(r) { return r.json(); })
-  .then(function(cfg) {
-    if (cfg.error) { alert('Error: ' + cfg.error); return; }
-    // Activate immediately
-    return fetch('/api/live/config/' + cfg.config_id + '/activate', {method: 'POST'})
+      var accountMsg = '';
+      if (freeAccounts.length > 0) {
+        accountMsg = '\n\nAlpaca paper accounts available:';
+        freeAccounts.forEach(function(a, i) {
+          accountMsg += '\n  ' + (i + 1) + '. ' + a.name + ' (' + a.account_id +
+            ') — $' + (a.equity || 0).toLocaleString();
+        });
+        accountMsg += '\n  0. No Alpaca (virtual only)';
+      }
+
+      var msg = 'Add portfolio: ' + strategy + '?' +
+        '\n\nThis creates a new live portfolio. Check the Positions tab to monitor.' +
+        accountMsg;
+
+      if (!confirm(msg)) return;
+
+      // If free accounts exist, let user pick one
+      if (freeAccounts.length > 0) {
+        var choice = prompt(
+          'Connect to Alpaca paper account?\n\n' +
+          freeAccounts.map(function(a, i) {
+            return (i + 1) + ' = ' + a.name + ' (' + a.account_id + ', $' + (a.equity || 0).toLocaleString() + ')';
+          }).join('\n') +
+          '\n0 = Virtual tracking only (no orders)' +
+          '\n\nEnter number (0-' + freeAccounts.length + '):'
+        );
+
+        if (choice === null) return; // cancelled
+        var idx = parseInt(choice);
+        if (idx > 0 && idx <= freeAccounts.length) {
+          var selected = freeAccounts[idx - 1];
+          body.alpaca_account_id = selected.account_id;
+          configName = strategy + ' (' + selected.name + ')';
+          body.name = configName;
+        }
+      }
+
+      return fetch('/api/live/config', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(body),
+      })
       .then(function(r) { return r.json(); })
-      .then(function() {
-        alert('Portfolio added: ' + configName + '\n\nCheck the Positions tab to monitor.');
-        _updateGoLiveBtn();
+      .then(function(cfg) {
+        if (cfg.error) { alert('Error: ' + cfg.error); return; }
+        // Activate immediately
+        return fetch('/api/live/config/' + cfg.config_id + '/activate', {method: 'POST'})
+          .then(function(r) { return r.json(); })
+          .then(function() {
+            var alpacaNote = body.alpaca_account_id ? '\nConnected to Alpaca: ' + body.alpaca_account_id : '';
+            alert('Portfolio added: ' + configName + alpacaNote + '\n\nCheck the Positions tab to monitor.');
+            _updateGoLiveBtn();
+          });
       });
-  })
-  .catch(function(err) {
-    console.error('Go Live error:', err);
-    alert('Failed to go live. Check console.');
-  });
+    })
+    .catch(function(err) {
+      console.error('Go Live error:', err);
+      alert('Failed to go live. Check console.');
+    });
 }
 
 function abortBacktest() {

@@ -136,6 +136,7 @@
     <h5 class="mb-0 me-2">{{ p.config.name }}</h5>
     {% if p.config.active %}<span class="badge bg-success me-2" style="font-size:.65rem">active</span>
     {% else %}<span class="badge bg-secondary me-2" style="font-size:.65rem">inactive</span>{% endif %}
+    {% if p.config.alpaca_account_id %}<span class="badge bg-warning text-dark me-2" style="font-size:.65rem">Alpaca: {{ p.config.alpaca_account_id }}</span>{% endif %}
     <span class="small text-muted me-2">{{ p.config.exit_strategy }}</span>
     <span class="small text-muted me-2">Stop: {{ p.config.guard_stop_pct }}%</span>
     <span class="small text-muted me-2">{{ p.config.allocation }}</span>

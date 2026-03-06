@@ -910,7 +910,31 @@
     "KHC",
     "DEO",
     "EA",
-    "QWTR"
+    "QWTR",
+    "CHAC",
+    "GNK",
+    "SBLK",
+    "DSX",
+    "TEN",
+    "GCO",
+    "RVI",
+    "SNAL",
+    "ESCA",
+    "HOG",
+    "ALV",
+    "GDRX",
+    "OBDC",
+    "ALNT",
+    "ATEX",
+    "FUNC",
+    "IMPP",
+    "SYNTF",
+    "AUR",
+    "NMFC",
+    "GPRK",
+    "BR",
+    "ASLE",
+    "MRVL"
   ],
   "crypto": [],
   "rejected": [
@@ -1021,7 +1045,9 @@
     "FRAL.NS",
     "EIDF",
     "GRS",
-    "SAMHI"
+    "SAMHI",
+    "ERJ",
+    "PXT"
   ],
-  "last_updated": "2026-03-05T20:52:15.787634+00:00"
+  "last_updated": "2026-03-06T14:58:28.181554+00:00"
 }

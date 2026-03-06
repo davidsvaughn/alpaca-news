@@ -1391,13 +1391,13 @@ def create_app(
                         total_dollar_pnl += pos_size * float(rpnl) / 100
                         trade_count += 1
 
-            # Open trades: unrealized P&L
+            # Open trades: unrealized P&L (count even if price unavailable)
             for w in p.get("holding", []):
                 wd = w if isinstance(w, dict) else w.__dict__ if hasattr(w, "__dict__") else {}
                 upnl = wd.get("unrealized_pnl")
                 if upnl is not None:
                     total_dollar_pnl += pos_size * float(upnl) / 100
-                    trade_count += 1
+                trade_count += 1
 
             ending = starting + total_dollar_pnl
             return_pct = (ending - starting) / starting * 100 if starting > 0 else 0.0
@@ -1461,6 +1461,40 @@ def create_app(
     # Live config endpoints
     # ------------------------------------------------------------------
 
+    @app.get("/api/debug/shadow")
+    async def api_debug_shadow():
+        """Diagnostic: check shadow collector and stream state."""
+        from trader.online import orchestrator as _orch
+        collector = getattr(_orch, "_live_collector", None)
+        market = getattr(_orch, "_live_market", None)
+        result: dict[str, Any] = {
+            "collector_exists": collector is not None,
+            "collector_active": getattr(collector, "active", None) if collector else None,
+            "collector_symbols": getattr(collector, "symbols", []) if collector else [],
+            "market_exists": market is not None,
+            "schwab_available": getattr(market, "schwab_available", None) if market else None,
+        }
+        if market and hasattr(market, "_schwab"):
+            schwab = market._schwab
+            result["stream_started"] = getattr(schwab, "_stream_started", None)
+            result["vdc_attached"] = getattr(schwab, "_volume_delta_collector", None) is not None
+            # Check stream snapshots for a few symbols
+            snaps = {}
+            for sym in (getattr(collector, "symbols", []) if collector else [])[:5]:
+                s = schwab.get_stream_snapshot(sym)
+                snaps[sym] = {"has_data": bool(s), "fields": list(s.keys()) if s else []}
+            result["stream_snapshots"] = snaps
+        if collector:
+            all_snaps = {}
+            for sym in collector.symbols[:5]:
+                snap = collector.snapshot(sym)
+                all_snaps[sym] = {
+                    "update_count": snap.get("update_count", 0) if snap else 0,
+                    "minute_bars_count": snap.get("minute_bars_count", 0) if snap else 0,
+                }
+            result["collector_snapshots"] = all_snaps
+        return result
+
     @app.get("/api/live/configs")
     async def api_live_configs():
         """List all saved live configs."""
@@ -1496,6 +1530,15 @@ def create_app(
             update_live_config(db, config_id, existing)
             return existing
         else:
+            # Enforce one-to-one: Alpaca account can only link to one active config
+            alpaca_id = body.get("alpaca_account_id")
+            if alpaca_id:
+                for existing_cfg in get_active_live_configs(db):
+                    if existing_cfg.get("alpaca_account_id") == alpaca_id:
+                        return JSONResponse({
+                            "error": f"Alpaca account {alpaca_id} is already linked to portfolio '{existing_cfg.get('name')}'"
+                        }, status_code=409)
+
             # Create new
             cfg = LiveConfig.create(
                 name=body.get("name", "Untitled"),
@@ -1511,6 +1554,7 @@ def create_app(
                 price_delay_minutes=int(body.get("price_delay_minutes", 10)),
                 market_close=body.get("market_close", "16:00"),
                 cooling_off_market_hours=float(body.get("cooling_off_market_hours", 24.0)),
+                alpaca_account_id=body.get("alpaca_account_id"),
             )
             insert_live_config(db, config=cfg.to_dict())
             return cfg.to_dict()
@@ -1538,6 +1582,57 @@ def create_app(
         if not ok:
             return JSONResponse({"error": "not_found"}, status_code=404)
         return {"status": "deleted", "config_id": config_id}
+
+    @app.get("/api/alpaca/status")
+    async def api_alpaca_status():
+        """Return all configured Alpaca accounts and their availability."""
+        try:
+            from trader.market.alpaca_broker import AlpacaAccountRegistry, AlpacaBroker
+
+            registry = AlpacaAccountRegistry()
+            if not registry:
+                return {"available": False, "accounts": [], "reason": "No Alpaca accounts configured"}
+
+            # Find which accounts are already linked to active portfolios
+            linked: set[str] = set()
+            active_cfgs = get_active_live_configs(db)
+            for cfg in active_cfgs:
+                aid = cfg.get("alpaca_account_id")
+                if aid:
+                    linked.add(aid)
+
+            accounts = []
+            for acct_id, creds in registry.accounts.items():
+                info: dict[str, Any] = {
+                    "account_id": acct_id,
+                    "name": creds.name,
+                    "paper": creds.paper,
+                    "linked": acct_id in linked,
+                }
+                try:
+                    broker = AlpacaBroker(
+                        api_key=creds.api_key,
+                        secret_key=creds.secret_key,
+                        paper=creds.paper,
+                        account_id=acct_id,
+                        name=creds.name,
+                    )
+                    acct = broker.get_account()
+                    info.update({
+                        "equity": acct.equity,
+                        "cash": acct.cash,
+                        "buying_power": acct.buying_power,
+                    })
+                except Exception as e:
+                    info["error"] = str(e)
+                accounts.append(info)
+
+            return {
+                "available": True,
+                "accounts": accounts,
+            }
+        except Exception as e:
+            return {"available": False, "accounts": [], "reason": str(e)}
 
     @app.get("/api/activity-panel", response_class=HTMLResponse)
     async def api_activity_panel(request: Request):
