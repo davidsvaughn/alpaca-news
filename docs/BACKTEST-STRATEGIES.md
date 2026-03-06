@@ -606,3 +606,11 @@ Cumulative delta = running sum of (uptick - downtick). Imbalance ratio = (Σ upt
 | `trader/web/templates/snapshots.html` | Backtest panel UI — strategy selector, parameter inputs, guard inputs |
 | `trader/config.py` | `PRICE_DELAY_MINUTES`, `STATS_RESOLUTION_MINUTES` env parameters |
 | `docs/refs/exit-strategies.md` | Reference document with full mathematical formulations |
+
+---
+
+## See Also
+
+- [ALLOCATION-STRATEGIES.md](ALLOCATION-STRATEGIES.md) — Position management: capacity rules, replacement logic, ranking methods
+- [BACKTEST-ARCHITECTURE.md](BACKTEST-ARCHITECTURE.md) — System overview, job flow, frontend state
+- [BACKTEST-METRICS.md](BACKTEST-METRICS.md) — Performance metrics and portfolio simulation

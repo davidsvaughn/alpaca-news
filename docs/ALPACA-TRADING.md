@@ -5,6 +5,8 @@
 > account sync, reconciliation, edge cases, and future considerations.
 >
 > Created: 2026-03-06 | Last updated: 2026-03-06
+>
+> See also: [LIVE-TRADING.md](LIVE-TRADING.md) — overall live trading architecture, exit strategies, portfolio management
 
 ---
 
@@ -344,6 +346,12 @@ Alpaca's free data is IEX-only (~2-5% of exchange volume), insufficient for VDD.
 
 If `buy_and_confirm()` raises (rejected, timeout, insufficient funds), **no watch is created**. The portfolio only tracks confirmed positions. Logged as `ALPACA BUY FAILED`.
 
+### 1b. Non-fractionable stocks
+
+Some stocks (e.g., MMED) are not fractionable on Alpaca. Notional (dollar-based) orders require fractional share support and will be **rejected** for these assets.
+
+**Fix (2026-03-06)**: `buy()` now calls `is_fractionable()` before ordering. For non-fractionable stocks, it fetches the latest trade price via `StockHistoricalDataClient` and converts to whole shares: `qty = int(notional / price)`. If the notional amount is less than 1 share, the buy is skipped with a clear error.
+
 ### 2. Stop order submission fails after buy succeeds
 
 The position exists on Alpaca but has no stop protection. Logged as `ALPACA STOP FAILED ... position open without stop protection!`. The VDD exit monitor still runs, but there's no server-side crash protection.
@@ -389,7 +397,7 @@ When connecting to an account with existing positions, the user chooses:
 | Multi-account | Up to 5 (Alpaca allows 3 paper) | A/B testing of strategies on isolated accounts |
 | Optional linking | Yes | Portfolios work without Alpaca; opt-in per portfolio |
 | Stop orders | Server-side GTC | Survives crashes; Alpaca handles execution |
-| Position sizing | Notional (dollar-based) | Supports fractional shares |
+| Position sizing | Notional with whole-share fallback | Notional for fractionable; auto-converts to whole shares otherwise |
 | Reconciliation | On startup per linked account | Catches drift from crashes, manual changes |
 | Data source for VDD | Schwab (not Alpaca) | Full exchange volume; matches backtest exactly |
 | Trade stream per account | Separate daemon threads | Each account's WebSocket is independent |
@@ -408,6 +416,30 @@ The Pattern Day Trader (PDT) rule applies to accounts under $25,000.
 **Current approach**: Paper accounts start with $100,000 (above PDT threshold). If account equity drops below $25,000, PDT becomes a concern.
 
 **Future**: Track `daytrade_count` from Alpaca account info and pause trading if approaching the limit.
+
+---
+
+## Bugs Fixed
+
+### Enum string mismatch in alpaca-py (2026-03-06)
+
+**Symptom**: Alpaca accounts showed positions, but local portfolios showed 0 watches. Orders were placed and filled on Alpaca, but the system never detected the fills.
+
+**Root cause**: `str(OrderStatus.FILLED)` returns `"OrderStatus.FILLED"`, not `"filled"`. The `wait_for_fill` loop compared `result.status.lower() == "filled"` which never matched, causing a 15-second timeout on every order. The buy was already submitted and filled on Alpaca, but the timeout exception prevented the watch from being created.
+
+**Fix**: `_to_result()` in `alpaca_broker.py` now uses `.value` for enum fields (`status.value` → `"filled"`). Same fix applied to `alpaca_stream.py` for trade update event/side/status parsing.
+
+**Files**: `trader/market/alpaca_broker.py`, `trader/market/alpaca_stream.py`
+
+### Non-fractionable stock rejection (2026-03-06)
+
+**Symptom**: Certain stocks (e.g., MMED) were bought by virtual portfolios but missing from Alpaca-linked portfolios.
+
+**Root cause**: All buys used `notional=` (dollar amount), which requires fractional share support. Alpaca rejects notional orders for non-fractionable assets.
+
+**Fix**: `buy()` now checks `is_fractionable()` first. For non-fractionable stocks, it fetches the latest trade price and converts to whole shares: `qty = int(notional / price)`.
+
+**Files**: `trader/market/alpaca_broker.py`
 
 ---
 

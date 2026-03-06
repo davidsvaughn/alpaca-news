@@ -3,7 +3,9 @@
 > Hub document for the live trading feature: from backtest simulation to real-time paper trading.
 > Consolidates the former LIVE-TRADING-PLAN.md and LIVE-TRADING-IMPL.md.
 >
-> Created: 2026-03-04 | Last updated: 2026-03-05
+> Created: 2026-03-04 | Last updated: 2026-03-06
+>
+> See also: [ALPACA-TRADING.md](ALPACA-TRADING.md) — Alpaca order execution, multi-account setup, confirmed fills, reconciliation, edge cases
 
 ---
 
@@ -104,13 +106,16 @@ Post-exit: streaming continues for configurable period (default 24 market hours)
 - [ ] Frontend: LiveConfig editor (save backtest config as live config) — deferred
 - [ ] Frontend: Activate from saved configs list — deferred
 
-### Phase 4: Alpaca Paper Trading
-- [ ] Alpaca paper trading credentials + config
-- [ ] Order execution layer: enter_position, exit_position, set_guard_stop
-- [ ] Replace virtual buy/sell with actual Alpaca orders
-- [ ] Guard stops as server-side Alpaca stop orders
-- [ ] Fill price tracking (actual vs expected)
-- [ ] Trade update stream (fills, rejects)
+### Phase 4: Alpaca Paper Trading (DONE)
+- [x] Alpaca paper trading credentials + config (multi-account: up to 5)
+- [x] Order execution layer: `buy_and_confirm`, `close_position_and_confirm`, `set_stop`
+- [x] Replace virtual buy/sell with actual Alpaca orders (confirmed fills)
+- [x] Guard stops as server-side Alpaca stop orders (GTC)
+- [x] Fill price tracking (actual Alpaca fill price replaces snapshot estimate)
+- [x] Trade update stream (fills, rejects) per account
+- [x] Non-fractionable stock handling (auto whole-share conversion)
+- [x] Reconciliation on startup (Alpaca = source of truth)
+- [x] See [ALPACA-TRADING.md](ALPACA-TRADING.md) for full details
 
 ### Phase 5: Validation & Shadow Mode
 - [ ] Compare live exits vs what backtest would have done
@@ -391,6 +396,33 @@ Comparison of volume delta methods on 5-day data for SPY, AAPL, TSLA.
 2. **Shadow**: Tick-level accumulation running in parallel, logging signals
 3. **Calibrate**: After 2+ weeks, analyze if tick-level improves exit timing
 4. **Switch**: If improvement shown, switch primary signal source
+
+### Three Volume Delta Formulas
+
+There are actually three distinct approaches to computing volume-based momentum, each
+with different granularity:
+
+| Method | Granularity | How Volume Is Classified |
+|--------|-------------|--------------------------|
+| **Inter-bar tick rule** | Binary per bar | Entire bar volume = uptick if close > prev close, else downtick |
+| **AD Money Flow Multiplier** | Proportional per bar | `((C-L)-(H-C))/(H-L) * V` — distributes volume based on where close falls in the bar's range |
+| **Tick-level** | Per trade | Each trade classified by last sale direction (true uptick/downtick) |
+
+The **inter-bar tick rule** is what we currently use in both the backtest exit strategy
+(`volume_delta_divergence`) and live exit monitoring. It's all-or-nothing: if AAPL closes
+at $150.01 vs $150.00, the entire bar's 500K shares count as uptick.
+
+The **AD Money Flow Multiplier** is more nuanced — if the close is near the high of the
+bar, most volume is classified as buying pressure; if near the low, as selling pressure.
+This is being considered for the new allocation ranking methods (see
+[ALLOCATION-STRATEGIES.md](ALLOCATION-STRATEGIES.md#candidate-2-volume-weighted-trend--accumulation-distribution-volume_trend)).
+
+The **tick-level** approach (what the shadow collector will enable) is the gold standard —
+each individual trade is classified based on whether it executed at the bid or ask.
+
+The shadow collector is gathering data to compare all three. Once we have enough data,
+we can determine which formula produces the best signals for both exit strategies and
+allocation ranking.
 
 ---
 

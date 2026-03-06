@@ -84,6 +84,20 @@ follow_ups_table = Table(
 )
 
 
+alpaca_transactions_table = Table(
+    "alpaca_transactions",
+    metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("created_at", DateTime(timezone=True), server_default=func.now(), nullable=False),
+    Column("account_id", String, nullable=False),      # e.g. "PA31QXNAPB1H"
+    Column("event", String, nullable=False),            # buy, sell, stop, cancel, fill, reject, reconcile, error
+    Column("symbol", String, nullable=False),
+    Column("order_id", String),                         # Alpaca order ID (if applicable)
+    Column("status", String),                           # filled, rejected, canceled, timeout, etc.
+    Column("detail_json", JSON, nullable=False),        # full request/response data
+)
+
+
 live_configs_table = Table(
     "live_configs",
     metadata,
@@ -1080,6 +1094,89 @@ def insert_evaluation(
                 "ejson": json.dumps(evaluation, ensure_ascii=False),
             },
         )
+
+
+# ---------------------------------------------------------------------------
+# Alpaca transaction log
+# ---------------------------------------------------------------------------
+
+
+def log_alpaca_transaction(
+    db: Database,
+    *,
+    account_id: str,
+    event: str,
+    symbol: str,
+    order_id: str | None = None,
+    status: str | None = None,
+    detail: dict[str, Any] | None = None,
+) -> None:
+    """Append an Alpaca transaction record.
+
+    Events: buy_submit, buy_confirmed, buy_failed, sell_submit, sell_confirmed,
+            sell_failed, stop_submit, stop_confirmed, stop_failed, stop_cancel,
+            fill (stream), reject (stream), cancel (stream),
+            reconcile_ok, reconcile_force_exit, reconcile_orphan_closed,
+            reconcile_price_updated
+    """
+    with db.engine.begin() as conn:
+        conn.execute(
+            text(
+                "INSERT INTO alpaca_transactions "
+                "(account_id, event, symbol, order_id, status, detail_json) "
+                "VALUES (:acct, :evt, :sym, :oid, :st, :djson)"
+            ),
+            {
+                "acct": account_id,
+                "evt": event,
+                "sym": symbol,
+                "oid": order_id,
+                "st": status,
+                "djson": json.dumps(detail or {}, ensure_ascii=False, default=str),
+            },
+        )
+
+
+def get_alpaca_transactions(
+    db: Database,
+    *,
+    symbol: str | None = None,
+    account_id: str | None = None,
+    event: str | None = None,
+    limit: int = 200,
+) -> list[dict[str, Any]]:
+    """Query Alpaca transactions with optional filters."""
+    clauses = []
+    params: dict[str, Any] = {"lim": limit}
+    if symbol:
+        clauses.append("symbol = :sym")
+        params["sym"] = symbol.upper()
+    if account_id:
+        clauses.append("account_id = :acct")
+        params["acct"] = account_id
+    if event:
+        clauses.append("event = :evt")
+        params["evt"] = event
+
+    where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+    sql = (
+        f"SELECT created_at, account_id, event, symbol, order_id, status, detail_json "
+        f"FROM alpaca_transactions {where} ORDER BY id DESC LIMIT :lim"
+    )
+    with db.engine.connect() as conn:
+        rows = conn.execute(text(sql), params).fetchall()
+    return [
+        {
+            "created_at": str(r[0]) if r[0] else None,
+            "account_id": r[1],
+            "event": r[2],
+            "symbol": r[3],
+            "order_id": r[4],
+            "status": r[5],
+            "detail": json.loads(r[6]) if isinstance(r[6], str) else r[6],
+        }
+        for r in rows
+    ]
 
 
 def get_recent_evaluations(db: Database, *, limit: int = 20) -> list[dict[str, Any]]:

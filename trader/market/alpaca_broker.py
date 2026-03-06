@@ -250,6 +250,14 @@ class AlpacaBroker:
     # Orders
     # ------------------------------------------------------------------
 
+    def is_fractionable(self, symbol: str) -> bool:
+        """Check if a symbol supports fractional shares on Alpaca."""
+        try:
+            asset = self._client.get_asset(symbol.upper())
+            return bool(asset.fractionable)
+        except Exception:
+            return True  # assume fractionable if lookup fails
+
     def buy(
         self,
         symbol: str,
@@ -257,7 +265,11 @@ class AlpacaBroker:
         notional: float | None = None,
         qty: float | None = None,
     ) -> OrderResult:
-        """Submit a market buy order."""
+        """Submit a market buy order.
+
+        If notional is provided but the asset is not fractionable,
+        automatically converts to whole-share qty using a quote lookup.
+        """
         from alpaca.trading.requests import MarketOrderRequest
         from alpaca.trading.enums import OrderSide, TimeInForce
 
@@ -266,7 +278,23 @@ class AlpacaBroker:
             "side": OrderSide.BUY,
             "time_in_force": TimeInForce.DAY,
         }
-        if notional is not None:
+
+        if notional is not None and not self.is_fractionable(symbol):
+            # Non-fractionable: convert notional to whole shares
+            price = self._get_latest_price(symbol)
+            if price and price > 0:
+                whole_qty = int(notional / price)
+                if whole_qty < 1:
+                    raise ValueError(
+                        f"{symbol} not fractionable: notional ${notional:.2f} < 1 share @ ${price:.2f}"
+                    )
+                log.info("BUY %s: not fractionable, converting $%.2f -> %d shares @ ~$%.2f",
+                         symbol, notional, whole_qty, price)
+                kwargs["qty"] = whole_qty
+            else:
+                # Can't get price — try notional anyway, let Alpaca reject if needed
+                kwargs["notional"] = round(notional, 2)
+        elif notional is not None:
             kwargs["notional"] = round(notional, 2)
         elif qty is not None:
             kwargs["qty"] = qty
@@ -277,6 +305,24 @@ class AlpacaBroker:
         log.info("BUY order submitted: %s %s notional=%s qty=%s -> %s",
                  symbol, order.id, notional, qty, order.status)
         return self._to_result(order)
+
+    def _get_latest_price(self, symbol: str) -> float | None:
+        """Get latest trade price from Alpaca for qty conversion."""
+        try:
+            from alpaca.data.requests import StockLatestTradeRequest
+            from alpaca.data.historical import StockHistoricalDataClient
+            if not hasattr(self, "_data_client"):
+                self._data_client = StockHistoricalDataClient(self._api_key, self._secret_key)
+            trade = self._data_client.get_stock_latest_trade(
+                StockLatestTradeRequest(symbol_or_symbols=symbol.upper())
+            )
+            if isinstance(trade, dict):
+                t = trade.get(symbol.upper())
+                return float(t.price) if t else None
+            return float(trade.price)
+        except Exception:
+            log.warning("Could not get latest price for %s", symbol)
+            return None
 
     def set_stop(
         self,

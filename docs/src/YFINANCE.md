@@ -95,7 +95,16 @@ yfinance is our **free fallback market data source**. It provides comprehensive 
 | 1h | **~730 days (2y)** | ~3,500–5,000 | `period="max"` returns ~2 years |
 | 1d | unlimited | varies | Full history available |
 
-**Key takeaway for incoming signal scoring:** To get recent bar history for a brand-new symbol, yfinance can provide **5 days of 5-min bars (~336 bars)** or **8 days of 1-min bars (~2,800 bars)** with no API key required. This is enough to compute trailing momentum, volume trends, RSI, etc.
+**Schwab vs yfinance for intraday bars** (confirmed 2026-03-06):
+
+| Metric | Schwab (5d, 5m) | yfinance (5d, 5m) |
+|--------|-----------------|-------------------|
+| Bars returned | ~1,300 (incl. extended hrs) | ~340 (regular hrs only) |
+| Zero-volume bars | 0 | 9–10 per stock |
+| Fetch latency | 0.3–0.5s | 0.02–0.07s |
+| Price accuracy | — | Avg $0.004 diff vs Schwab |
+
+**Schwab is the preferred default** for intraday bars (zero data gaps, extended hours). yfinance is the fallback when Schwab is unavailable, and the only option for lookbacks beyond 10 trading days (60 days of 5m, 2 years of 1h).
 
 ### 4. Financial Statements
 
