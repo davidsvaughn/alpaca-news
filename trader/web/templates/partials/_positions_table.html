@@ -27,13 +27,14 @@
 <div class="table-responsive">
   <table class="table table-sm table-hover align-middle mb-1">
     <thead class="table-light"><tr>
-      <th>Symbol</th><th>Dir</th><th>Entry</th><th>Current</th><th>P&L</th><th>Conf</th><th>Strategy</th><th>Entered</th><th></th>
+      <th>Symbol</th><th>Dir</th><th>Qty</th><th>Entry</th><th>Current</th><th>P&L</th><th>Conf</th><th>Strategy</th><th>Entered</th><th></th>
     </tr></thead>
     <tbody>
     {% for w in watches %}
     <tr>
       <td><strong>{{ w.symbol }}</strong></td>
       <td>{% if w.entry.direction == 'bullish' %}<span class="text-success">&#9650;</span>{% else %}<span class="text-danger">&#9660;</span>{% endif %}</td>
+      <td>{% if w.qty is defined and w.qty %}{{ "%.2f"|format(w.qty) }}{% else %}<span class="text-muted">&mdash;</span>{% endif %}</td>
       <td>${{ "%.2f"|format(w.entry.price) }}</td>
       {% set cur = w.current_price if w.current_price is defined else none %}
       {% set pnl = w.unrealized_pnl if w.unrealized_pnl is defined else none %}

@@ -25,6 +25,11 @@ from typing import Any
 
 log = logging.getLogger(__name__)
 
+# Stop order mode: "whole_shares" or "fractional_day" (default)
+# - whole_shares: buy() always converts notional to whole-share qty so stops can be GTC
+# - fractional_day: buy() uses notional (fractional fill), stops use DAY TIF + daily re-submission
+ALPACA_STOP_MODE = os.getenv("ALPACA_STOP_MODE", "fractional_day").lower()
+
 
 # ------------------------------------------------------------------
 # Data types
@@ -287,8 +292,9 @@ class AlpacaBroker:
     ) -> OrderResult:
         """Submit a market buy order.
 
-        If notional is provided but the asset is not fractionable,
-        automatically converts to whole-share qty using a quote lookup.
+        If notional is provided but the asset is not fractionable (or
+        ALPACA_STOP_MODE=whole_shares), converts to whole-share qty so
+        that stop orders can use GTC time-in-force.
         """
         from alpaca.trading.requests import MarketOrderRequest
         from alpaca.trading.enums import OrderSide, TimeInForce
@@ -299,16 +305,22 @@ class AlpacaBroker:
             "time_in_force": TimeInForce.DAY,
         }
 
-        if notional is not None and not self.is_fractionable(symbol):
-            # Non-fractionable: convert notional to whole shares
+        need_whole_shares = (
+            notional is not None
+            and (ALPACA_STOP_MODE == "whole_shares" or not self.is_fractionable(symbol))
+        )
+
+        if need_whole_shares:
+            # Convert notional to whole shares (for non-fractionable assets
+            # or when whole_shares mode is active for GTC stop compatibility)
             price = self._get_latest_price(symbol)
             if price and price > 0:
                 whole_qty = int(notional / price)
                 if whole_qty < 1:
                     raise ValueError(
-                        f"{symbol} not fractionable: notional ${notional:.2f} < 1 share @ ${price:.2f}"
+                        f"{symbol}: notional ${notional:.2f} < 1 share @ ${price:.2f}"
                     )
-                log.info("BUY %s: not fractionable, converting $%.2f -> %d shares @ ~$%.2f",
+                log.info("BUY %s: whole-share mode, converting $%.2f -> %d shares @ ~$%.2f",
                          symbol, notional, whole_qty, price)
                 kwargs["qty"] = whole_qty
             else:
@@ -354,24 +366,26 @@ class AlpacaBroker:
         qty: float,
         stop_price: float,
     ) -> OrderResult:
-        """Submit a server-side stop-loss sell order (GTC)."""
+        """Submit a server-side stop-loss sell order (GTC, or DAY for fractional qty)."""
         from alpaca.trading.requests import StopOrderRequest
         from alpaca.trading.enums import OrderSide, TimeInForce
 
+        is_fractional = qty % 1 != 0
+        tif = TimeInForce.DAY if is_fractional else TimeInForce.GTC
         order = self._client.submit_order(
             order_data=StopOrderRequest(
                 symbol=symbol.upper(),
                 qty=qty,
                 side=OrderSide.SELL,
-                time_in_force=TimeInForce.GTC,
+                time_in_force=tif,
                 stop_price=round(stop_price, 2),
             )
         )
         result = self._to_result(order)
-        log.info("STOP order submitted: %s %s qty=%s stop=%.2f -> %s",
-                 symbol, order.id, qty, stop_price, result.status)
+        log.info("STOP order submitted: %s %s qty=%s stop=%.2f tif=%s -> %s",
+                 symbol, order.id, qty, stop_price, tif.value, result.status)
         self._log_tx("stop_submit", symbol.upper(), order_id=result.order_id, status=result.status,
-                     detail={"qty": qty, "stop_price": stop_price})
+                     detail={"qty": qty, "stop_price": stop_price, "time_in_force": tif.value})
         return result
 
     def close_position(self, symbol: str) -> OrderResult | None:

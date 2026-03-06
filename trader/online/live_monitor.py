@@ -170,7 +170,7 @@ class LiveExitMonitor:
         else:
             entry_dt_et = entry_dt
 
-        entry_ts = pd.Timestamp(entry_dt_et)
+        entry_ts = pd.Timestamp(entry_dt_et).floor("s")
         entry_idx = bars.index.searchsorted(entry_ts)
         if entry_idx >= len(bars):
             # Entry is after all available bars — nothing to evaluate yet
@@ -509,6 +509,15 @@ class LivePortfolioManager:
             except (ValueError, TypeError):
                 pass
 
+        # --- Duplicate symbol guard (per-portfolio) ---
+        existing = get_active_watches(self.db)
+        for w in existing:
+            if (w.get("status") == "holding"
+                    and w.get("symbol") == symbol
+                    and w.get("live_config_id") == cfg.config_id):
+                print(f"LIVE-EVAL: {symbol} SKIP already holding in config {cfg.name}")
+                return False
+
         # --- Create watch ---
         snapshot_id = snapshot.get("snapshot_id", "")
         wb = WatchBuilder.create_from_live_config(
@@ -551,6 +560,7 @@ class LivePortfolioManager:
                     thesis=wb.entry.thesis,
                 )
             actual_qty = buy_confirmed.filled_qty or 0
+            wb.qty = actual_qty
 
             log.info("ALPACA BUY CONFIRMED: %s order=%s qty=%.4f fill_price=%.2f notional=%.2f",
                      symbol, buy_confirmed.order_id, actual_qty, entry_price, position_size)
@@ -558,6 +568,7 @@ class LivePortfolioManager:
             # Submit server-side stop-loss with ACTUAL qty from confirmed fill
             if cfg.guard_stop_pct > 0 and actual_qty > 0:
                 stop_price = round(entry_price * (1 - cfg.guard_stop_pct / 100), 2)
+                wb.alpaca_stop_price = stop_price  # persist for re-submission
                 try:
                     stop_confirmed = broker.set_stop(symbol, qty=actual_qty, stop_price=stop_price)
                     wb.alpaca_stop_order_id = stop_confirmed.order_id
@@ -565,6 +576,12 @@ class LivePortfolioManager:
                              symbol, stop_confirmed.order_id, actual_qty, stop_price)
                 except Exception:
                     log.exception("ALPACA STOP FAILED for %s — position open without stop protection!", symbol)
+        else:
+            # Local/shadow portfolio — calculate qty from allocation
+            alloc_pct = float((cfg.allocation_params or {}).get("alloc_pct", 5))
+            position_size = cfg.starting_capital * alloc_pct / 100.0
+            if entry_price and entry_price > 0:
+                wb.qty = position_size / entry_price
 
         watch = wb.to_watch()
 
@@ -732,6 +749,44 @@ class LivePortfolioManager:
 _SHADOW_SUMMARY_INTERVAL_S = 3600  # write clean summary JSON hourly
 
 
+def _ensure_stops_if_needed(monitor: LiveExitMonitor, last_date: str | None) -> str | None:
+    """Ensure all holding positions have active stop orders, once per trading day.
+
+    Returns the date string of the last check (to avoid repeating).
+    """
+    if not monitor.broker_pool:
+        return last_date
+
+    now = datetime.now(tz=ET)
+    today = now.strftime("%Y-%m-%d")
+    if today == last_date:
+        return last_date  # already done today
+
+    if not is_market_open():
+        return last_date
+
+    try:
+        from trader.market.alpaca_reconcile import ensure_stops
+        from trader.db.database import get_active_live_configs
+        from trader.models.live_config import LiveConfig
+
+        active_cfgs = get_active_live_configs(monitor.db)
+        for cfg_dict in active_cfgs:
+            acct_id = cfg_dict.get("alpaca_account_id")
+            if not acct_id:
+                continue
+            broker = monitor.broker_pool.get(acct_id)
+            if not broker:
+                continue
+            cfg = LiveConfig.from_dict(cfg_dict)
+            ensure_stops(broker=broker, db=monitor.db,
+                         guard_stop_pct=cfg.guard_stop_pct)
+        return today
+    except Exception:
+        log.exception("Daily ensure-stops check failed")
+        return last_date
+
+
 def live_monitoring_loop(
     monitor: LiveExitMonitor,
     interval_s: int = 60,
@@ -744,12 +799,17 @@ def live_monitoring_loop(
     """
     log.info("Live exit monitor started (interval=%ds)", interval_s)
     last_summary_save = time.monotonic()
+    last_ensure_stops_date: str | None = None
     while True:
         try:
             # Only run during market hours (or within 30 min after close
             # to catch final exit signals)
             if is_market_open() or _near_close():
                 monitor.run_cycle()
+
+                # Ensure all positions have active stops (once per day at open)
+                last_ensure_stops_date = _ensure_stops_if_needed(
+                    monitor, last_ensure_stops_date)
 
             # Periodic clean summary export (convenience, not safety).
             # Bar data is already persisted via JSONL append on each flush.

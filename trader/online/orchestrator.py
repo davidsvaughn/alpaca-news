@@ -1293,7 +1293,7 @@ def run_watch_loop(
                 linked_accounts = {c["alpaca_account_id"] for c in active_cfgs
                                    if c.get("alpaca_account_id")}
 
-                from trader.market.alpaca_reconcile import reconcile
+                from trader.market.alpaca_reconcile import reconcile, ensure_stops
                 from trader.market.alpaca_stream import AlpacaTradeStream
 
                 for acct_id in linked_accounts:
@@ -1305,6 +1305,15 @@ def run_watch_loop(
 
                         # Reconcile this account
                         reconcile(broker=broker, db=db)
+
+                        # Ensure all holding positions have active stop orders
+                        cfg_dict = next((c for c in active_cfgs
+                                         if c.get("alpaca_account_id") == acct_id), None)
+                        if cfg_dict:
+                            from trader.models.live_config import LiveConfig
+                            _cfg = LiveConfig.from_dict(cfg_dict)
+                            ensure_stops(broker=broker, db=db,
+                                         guard_stop_pct=_cfg.guard_stop_pct)
 
                         # Start trade stream for this account
                         acct_creds = _broker_pool.registry.get(acct_id)

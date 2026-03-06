@@ -157,3 +157,93 @@ def reconcile(
         log.info("RECONCILE complete: all %d positions in sync", len(summary["ok"]))
 
     return summary
+
+
+def ensure_stops(
+    *,
+    broker: Any,  # AlpacaBroker
+    db: Any,      # Database
+    guard_stop_pct: float = 0.0,  # fallback if watch has no persisted stop_price
+) -> dict[str, Any]:
+    """Ensure every holding watch with an Alpaca position has an active stop order.
+
+    Called on startup (after reconcile) and daily at market open.
+    For each holding watch:
+      - Uses watch.alpaca_stop_price (persisted at buy time) as the stop price
+      - Falls back to entry_price * (1 - guard_stop_pct/100) for legacy watches
+      - If existing stop order is still open → skip
+      - If expired/missing → submit new stop (DAY for fractional, GTC for whole)
+      - Update watch with new order ID + stop price
+
+    Returns summary of actions taken.
+    """
+    from trader.db.database import get_active_watches, update_watch
+    from trader.models.watch import WatchBuilder
+
+    account_id = getattr(broker, "account_id", None) or "unknown"
+    summary: dict[str, Any] = {"submitted": [], "already_open": [], "no_stop_price": [], "errors": []}
+
+    alpaca_positions = {p.symbol: p for p in broker.get_positions()}
+    all_watches = get_active_watches(db)
+    holding_watches = [w for w in all_watches if w.get("status") == "holding" and w.get("alpaca_buy_order_id")]
+
+    for watch in holding_watches:
+        symbol = watch["symbol"]
+        if symbol not in alpaca_positions:
+            continue  # no Alpaca position — reconcile() handles this
+
+        pos = alpaca_positions[symbol]
+        qty = pos.qty
+        watch_id = watch["watch_id"]
+
+        # Determine stop price: persisted on watch, or calculate from config
+        stop_price = watch.get("alpaca_stop_price")
+        if stop_price is None and guard_stop_pct > 0:
+            entry_price = watch["entry"]["price"]
+            stop_price = round(entry_price * (1 - guard_stop_pct / 100), 2)
+        if stop_price is None:
+            summary["no_stop_price"].append(symbol)
+            log.warning("ENSURE-STOPS: %s has no stop_price and guard_stop_pct=0 — UNPROTECTED!", symbol)
+            continue
+
+        # Check if existing stop order is still open
+        existing_stop_id = watch.get("alpaca_stop_order_id")
+        if existing_stop_id:
+            existing = broker.get_order(existing_stop_id)
+            if existing and existing.status.lower() in ("new", "accepted", "pending_new"):
+                summary["already_open"].append(symbol)
+                continue
+
+        # Submit stop order
+        try:
+            result = broker.set_stop(symbol, qty=qty, stop_price=stop_price)
+            builder = WatchBuilder.from_dict(watch)
+            builder.alpaca_stop_order_id = result.order_id
+            builder.alpaca_stop_price = stop_price
+            updated = builder.to_watch()
+            update_watch(db, watch_id, updated.to_dict())
+
+            summary["submitted"].append({"symbol": symbol, "stop_price": stop_price,
+                                         "qty": qty, "order_id": result.order_id})
+            log.info("ENSURE-STOPS: %s qty=%.4f stop=%.2f order=%s",
+                     symbol, qty, stop_price, result.order_id)
+            _log_tx(db, account_id, "stop_ensure", symbol,
+                    order_id=result.order_id, detail={"qty": qty, "stop_price": stop_price,
+                                                      "watch_id": watch_id})
+        except Exception as e:
+            summary["errors"].append({"symbol": symbol, "error": str(e)})
+            log.exception("ENSURE-STOPS FAILED: %s — POSITION UNPROTECTED!", symbol)
+            _log_tx(db, account_id, "stop_ensure_failed", symbol,
+                    detail={"error": str(e), "watch_id": watch_id})
+
+    n_submitted = len(summary["submitted"])
+    n_open = len(summary["already_open"])
+    n_errors = len(summary["errors"])
+    n_no_price = len(summary["no_stop_price"])
+    if n_submitted or n_errors or n_no_price:
+        log.info("ENSURE-STOPS: %d submitted, %d already open, %d errors, %d no stop price",
+                 n_submitted, n_open, n_errors, n_no_price)
+    elif n_open:
+        log.info("ENSURE-STOPS: all %d stops active", n_open)
+
+    return summary

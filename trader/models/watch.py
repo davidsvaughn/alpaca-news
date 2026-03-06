@@ -69,9 +69,13 @@ class Watch:
     exit_params: dict[str, Any] | None = None
     cooling_off_until: str | None = None
 
+    # Position sizing
+    qty: float | None = None  # shares held (from Alpaca fill or calculated)
+
     # Alpaca order tracking (Phase 4+)
     alpaca_buy_order_id: str | None = None
     alpaca_stop_order_id: str | None = None
+    alpaca_stop_price: float | None = None  # persisted stop price (set at buy time)
 
     # Legacy fields — kept for backward compatibility with existing DB records.
     # New watches created by the live system will have empty lists/None here.
@@ -130,9 +134,12 @@ class WatchBuilder:
         self.exit_strategy: str | None = None
         self.exit_params: dict[str, Any] | None = None
         self.cooling_off_until: str | None = None
+        # Position sizing
+        self.qty: float | None = None
         # Alpaca order tracking
         self.alpaca_buy_order_id: str | None = None
         self.alpaca_stop_order_id: str | None = None
+        self.alpaca_stop_price: float | None = None
         # Legacy fields (kept for backward compatibility)
         self.monitoring_snapshot_ids: list[str] = []
         self.retrospective_snapshot_ids: list[str] = []
@@ -207,9 +214,12 @@ class WatchBuilder:
         builder.exit_strategy = d.get("exit_strategy")
         builder.exit_params = d.get("exit_params")
         builder.cooling_off_until = d.get("cooling_off_until")
+        # Position sizing
+        builder.qty = d.get("qty")
         # Alpaca order tracking
         builder.alpaca_buy_order_id = d.get("alpaca_buy_order_id")
         builder.alpaca_stop_order_id = d.get("alpaca_stop_order_id")
+        builder.alpaca_stop_price = d.get("alpaca_stop_price")
         # Legacy fields
         builder.monitoring_snapshot_ids = list(d.get("monitoring_snapshot_ids", []))
         builder.retrospective_snapshot_ids = list(d.get("retrospective_snapshot_ids", []))
@@ -292,9 +302,12 @@ class WatchBuilder:
             exit_strategy=self.exit_strategy,
             exit_params=self.exit_params,
             cooling_off_until=self.cooling_off_until,
+            # Position sizing
+            qty=self.qty,
             # Alpaca order tracking
             alpaca_buy_order_id=self.alpaca_buy_order_id,
             alpaca_stop_order_id=self.alpaca_stop_order_id,
+            alpaca_stop_price=self.alpaca_stop_price,
             # Legacy fields
             monitoring_snapshot_ids=list(self.monitoring_snapshot_ids),
             retrospective_snapshot_ids=list(self.retrospective_snapshot_ids),

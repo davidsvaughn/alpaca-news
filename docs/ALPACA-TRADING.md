@@ -111,7 +111,7 @@ All 4 vars (`NAME`, `ACCOUNT`, `API_KEY`, `SECRET_KEY`) must be set for an accou
 |------|---------|
 | `trader/market/alpaca_broker.py` | `AlpacaAccount`, `AlpacaAccountRegistry`, `AlpacaBrokerPool`, `AlpacaBroker` (incl. `buy_and_confirm`, `close_position_and_confirm`, `wait_for_fill`, `is_fractionable`) |
 | `trader/market/alpaca_stream.py` | `AlpacaTradeStream` — WebSocket listener for fill/cancel events (one per account) |
-| `trader/market/alpaca_reconcile.py` | `reconcile()` — syncs Alpaca positions with watch state on startup |
+| `trader/market/alpaca_reconcile.py` | `reconcile()` — syncs Alpaca positions with watch state; `ensure_stops()` — verifies/re-submits stop orders |
 | `trader/db/database.py` | `alpaca_transactions` table, `log_alpaca_transaction()`, `get_alpaca_transactions()` |
 | `trader/models/live_config.py` | `LiveConfig.alpaca_account_id` field |
 | `trader/models/watch.py` | `Watch.alpaca_buy_order_id`, `Watch.alpaca_stop_order_id` |
@@ -203,8 +203,9 @@ Snapshot sealed
            → If REJECTED/TIMEOUT: return False (NO watch created)
         2. Updates watch entry price with ACTUAL fill price
         3. broker.set_stop(symbol, qty=ACTUAL_FILLED_QTY, stop_price=...)
-           → Alpaca StopOrderRequest (GTC, server-side)
+           → Alpaca StopOrderRequest (GTC for whole qty, DAY for fractional)
            → Uses exact qty from confirmed buy fill (not an estimate)
+           → Stop price persisted on watch as `alpaca_stop_price` for re-submission
     → Persists watch to DB + JSON (only after buy confirmed)
 ```
 
@@ -397,8 +398,8 @@ When connecting to an account with existing positions, the user chooses:
 | Cancel stop before VDD sell | Yes | Prevent race condition with stop fill |
 | Multi-account | Up to 5 (Alpaca allows 3 paper) | A/B testing of strategies on isolated accounts |
 | Optional linking | Yes | Portfolios work without Alpaca; opt-in per portfolio |
-| Stop orders | Server-side GTC | Survives crashes; Alpaca handles execution |
-| Position sizing | Notional with whole-share fallback | Notional for fractionable; auto-converts to whole shares otherwise |
+| Stop orders | GTC (whole shares) or DAY (fractional) | `ALPACA_STOP_MODE` env var; DAY stops re-submitted daily at open |
+| Position sizing | Notional with whole-share fallback | Notional for fractionable; auto-converts to whole shares for non-fractionable or when `ALPACA_STOP_MODE=whole_shares` |
 | Reconciliation | On startup per linked account | Catches drift from crashes, manual changes |
 | Data source for VDD | Schwab (not Alpaca) | Full exchange volume; matches backtest exactly |
 | Trade stream per account | Separate daemon threads | Each account's WebSocket is independent |
@@ -488,6 +489,59 @@ SELECT * FROM alpaca_transactions WHERE symbol = 'MMED' ORDER BY id;
 
 ---
 
+## Fractional Shares and Stop Orders
+
+### The Problem
+
+When buying with `notional=` (dollar amount), Alpaca fills fractionable stocks with fractional quantities. For example, buying $500 of AVGO at $337.29 fills 1.4826 shares. The subsequent `set_stop()` call then tries to submit a stop-loss for 1.4826 shares.
+
+**Alpaca constraint**: Fractional orders must use `time_in_force=DAY`. GTC (good-til-cancelled) is only allowed for whole-share quantities. A GTC stop on a fractional qty returns `422: fractional orders must be DAY orders`.
+
+DAY orders expire at market close, so a fractional stop-loss provides no overnight protection and must be re-submitted each morning.
+
+### Two Modes (controlled by `ALPACA_STOP_MODE` env var)
+
+| Mode | Env value | Behavior | Stop TIF | Overnight protection |
+|------|-----------|----------|----------|---------------------|
+| **Whole shares** | `whole_shares` | Buy converts notional to whole-share qty before ordering. Slight under-allocation (at most 1 share's worth of unused budget). | GTC | Yes — stop persists until filled or cancelled |
+| **Fractional + DAY stops** | `fractional_day` (default) | Buy uses notional as-is (fractional fill). Stop uses DAY TIF. System re-submits DAY stops each morning at market open. | DAY | No — relies on daily re-submission at open |
+
+### Stop Enforcement: `ensure_stops()`
+
+**Invariant: every holding position with an Alpaca account must have an active stop order at all times.**
+
+The stop price is persisted on the watch itself (`watch.alpaca_stop_price`) at buy time, so the system always knows what stop SHOULD be in place — even across restarts, config changes, or process crashes.
+
+`ensure_stops()` runs:
+1. **On startup** — after `reconcile()`, for each linked account
+2. **Daily at market open** — via the live monitoring loop (once per trading day)
+
+For each holding watch with an Alpaca position:
+1. Read `watch.alpaca_stop_price` (set at buy time). Falls back to `entry_price * (1 - guard_stop_pct/100)` for legacy watches without a persisted stop price.
+2. Check if the existing stop order is still `open` on Alpaca
+3. If expired or missing → submit a new stop (DAY for fractional qty, GTC for whole)
+4. Update `watch.alpaca_stop_order_id` with the new order ID
+5. Log loudly if a stop cannot be set — that position is unprotected
+
+For `fractional_day` mode, there is a **brief window without stop protection** between market close (when DAY stops expire) and the next market open (when new stops are submitted). Extended-hours trading is unprotected. For full overnight protection, use `whole_shares` mode.
+
+### How Whole-Share Mode Works
+
+In `whole_shares` mode, `buy()` always converts notional to whole-share qty, even for fractionable stocks:
+
+```
+qty = int(notional / latest_price)   # e.g., int(500 / 337.29) = 1 share
+```
+
+This means the actual allocation is `qty * price` which may be less than the target notional. For a $337 stock with $500 budget, you'd buy 1 share ($337) instead of 1.48 shares ($500). The trade-off is simplicity: GTC stops work, no re-submission needed.
+
+### Recommendation
+
+- **For paper trading**: `fractional_day` is fine — you're testing signal quality, not overnight risk
+- **For real money**: `whole_shares` is safer — GTC stops survive overnight, weekends, and process restarts without any re-submission logic
+
+---
+
 ## Bugs Fixed
 
 ### Enum string mismatch in alpaca-py (2026-03-06)
@@ -509,6 +563,18 @@ SELECT * FROM alpaca_transactions WHERE symbol = 'MMED' ORDER BY id;
 **Fix**: `buy()` now checks `is_fractionable()` first. For non-fractionable stocks, it fetches the latest trade price and converts to whole shares: `qty = int(notional / price)`.
 
 **Files**: `trader/market/alpaca_broker.py`
+
+### Fractional stop order rejection (2026-03-06)
+
+**Symptom**: `ALPACA STOP FAILED for AVGO — position open without stop protection!` with error `422: fractional orders must be DAY orders`.
+
+**Root cause**: `set_stop()` hardcoded `TimeInForce.GTC`, but Alpaca rejects GTC for fractional quantities. Fractional quantities arise naturally when buying with `notional=` on fractionable stocks.
+
+**Fix**: Two-mode system controlled by `ALPACA_STOP_MODE` env var:
+- `fractional_day` (default): `set_stop()` detects fractional qty and uses DAY TIF. Reconciliation re-submits expired DAY stops each morning.
+- `whole_shares`: `buy()` converts notional to whole shares before ordering, ensuring all stops can use GTC.
+
+**Files**: `trader/market/alpaca_broker.py`, `trader/online/live_monitor.py`, `trader/market/alpaca_reconcile.py`
 
 ---
 

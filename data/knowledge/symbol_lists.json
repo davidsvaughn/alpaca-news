@@ -959,7 +959,14 @@
     "MMED",
     "DIS",
     "COST",
-    "FDX"
+    "FDX",
+    "ELPW",
+    "KVUE",
+    "ALGT",
+    "ASPI",
+    "CAC",
+    "AQN",
+    "MEOH"
   ],
   "crypto": [],
   "rejected": [
@@ -1072,7 +1079,9 @@
     "GRS",
     "SAMHI",
     "ERJ",
-    "PXT"
+    "PXT",
+    "MCC",
+    "BDGI"
   ],
-  "last_updated": "2026-03-06T17:20:18.644355+00:00"
+  "last_updated": "2026-03-06T17:46:53.018386+00:00"
 }
