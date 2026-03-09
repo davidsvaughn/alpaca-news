@@ -95,6 +95,32 @@ def main() -> None:
     signal.signal(signal.SIGINT, _kill_group)
 
     settings = load_settings()
+
+    # Check Schwab token status before launching anything heavy
+    if os.getenv("SCHWAB_DISABLED", "false").lower() not in ("true", "1"):
+        from trader.market.schwab_tokens import check_schwab_tokens, launch_reauth_terminal
+        token_status = check_schwab_tokens()
+        if token_status.needs_reauth:
+            print("SCHWAB: Refresh token expired — launching reauth in a new terminal...")
+            if launch_reauth_terminal():
+                print("SCHWAB: Reauth terminal opened. Complete auth there, then restart the app.")
+                print("SCHWAB: Waiting for reauth to complete (checking every 5s)...")
+                import time as _time
+                for _ in range(120):  # wait up to 10 minutes
+                    _time.sleep(5)
+                    new_status = check_schwab_tokens()
+                    if not new_status.needs_reauth:
+                        print("SCHWAB: Reauth successful! Continuing startup...")
+                        break
+                else:
+                    print("SCHWAB: Timed out waiting for reauth. Continuing anyway (Schwab may not work).")
+            else:
+                print("SCHWAB: Could not open terminal. Run manually: uv run python scripts/schwab_reauth.py")
+        elif token_status.warn_expiring:
+            from datetime import datetime as _dt, timezone as _tz
+            remaining = token_status.refresh_expires - _dt.now(_tz.utc)
+            print(f"SCHWAB: Refresh token expiring in {str(remaining).split('.')[0]} — consider reauthorizing soon.")
+
     observer = ObserverMode(enabled=args.observer or settings.observer_mode)
     if settings.observer_auto_market_hours:
         observer.start_auto_market_hours()

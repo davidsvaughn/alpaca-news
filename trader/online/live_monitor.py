@@ -176,8 +176,12 @@ class LiveExitMonitor:
             # Entry is after all available bars — nothing to evaluate yet
             return
 
-        # Get or create indicator cache for this symbol
+        # Get or create indicator cache for this symbol;
+        # invalidate when bar count changes (indices become stale)
         cache = self._indicator_caches.setdefault(symbol, {})
+        if cache.get("__len__") != len(bars):
+            cache.clear()
+            cache["__len__"] = len(bars)
 
         result: ExitResult = evaluate_exit(
             strategy_key=strategy_key,
@@ -227,13 +231,16 @@ class LiveExitMonitor:
 
             if self.bus:
                 from trader.online.event_bus import PipelineEvent
+                entry_price = entry["price"]
+                pnl_pct = ((exit_price - entry_price) / entry_price * 100) if entry_price else 0
                 self.bus.publish(PipelineEvent(
                     type="watch_exited",
                     payload={
                         "watch_id": watch_id,
                         "symbol": symbol,
                         "exit_price": exit_price,
-                        "exit_reason": result.reason,
+                        "reason": result.reason,
+                        "pnl_pct": round(pnl_pct, 2),
                         "bars_held": result.bars_held,
                     },
                 ))

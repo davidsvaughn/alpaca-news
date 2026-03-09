@@ -16,6 +16,31 @@
 </div>
 <div id="reload-result" class="mb-3"></div>
 
+<div class="card mb-3">
+  <div class="card-header d-flex align-items-center justify-content-between">
+    Schwab Authentication
+    <span id="schwab-status" class="small"></span>
+  </div>
+  <div class="card-body py-2 d-flex align-items-center gap-3">
+    <button class="btn btn-outline-warning btn-sm"
+            hx-post="/api/schwab/reauth"
+            hx-target="#schwab-result"
+            hx-swap="innerHTML">
+      Reauthorize Schwab
+    </button>
+    <span id="schwab-result"></span>
+  </div>
+</div>
+<script>
+fetch('/api/schwab/token-status').then(r=>r.json()).then(d=>{
+  const el=document.getElementById('schwab-status');
+  if(d.needs_reauth) el.innerHTML='<span class="badge bg-danger">Expired</span>';
+  else if(d.warn_expiring) el.innerHTML='<span class="badge bg-warning text-dark">Expiring soon ('+d.refresh_remaining+')</span>';
+  else if(d.healthy) el.innerHTML='<span class="badge bg-success">OK — expires in '+d.refresh_remaining+'</span>';
+  else el.innerHTML='<span class="badge bg-secondary">No tokens</span>';
+}).catch(()=>{});
+</script>
+
 {% for group_name, fields in groups %}
 <div class="card mb-3">
   <div class="card-header">{{ group_name }}</div>

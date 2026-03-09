@@ -1842,6 +1842,36 @@ def create_app(
     async def api_observer_status():
         return {"observer_mode": observer.enabled if observer else False}
 
+    @app.get("/api/schwab/token-status")
+    async def api_schwab_token_status():
+        """Check Schwab token expiry status."""
+        from trader.market.schwab_tokens import check_schwab_tokens
+        status = check_schwab_tokens()
+        result: dict[str, Any] = {
+            "exists": status.exists,
+            "healthy": status.healthy,
+            "needs_reauth": status.needs_reauth,
+            "warn_expiring": status.warn_expiring,
+        }
+        if status.refresh_expires:
+            result["refresh_expires"] = status.refresh_expires.isoformat()
+            remaining = status.refresh_expires - datetime.now(timezone.utc)
+            result["refresh_remaining"] = str(remaining).split(".")[0]
+        return result
+
+    @app.post("/api/schwab/reauth", response_class=HTMLResponse)
+    async def api_schwab_reauth():
+        """Launch Schwab reauth in a new terminal."""
+        from trader.market.schwab_tokens import launch_reauth_terminal
+        if launch_reauth_terminal():
+            return HTMLResponse(
+                "<span class='text-success small'>Reauth terminal opened — complete auth there.</span>"
+            )
+        return HTMLResponse(
+            "<span class='text-danger small'>Could not open terminal. Run: uv run python scripts/schwab_reauth.py</span>",
+            status_code=500,
+        )
+
     @app.post("/api/observer-toggle", response_class=HTMLResponse)
     async def api_observer_toggle(request: Request):
         if observer is None:

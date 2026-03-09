@@ -70,6 +70,16 @@ uv run python -u websocket/insight_sentry_news.py
 uv run python websocket/alpaca_news.py
 ```
 
+### Schwab reauthorization
+
+Schwab OAuth refresh tokens expire every 7 days. On startup, the app checks token status and automatically opens a reauth terminal if expired. You can also reauth manually:
+
+```bash
+uv run python scripts/schwab_reauth.py
+```
+
+Or use the **Reauthorize Schwab** button on the Config page in the dashboard. The token status (OK / expiring soon / expired) is shown there as well.
+
 ### Mock mode (no API keys needed)
 
 ```bash
