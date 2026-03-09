@@ -1067,7 +1067,35 @@
     "AZI",
     "RNAC",
     "KSS",
-    "CLDI"
+    "CLDI",
+    "DOMO",
+    "CBOE",
+    "JOBY",
+    "GTN",
+    "AMRZ",
+    "GFMH",
+    "IPSEY",
+    "BCBP",
+    "WYNN",
+    "PELI",
+    "USEG",
+    "TMC",
+    "DNTH",
+    "IQV",
+    "A",
+    "FTRE",
+    "UBS",
+    "FRQN",
+    "XPEV",
+    "AUMBF",
+    "ADEA",
+    "GD",
+    "APP",
+    "FUAPF",
+    "EBMT",
+    "CASY",
+    "WLDS",
+    "LULU"
   ],
   "crypto": [],
   "rejected": [
@@ -1187,7 +1215,8 @@
     "ORDS",
     "NRN",
     "BBD-B.TO",
-    "SWIGGY"
+    "SWIGGY",
+    "DIXON"
   ],
-  "last_updated": "2026-03-09T17:21:34.555564+00:00"
+  "last_updated": "2026-03-09T20:00:03.268434+00:00"
 }

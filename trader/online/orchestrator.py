@@ -1183,9 +1183,11 @@ def run_watch_loop(
     xstream: XStreamService | None = None,
     tracker: "ActivityTracker | None" = None,
     observer: "ObserverMode | None" = None,
+    feed_registry: "FeedRegistry | None" = None,
 ) -> None:
     """Start watchdog observer + worker threads, block forever."""
     import threading
+    from trader.online.feed_manager import FeedRegistry  # noqa: F811
 
     # Initialise the triage concurrency limiter before spawning workers.
     global _triage_semaphore
@@ -1221,8 +1223,18 @@ def run_watch_loop(
 
     handler = _NewsHandler(work_queue=work_q)
     fs_observer = Observer()
-    for d in watch_dirs:
-        fs_observer.schedule(handler, str(d), recursive=False)
+
+    if feed_registry and feed_registry.feeds:
+        # Wire each FeedManager to the shared Observer + handler
+        for fm in feed_registry.feeds.values():
+            fm.set_observer(fs_observer, handler)
+            if fm.enabled:
+                fm.schedule_watch()
+    else:
+        # Fallback: static scheduling from settings (backwards compat)
+        for d in watch_dirs:
+            fs_observer.schedule(handler, str(d), recursive=False)
+
     fs_observer.start()
     bus.publish(PipelineEvent(type="watching", payload={"dir": ", ".join(str(d) for d in watch_dirs)}))
 

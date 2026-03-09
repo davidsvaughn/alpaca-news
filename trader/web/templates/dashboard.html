@@ -17,6 +17,19 @@
     Loading...
   </button>
   <div id="observer-toggle-result" class="ms-2"></div>
+  <button id="feed-insight_sentry-btn" class="btn btn-sm ms-2"
+          hx-post="/api/feed-toggle/insight_sentry"
+          hx-target="#feed-toggle-result"
+          hx-swap="innerHTML">
+    Loading...
+  </button>
+  <button id="feed-alpaca-btn" class="btn btn-sm ms-2"
+          hx-post="/api/feed-toggle/alpaca"
+          hx-target="#feed-toggle-result"
+          hx-swap="innerHTML">
+    Loading...
+  </button>
+  <div id="feed-toggle-result" class="ms-2"></div>
 </div>
 
 <!-- Stats cards (HTMX-loaded) -->
@@ -129,6 +142,30 @@
 })();
 </script>
 <script>
+// Feed toggle buttons (Insight Sentry / Alpaca)
+(function() {
+  var labels = {insight_sentry: 'Sentry', alpaca: 'Alpaca'};
+  function updateFeedBtn(feed, enabled) {
+    var btn = document.getElementById('feed-' + feed + '-btn');
+    if (!btn) return;
+    var label = labels[feed] || feed;
+    if (enabled) {
+      btn.className = 'btn btn-success btn-sm ms-2';
+      btn.textContent = label + ': ON';
+    } else {
+      btn.className = 'btn btn-outline-secondary btn-sm ms-2';
+      btn.textContent = label + ': OFF';
+    }
+  }
+  fetch('/api/feed-status').then(function(r) { return r.json(); }).then(function(d) {
+    for (var f in d) updateFeedBtn(f, d[f]);
+  }).catch(function() {});
+  document.body.addEventListener('sse:feed_toggled', function(e) {
+    updateFeedBtn(e.detail.feed, e.detail.enabled);
+  });
+})();
+</script>
+<script>
 (function() {
   var eventFeed = document.getElementById('event-feed');
   var tweetFeed = document.getElementById('tweet-feed');
@@ -170,7 +207,8 @@
     job_aborted: 'danger',
     exploration_aborted: 'danger',
     symbols_filtered: 'secondary',
-    symbols_all_filtered: 'warning'
+    symbols_all_filtered: 'warning',
+    feed_toggled: 'success'
   };
 
   function snapLink(id, label) {
@@ -261,6 +299,8 @@
         return p.enabled ? 'Observer mode ENABLED' : 'Observer mode DISABLED';
       case 'observer_skipped':
         return '<span class="feed-dim">Skipped: ' + ((p.path || '').split('/').pop() || '') + '</span>';
+      case 'feed_toggled':
+        return (p.enabled ? 'Started' : 'Stopped') + ' feed: ' + (p.feed || '?');
       case 'follow_up_collection':
         return symBadges(p.symbols) + ' ' + (p.offset_label||'') + ' ($' + (p.cost_usd||0).toFixed(4) + ')';
       case 'follow_up_complete':

@@ -22,6 +22,7 @@ from pathlib import Path
 import uvicorn
 
 from trader.config import load_settings
+from trader.online.feed_manager import FeedManager, FeedRegistry
 from trader.online.observer_mode import ObserverMode
 from trader.db.database import insert_event, open_sqlite, prune_old_events
 from trader.knowledge.store import KnowledgeStore
@@ -150,30 +151,18 @@ def main() -> None:
     run_health_checks()
 
     # Launch news websocket subprocesses (controlled by WS_INSIGHT_SENTRY / WS_ALPACA)
-    ws_procs: list[subprocess.Popen] = []
-    _ws_scripts: list[tuple[bool, str, str]] = [
-        (settings.ws_insight_sentry, "websocket/insight_sentry_news.py", "Insight Sentry"),
-        (settings.ws_alpaca, "websocket/alpaca_news.py", "Alpaca"),
+    feed_registry = FeedRegistry()
+    _feeds_config: list[tuple[str, str, str, bool]] = [
+        ("insight_sentry", "websocket/insight_sentry_news.py", "output/insight_sentry", settings.ws_insight_sentry),
+        ("alpaca", "websocket/alpaca_news.py", "output/alpaca", settings.ws_alpaca),
     ]
-    for enabled, script, label in _ws_scripts:
+    for name, script, watch_dir, enabled in _feeds_config:
+        fm = FeedManager(name=name, script=script, watch_dir=watch_dir, enabled=enabled)
         if enabled:
-            p = subprocess.Popen(
-                [sys.executable, "-u", script],
-                stdout=sys.stdout,
-                stderr=sys.stderr,
-            )
-            ws_procs.append(p)
-            print(f"{label} websocket started (pid {p.pid})")
+            fm.start_subprocess_only()
+        feed_registry.register(fm)
 
-    def _shutdown_ws():
-        for p in ws_procs:
-            p.terminate()
-            try:
-                p.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                p.kill()
-
-    atexit.register(_shutdown_ws)
+    atexit.register(feed_registry.shutdown_all)
 
     xstream: XStreamService | None = None
     if settings.x_stream_enabled and settings.x_stream_mode != "off":
@@ -222,7 +211,7 @@ def main() -> None:
         )
     t = threading.Thread(
         target=run_watch_loop,
-        kwargs={"settings": settings, "db": db, "knowledge": knowledge, "bus": bus, "xstream": xstream, "tracker": tracker, "observer": observer},
+        kwargs={"settings": settings, "db": db, "knowledge": knowledge, "bus": bus, "xstream": xstream, "tracker": tracker, "observer": observer, "feed_registry": feed_registry},
         daemon=True,
     )
     t.start()
@@ -298,7 +287,7 @@ def main() -> None:
 
         atexit.register(_shutdown_xstream)
 
-    app = create_app(settings=settings, bus=bus, db=db, knowledge=knowledge, tracker=tracker, observer=observer)
+    app = create_app(settings=settings, bus=bus, db=db, knowledge=knowledge, tracker=tracker, observer=observer, feed_registry=feed_registry)
     uvicorn.run(app, host="127.0.0.1", port=8000, log_level="info")
 
 

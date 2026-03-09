@@ -68,7 +68,10 @@ def create_app(
     knowledge: KnowledgeStore,
     tracker: ActivityTracker | None = None,
     observer: ObserverMode | None = None,
+    feed_registry: "FeedRegistry | None" = None,
 ) -> FastAPI:
+    from trader.online.feed_manager import FeedRegistry  # noqa: F811
+
     app = FastAPI(title="alpaca-news dashboard")
     app.state.settings = settings  # mutable ref for hot-reload
     app.state.observer = observer
@@ -1886,6 +1889,29 @@ def create_app(
         ))
         label = "ON" if new_state else "OFF"
         return HTMLResponse(f"<span class='small text-muted'>Observer mode: {label}</span>")
+
+    # ------------------------------------------------------------------
+    # Feed toggles (Insight Sentry / Alpaca)
+    # ------------------------------------------------------------------
+
+    @app.get("/api/feed-status")
+    async def api_feed_status():
+        return feed_registry.status() if feed_registry else {}
+
+    @app.post("/api/feed-toggle/{feed_name}", response_class=HTMLResponse)
+    async def api_feed_toggle(feed_name: str):
+        if feed_registry is None:
+            return HTMLResponse("Feed registry not configured", status_code=500)
+        fm = feed_registry.get(feed_name)
+        if fm is None:
+            return HTMLResponse(f"Unknown feed: {feed_name}", status_code=404)
+        new_state = fm.toggle()
+        bus.publish(PipelineEvent(
+            type="feed_toggled",
+            payload={"feed": feed_name, "enabled": new_state},
+        ))
+        label = "ON" if new_state else "OFF"
+        return HTMLResponse(f"<span class='small text-muted'>{fm.label}: {label}</span>")
 
     @app.post("/api/watches/{watch_id}/exit", response_class=HTMLResponse)
     async def api_force_exit_watch(request: Request, watch_id: str):
