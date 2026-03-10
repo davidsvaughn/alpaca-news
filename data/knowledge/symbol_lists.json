@@ -1178,7 +1178,16 @@
     "MRCC",
     "FIVN",
     "NRDBY",
-    "SGN"
+    "SGN",
+    "AGEN",
+    "APYX",
+    "QTTB",
+    "ORIS",
+    "FRHC",
+    "ULBI",
+    "ALEC",
+    "DUK",
+    "USDC"
   ],
   "crypto": [],
   "rejected": [
@@ -1314,7 +1323,8 @@
     "FLERIE",
     "DOM",
     "FEC",
-    "FFH"
+    "FFH",
+    "1894.HK"
   ],
-  "last_updated": "2026-03-10T17:09:28.406468+00:00"
+  "last_updated": "2026-03-10T17:34:25.849345+00:00"
 }

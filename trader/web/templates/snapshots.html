@@ -360,6 +360,36 @@
         <div id="bt-alloc-params" class="bt-param-grid"></div>
       </div>
 
+      <div class="bt-section bt-section-live-overrides" id="bt-live-overrides-section" style="display:none;">
+        <p class="bt-section-title">Live Overrides <span class="small text-muted">(portfolio only)</span></p>
+        <div class="bt-param-grid">
+          <div class="bt-param-row">
+            <div class="form-check form-switch">
+              <input class="form-check-input" type="checkbox" id="bt-vdd-tick" onchange="saveBtSettings()">
+              <label class="form-check-label small" for="bt-vdd-tick">Tick-based VDD</label>
+            </div>
+          </div>
+          <div id="bt-vdd-tick-params" style="display:none;">
+            <div class="bt-param-row">
+              <label class="bt-param-label" for="bt-bucket-s">Bucket</label>
+              <div class="bt-inline-input">
+                <input type="number" id="bt-bucket-s" value="30" min="10" max="120" step="5"
+                       class="form-control form-control-sm bt-short-input" onchange="saveBtSettings()">
+                <span class="small text-muted">s</span>
+              </div>
+            </div>
+            <div class="bt-param-row">
+              <label class="bt-param-label" for="bt-min-trades-bucket">Min trades</label>
+              <div class="bt-inline-input">
+                <input type="number" id="bt-min-trades-bucket" value="3" min="1" max="20" step="1"
+                       class="form-control form-control-sm bt-short-input" onchange="saveBtSettings()">
+                <span class="small text-muted">/bucket</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
       <div class="bt-section bt-section-session">
         <p class="bt-section-title">Execution Window</p>
         <div class="bt-inline-controls">
@@ -954,6 +984,34 @@ function onStrategyChange() {
 
   var strat = _btStrategies[key];
   _renderParamFields(paramsDiv, strat.params, sp, _SP_KEY, key);
+
+  // Show Live Overrides section for VDD strategies
+  var liveSection = document.getElementById('bt-live-overrides-section');
+  if (liveSection) {
+    liveSection.style.display = (key === 'volume_delta_divergence') ? '' : 'none';
+  }
+}
+
+// Toggle tick VDD params visibility when checkbox changes
+document.addEventListener('DOMContentLoaded', function() {
+  var cb = document.getElementById('bt-vdd-tick');
+  if (cb) {
+    cb.addEventListener('change', function() {
+      var p = document.getElementById('bt-vdd-tick-params');
+      if (p) p.style.display = cb.checked ? '' : 'none';
+    });
+  }
+});
+
+function _collectLiveOverrides() {
+  var overrides = {};
+  var cb = document.getElementById('bt-vdd-tick');
+  if (cb && cb.checked) {
+    overrides.vdd_tick = true;
+    overrides.bucket_s = parseInt(document.getElementById('bt-bucket-s').value) || 30;
+    overrides.min_trades_per_bucket = parseInt(document.getElementById('bt-min-trades-bucket').value) || 3;
+  }
+  return overrides;
 }
 
 function _renderParamFields(container, paramDefs, savedVals, storageKey, defKey) {
@@ -1170,6 +1228,7 @@ function goLive() {
     starting_capital: simStart,
     exit_strategy: strategy,
     exit_params: params,
+    live_overrides: _collectLiveOverrides(),
     guard_stop_pct: guardStop,
     guard_target_pct: guardTarget,
     min_hold: minHold,

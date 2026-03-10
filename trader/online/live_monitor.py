@@ -108,9 +108,11 @@ class LiveExitMonitor:
     # Tick-based VDD (optional, from TimescaleDB)
     # ------------------------------------------------------------------
 
-    def _try_tick_vdd(self, symbol: str, exit_params: dict) -> bool | None:
+    def _try_tick_vdd(
+        self, symbol: str, exit_params: dict, live_overrides: dict,
+    ) -> bool | None:
         """Try tick-based VDD check. Returns True/False or None if unavailable."""
-        if not os.getenv("VDD_TICK_ENABLED", "").lower() in ("1", "true", "yes"):
+        if not live_overrides.get("vdd_tick"):
             return None
         try:
             from tick_collector.vdd import check_vdd_exit, get_pool
@@ -124,11 +126,11 @@ class LiveExitMonitor:
             if pool is None:
                 return None
 
-            # lookback_m shared with bar-based; fall back to legacy "lookback" key
+            # lookback_m from exit_params (shared with bar-based); tick params from live_overrides
             lookback_m = float(exit_params.get("lookback_m")
                                or exit_params.get("lookback", 80))
-            bucket_s = int(exit_params.get("bucket_s", 30))
-            min_trades = int(exit_params.get("min_trades_per_bucket", 3))
+            bucket_s = int(live_overrides.get("bucket_s", 30))
+            min_trades = int(live_overrides.get("min_trades_per_bucket", 3))
 
             result = loop.run_until_complete(
                 check_vdd_exit(pool, symbol, lookback_m, bucket_s, min_trades)
@@ -164,6 +166,7 @@ class LiveExitMonitor:
         guard_target_pct = 0.0
         min_hold = 5
         market_close: str | None = "16:00"
+        live_overrides: dict[str, Any] = {}
 
         # If watch has a live_config_id, load config for guards/timing
         config_dict = get_active_live_config(self.db)
@@ -176,6 +179,7 @@ class LiveExitMonitor:
             guard_target_pct = cfg.guard_target_pct
             min_hold = cfg.min_hold
             market_close = cfg.market_close
+            live_overrides = cfg.live_overrides
 
         if not strategy_key:
             log.warning("Watch %s has no exit strategy configured", watch_id)
@@ -238,7 +242,7 @@ class LiveExitMonitor:
             not result.should_exit
             and strategy_key == "volume_delta_divergence"
         ):
-            tick_signal = self._try_tick_vdd(symbol, exit_params)
+            tick_signal = self._try_tick_vdd(symbol, exit_params, live_overrides)
             if tick_signal is True:
                 current_price = float(bars.iloc[-1]["Close"])
                 bars_held = len(bars) - entry_idx
@@ -948,18 +952,17 @@ def _snapshot_equity(monitor: LiveExitMonitor, last_time: float) -> float:
                 if broker:
                     try:
                         acct_info = broker.get_account()
+                        positions = broker.get_positions()
+                        total_unrealized = sum(p.unrealized_pl for p in positions)
                         insert_equity_snapshot(
                             monitor.db,
                             config_id=config_id,
                             timestamp=ts_now,
                             equity=acct_info.equity,
                             cash=acct_info.cash,
-                            unrealized_pnl=acct_info.equity - acct_info.cash,
-                            realized_pnl=acct_info.equity - starting,
-                            position_count=len([
-                                w for w in by_config.get(config_id, [])
-                                if w.get("status") == "holding"
-                            ]),
+                            unrealized_pnl=total_unrealized,
+                            realized_pnl=acct_info.equity - starting - total_unrealized,
+                            position_count=len(positions),
                             source="alpaca",
                         )
                         continue

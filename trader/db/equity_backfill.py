@@ -1,15 +1,16 @@
 """Backfill portfolio_equity_snapshots from watch entry/exit events.
 
 Replays watch lifecycle chronologically to reconstruct an equity curve
-for each portfolio. Produces one snapshot per trade event (buy or sell),
-giving a step-function equity curve.
+for each portfolio. Uses Schwab 1-min candles to compute accurate
+unrealized P&L for open positions at each event timestamp.
 """
 
 from __future__ import annotations
 
 import json
 import logging
-from datetime import datetime, timezone
+from bisect import bisect_right
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from sqlalchemy import text
@@ -61,7 +62,7 @@ def _get_watches_for_config(db: Database, config_id: str) -> list[dict[str, Any]
 def _build_events(watches: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Extract chronological trade events from watches.
 
-    Returns list of {timestamp, type, symbol, pnl_pct, watch_id} sorted by time.
+    Returns list of {timestamp, type, symbol, pnl_pct, watch_id, entry_price} sorted by time.
     """
     events = []
     for w in watches:
@@ -74,6 +75,7 @@ def _build_events(watches: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 "symbol": w.get("symbol", ""),
                 "pnl_pct": 0.0,
                 "watch_id": w.get("watch_id", ""),
+                "entry_price": entry.get("price", 0),
             })
 
         ex = w.get("exit")
@@ -87,11 +89,99 @@ def _build_events(watches: list[dict[str, Any]]) -> list[dict[str, Any]]:
                     "symbol": w.get("symbol", ""),
                     "pnl_pct": float(rpnl) if rpnl is not None else 0.0,
                     "watch_id": w.get("watch_id", ""),
+                    "entry_price": entry.get("price", 0),
                 })
 
-    # Sort chronologically
     events.sort(key=lambda e: e["timestamp"])
     return events
+
+
+def _parse_ts(ts_str: str) -> datetime:
+    """Parse an ISO timestamp string to a tz-aware datetime."""
+    dt = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt
+
+
+def _fetch_price_series(symbols: set[str]) -> dict[str, list[tuple[datetime, float]]]:
+    """Fetch 10 days of 1-min candles from Schwab for each symbol.
+
+    Returns {symbol: [(timestamp, close_price), ...]} sorted by time.
+    Falls back gracefully if Schwab is unavailable.
+    """
+    price_series: dict[str, list[tuple[datetime, float]]] = {}
+    if not symbols:
+        return price_series
+
+    try:
+        from trader.market.schwab_client import SchwabMarketClient
+        schwab = SchwabMarketClient()
+        if not schwab.available:
+            log.warning("Schwab unavailable for backfill price lookup")
+            return price_series
+    except Exception:
+        log.warning("Could not initialize Schwab client for backfill")
+        return price_series
+
+    for sym in symbols:
+        try:
+            candles = schwab.get_intraday_candles(
+                sym, period=10, extended_hours=True,
+            )
+            series = []
+            for c in candles:
+                ts = _parse_ts(c.t)
+                series.append((ts, c.c))
+            series.sort(key=lambda x: x[0])
+            price_series[sym] = series
+            log.info("Fetched %d candles for %s", len(series), sym)
+        except Exception:
+            log.warning("Failed to fetch candles for %s", sym, exc_info=True)
+
+    return price_series
+
+
+def _lookup_price(
+    series: list[tuple[datetime, float]],
+    target: datetime,
+) -> float | None:
+    """Find the closest price at or before target timestamp using binary search."""
+    if not series:
+        return None
+    # Extract just timestamps for bisect
+    times = [s[0] for s in series]
+    idx = bisect_right(times, target) - 1
+    if idx < 0:
+        return None
+    return series[idx][1]
+
+
+def _compute_unrealized(
+    holdings: dict[str, dict[str, Any]],
+    pos_size: float,
+    price_series: dict[str, list[tuple[datetime, float]]],
+    at_time: datetime,
+) -> float:
+    """Compute total unrealized P&L for all open positions at a given time.
+
+    holdings: {watch_id: {symbol, entry_price}}
+    """
+    total = 0.0
+    for _wid, info in holdings.items():
+        sym = info["symbol"]
+        entry_price = info["entry_price"]
+        if entry_price <= 0:
+            continue
+        series = price_series.get(sym)
+        if not series:
+            continue
+        current = _lookup_price(series, at_time)
+        if current is None:
+            continue
+        pnl_pct = (current - entry_price) / entry_price
+        total += pos_size * pnl_pct
+    return total
 
 
 def backfill_portfolio(
@@ -100,6 +190,7 @@ def backfill_portfolio(
     cfg: dict[str, Any],
     *,
     replace: bool = True,
+    price_series: dict[str, list[tuple[datetime, float]]] | None = None,
 ) -> int:
     """Backfill equity snapshots for a single portfolio from its watch history.
 
@@ -108,6 +199,7 @@ def backfill_portfolio(
         config_id: The live config ID
         cfg: The live config dict
         replace: If True, delete existing backfill snapshots first
+        price_series: Pre-fetched price data (if None, fetches from Schwab)
 
     Returns:
         Number of snapshots inserted
@@ -127,6 +219,13 @@ def backfill_portfolio(
 
     events = _build_events(watches)
 
+    # Fetch price data if not provided
+    if price_series is None:
+        all_symbols = {w.get("symbol", "") for w in watches if w.get("symbol")}
+        price_series = _fetch_price_series(all_symbols)
+
+    has_prices = len(price_series) > 0
+
     if replace:
         deleted = delete_equity_history(db, config_id, source="backfill")
         if deleted:
@@ -135,7 +234,8 @@ def backfill_portfolio(
     # Replay events
     cash = starting_capital
     realized_pnl = 0.0
-    holdings: dict[str, str] = {}  # watch_id -> symbol (tracks open positions)
+    # {watch_id: {symbol, entry_price}}
+    holdings: dict[str, dict[str, Any]] = {}
     snapshots: list[dict[str, Any]] = []
 
     # Initial snapshot at config creation time
@@ -156,27 +256,33 @@ def backfill_portfolio(
         wid = evt["watch_id"]
 
         if evt["type"] == "buy":
-            # Deduct position cost from cash
             cash -= pos_size
-            holdings[wid] = evt["symbol"]
+            holdings[wid] = {
+                "symbol": evt["symbol"],
+                "entry_price": evt["entry_price"],
+            }
         elif evt["type"] == "sell":
-            # Add back position value (pos_size + P&L)
             dollar_pnl = pos_size * evt["pnl_pct"] / 100.0
             cash += pos_size + dollar_pnl
             realized_pnl += dollar_pnl
             holdings.pop(wid, None)
 
-        # Equity = cash + value of open positions (at cost basis, since we
-        # don't have historical intraday prices for unrealized P&L)
+        # Compute unrealized P&L using real prices
+        evt_time = _parse_ts(evt["timestamp"])
+        if has_prices and holdings:
+            unrealized = _compute_unrealized(holdings, pos_size, price_series, evt_time)
+        else:
+            unrealized = 0.0
+
         open_value = len(holdings) * pos_size
-        equity = cash + open_value
+        equity = cash + open_value + unrealized
 
         snapshots.append({
             "config_id": config_id,
             "timestamp": evt["timestamp"],
             "equity": round(equity, 2),
             "cash": round(cash, 2),
-            "unrealized_pnl": 0.0,  # backfill can't compute unrealized
+            "unrealized_pnl": round(unrealized, 2),
             "realized_pnl": round(realized_pnl, 2),
             "position_count": len(holdings),
             "source": "backfill",
@@ -190,17 +296,41 @@ def backfill_portfolio(
 def backfill_all_portfolios(db: Database) -> dict[str, int]:
     """Backfill equity snapshots for all live configs with watch history.
 
+    Fetches Schwab price data once for all symbols across all portfolios.
+
     Returns: {config_id: count_inserted}
     """
     from trader.db.database import get_all_live_configs
 
     configs = get_all_live_configs(db)
+    if not configs:
+        return {}
+
+    # Collect all symbols across all portfolios for a single batch fetch
+    all_symbols: set[str] = set()
+    config_watches: dict[str, list[dict[str, Any]]] = {}
+    for cfg in configs:
+        config_id = cfg.get("config_id", "")
+        if not config_id:
+            continue
+        watches = _get_watches_for_config(db, config_id)
+        config_watches[config_id] = watches
+        for w in watches:
+            sym = w.get("symbol", "")
+            if sym:
+                all_symbols.add(sym)
+
+    # Fetch prices once for all symbols
+    log.info("Fetching Schwab candles for %d symbols", len(all_symbols))
+    price_series = _fetch_price_series(all_symbols)
+    log.info("Got price data for %d/%d symbols", len(price_series), len(all_symbols))
+
     results = {}
     for cfg in configs:
         config_id = cfg.get("config_id", "")
         if not config_id:
             continue
-        count = backfill_portfolio(db, config_id, cfg)
+        count = backfill_portfolio(db, config_id, cfg, price_series=price_series)
         results[config_id] = count
 
     total = sum(results.values())
