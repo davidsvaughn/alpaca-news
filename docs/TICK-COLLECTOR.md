@@ -446,8 +446,8 @@ A file lock (`logs/.tick_collector.lock`) prevents duplicate instances. If a sec
 | `SCHWAB_APP_SECRET` | (required) | Schwab API secret |
 | `TICK_SYMBOLS` | (from `symbols.txt`) | Comma-separated symbol override |
 | `TICK_FLUSH_INTERVAL` | `2.0` | Seconds between buffer flushes |
-| `TICK_PORTFOLIO_SYNC_INTERVAL` | `60` | Seconds between portfolio sync polls |
-| `TICK_PORTFOLIO_COOLOFF` | `60` | Minutes to keep streaming after position exits |
+| `TICK_PORTFOLIO_SYNC_INTERVAL` | `30` | Seconds between portfolio sync polls (reflect current tickers) |
+| `TICK_PORTFOLIO_COOLOFF` | `300` | Minutes to keep streaming after position exits |
 
 ### Test (no Schwab connection needed)
 
