@@ -340,3 +340,96 @@ issue, we can add a continuous aggregate at the most common bucket interval.
       rows out of the query. The first L1 update per symbol has no baseline;
       these rows contribute `size` but no `volume_delta`, so exclude them from
       the proportional distribution.
+
+---
+
+## Live Portfolio Overrides
+
+### The Problem
+
+Tick-based VDD is only available for **live portfolios** (the tick collector
+streams held positions), not for backtests (which use historical candle data).
+But portfolios are launched from the backtest panel using the same config.
+
+This creates a tension: how do you configure live-only features (tick VDD,
+future live-only enhancements) without polluting the backtest param space?
+
+### Design: `live_overrides` on LiveConfig
+
+Add a `live_overrides: dict[str, Any]` field to `LiveConfig`. This is a flat
+dict for settings that only apply to the live portfolio — the backtest runner
+never sees them.
+
+```python
+# LiveConfig dataclass
+live_overrides: dict[str, Any] = field(default_factory=dict)
+
+# Example value:
+# {
+#     "vdd_tick": true,         # enable tick-based VDD supplement
+#     "bucket_s": 30,           # tick VDD bucket interval
+#     "min_trades_per_bucket": 3 # tick VDD min trades filter
+# }
+```
+
+**Key properties:**
+
+- **Backtest ignores it** — `evaluate_exit()` only reads `exit_params`. The
+  `live_overrides` dict is never passed to strategy runners.
+- **Live monitor reads it** — `_check_holding()` checks `live_overrides` for
+  tick VDD settings (replaces `VDD_TICK_ENABLED` env var).
+- **Extensible** — future live-only features go here (e.g. different polling
+  intervals, position sizing tweaks, streaming config).
+- **Backward compatible** — existing configs without `live_overrides` work
+  unchanged (defaults to empty dict).
+
+### UI Integration
+
+The backtest panel stays unchanged. The "Go Live" dialog gets a collapsible
+"Live Overrides" section, shown only when launching a portfolio:
+
+```
+Backtest panel:  [strategy params]         ← same as today
+Go Live dialog:  [strategy params]
+                 ▸ Live Overrides
+                   ☑ Tick-based VDD
+                   Bucket size: [30]s
+                   Min trades/bucket: [3]
+```
+
+### Data Flow
+
+```
+Backtest panel → exit_params: {"lookback_m": 80}
+                                         ↓
+Go Live dialog → live_overrides: {"vdd_tick": true, "bucket_s": 30}
+                                         ↓
+POST /api/live/config → LiveConfig(exit_params=..., live_overrides=...)
+                                         ↓
+LiveExitMonitor._check_holding():
+  1. evaluate_exit(exit_params)           ← bar-based VDD (always runs, handles guards)
+  2. if live_overrides.get("vdd_tick"):   ← tick supplement (only if enabled)
+       check_vdd_exit(lookback_m, bucket_s, ...)
+```
+
+### Live Monitor Behavior
+
+When `live_overrides["vdd_tick"]` is enabled:
+
+1. **Always run bar-based** `evaluate_exit()` first — handles guards (stop/target)
+   and bar-based VDD signal
+2. **If bar-based says "still open"** AND strategy is VDD → run tick-based check
+3. **If tick fires** → exit with reason `"signal_tick"` (distinguishable from
+   bar-based `"signal"` in logs and transaction history)
+4. **If TimescaleDB unavailable** → silently fall back to bar-based only
+
+This "supplement" approach is safest for initial rollout: bar-based catches
+everything it always did, tick-based can only add earlier exits.
+
+### Implementation Steps
+
+1. Add `live_overrides` field to `LiveConfig` (default `{}`)
+2. Update `POST /api/live/config` to accept `live_overrides` from request body
+3. Update `_check_holding()` to read `live_overrides` instead of env var
+4. Add "Live Overrides" collapsible section to Go Live dialog in UI
+5. Remove `VDD_TICK_ENABLED` env var (setting moves into config)

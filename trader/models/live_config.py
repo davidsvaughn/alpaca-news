@@ -53,6 +53,10 @@ class LiveConfig:
     # Post-exit
     cooling_off_market_hours: float = 24.0  # market hours to keep streaming after exit
 
+    # Live-only overrides (ignored by backtest, read by live monitor)
+    # e.g. {"vdd_tick": true, "bucket_s": 30, "min_trades_per_bucket": 3}
+    live_overrides: dict[str, Any] = field(default_factory=dict)
+
     # Alpaca paper trading (optional — when set, orders are executed via Alpaca)
     alpaca_account_id: str | None = None  # e.g. "PA31QXNAPB1H"
 

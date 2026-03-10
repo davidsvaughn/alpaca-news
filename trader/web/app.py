@@ -1647,6 +1647,7 @@ def create_app(
                 price_delay_minutes=int(body.get("price_delay_minutes", 10)),
                 market_close=body.get("market_close", "16:00"),
                 cooling_off_market_hours=float(body.get("cooling_off_market_hours", 24.0)),
+                live_overrides=body.get("live_overrides", {}),
                 alpaca_account_id=body.get("alpaca_account_id"),
             )
             insert_live_config(db, config=cfg.to_dict())

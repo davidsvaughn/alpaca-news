@@ -263,19 +263,33 @@
     positions &#9662;
   </a>
   <div id="positions-{{ loop.index }}" class="_toggle-section" style="display:none">
+    <!-- Equity chart -->
+    <div class="mt-2 mb-2" style="position:relative; height:160px;">
+      <canvas id="equity-chart-{{ loop.index }}" data-config-id="{{ p.config.config_id }}"
+              data-sim-ending="{{ p.sim.sim_ending if p.sim and p.sim.sim_ending else '' }}"></canvas>
+    </div>
+
     {% if p.holding %}
     <h6 class="text-muted small mb-1 mt-2">Open</h6>
     {{ holdings_table(p.holding) }}
     {% endif %}
 
     {% if p.cooling %}
-    <h6 class="text-muted small mb-1">Recently Exited</h6>
-    {{ cooling_table(p.cooling) }}
+    <a href="#" class="text-decoration-none small text-muted _toggle-link" data-target="cooling-{{ loop.index }}" style="font-size:.75rem">
+      Recently Exited ({{ p.stats.cooling_count }}) &#9662;
+    </a>
+    <div id="cooling-{{ loop.index }}" class="_toggle-section" style="display:none">
+      {{ cooling_table(p.cooling) }}
+    </div>
     {% endif %}
 
     {% if p.closed %}
-    <h6 class="text-muted small mb-1">Closed ({{ p.stats.closed_count }})</h6>
-    {{ closed_table(p.closed, p.stats.closed_count) }}
+    <a href="#" class="text-decoration-none small text-muted _toggle-link" data-target="closed-{{ loop.index }}" style="font-size:.75rem">
+      Closed ({{ p.stats.closed_count }}) &#9662;
+    </a>
+    <div id="closed-{{ loop.index }}" class="_toggle-section" style="display:none">
+      {{ closed_table(p.closed, p.stats.closed_count) }}
+    </div>
     {% endif %}
   </div>
   {% else %}
@@ -300,12 +314,20 @@
     {{ holdings_table(legacy.holding) }}
     {% endif %}
     {% if legacy.cooling %}
-    <h6 class="text-muted small mb-1">Recently Exited</h6>
-    {{ cooling_table(legacy.cooling) }}
+    <a href="#" class="text-decoration-none small text-muted _toggle-link" data-target="cooling-legacy" style="font-size:.75rem">
+      Recently Exited ({{ legacy.stats.cooling_count }}) &#9662;
+    </a>
+    <div id="cooling-legacy" class="_toggle-section" style="display:none">
+      {{ cooling_table(legacy.cooling) }}
+    </div>
     {% endif %}
     {% if legacy.closed %}
-    <h6 class="text-muted small mb-1">Closed ({{ legacy.stats.closed_count }})</h6>
-    {{ closed_table(legacy.closed, legacy.stats.closed_count) }}
+    <a href="#" class="text-decoration-none small text-muted _toggle-link" data-target="closed-legacy" style="font-size:.75rem">
+      Closed ({{ legacy.stats.closed_count }}) &#9662;
+    </a>
+    <div id="closed-legacy" class="_toggle-section" style="display:none">
+      {{ closed_table(legacy.closed, legacy.stats.closed_count) }}
+    </div>
     {% endif %}
   </div>
 </div>
@@ -314,4 +336,117 @@
 {% if not portfolios and not legacy.holding and not legacy.cooling and not legacy.closed %}
 <p class="text-muted">No positions. Activate a portfolio and wait for matching snapshots.</p>
 {% endif %}
+
+<script>
+(function() {
+  // Destroy previous chart instances to avoid Chart.js duplication on HTMX re-swap
+  var _eqCharts = window._equityCharts || {};
+  Object.values(_eqCharts).forEach(function(c) { try { c.destroy(); } catch(e) {} });
+  window._equityCharts = {};
+
+  document.querySelectorAll('canvas[id^="equity-chart-"]').forEach(function(canvas) {
+    var configId = canvas.dataset.configId;
+    if (!configId) return;
+
+    fetch('/api/portfolio/' + configId + '/equity-history')
+      .then(function(r) { return r.json(); })
+      .then(function(data) {
+        var snaps = data.snapshots || [];
+        if (snaps.length < 2) {
+          canvas.style.display = 'none';
+          return;
+        }
+
+        var labels = snaps.map(function(s) {
+          var d = new Date(s.timestamp);
+          return (d.getMonth()+1) + '/' + d.getDate() + ' ' +
+                 d.getHours().toString().padStart(2,'0') + ':' +
+                 d.getMinutes().toString().padStart(2,'0');
+        });
+        var values = snaps.map(function(s) { return s.equity; });
+        var starting = data.starting_capital || values[0];
+
+        // Use live sim value (includes unrealized P&L) if available
+        var simEnding = parseFloat(canvas.dataset.simEnding);
+        if (simEnding && simEnding > 0) {
+          // Append current sim value as the latest data point
+          var now = new Date();
+          labels.push((now.getMonth()+1) + '/' + now.getDate() + ' ' +
+                       now.getHours().toString().padStart(2,'0') + ':' +
+                       now.getMinutes().toString().padStart(2,'0'));
+          values.push(simEnding);
+        }
+
+        var latest = values[values.length - 1];
+        var pnlPct = ((latest - starting) / starting * 100).toFixed(2);
+        var isPositive = latest >= starting;
+
+        var ctx = canvas.getContext('2d');
+        var lineColor = isPositive ? '#198754' : '#dc3545';
+        var fillColor = isPositive ? 'rgba(25,135,84,0.08)' : 'rgba(220,53,69,0.08)';
+
+        var chart = new Chart(ctx, {
+          type: 'line',
+          data: {
+            labels: labels,
+            datasets: [{
+              label: 'Portfolio Value',
+              data: values,
+              borderColor: lineColor,
+              backgroundColor: fillColor,
+              fill: true,
+              tension: 0.3,
+              pointRadius: 0,
+              pointHitRadius: 8,
+              borderWidth: 2,
+            }]
+          },
+          options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {
+              legend: { display: false },
+              title: {
+                display: true,
+                text: '$' + starting.toLocaleString() + '  \u2192  $' + latest.toLocaleString(undefined, {minimumFractionDigits:2, maximumFractionDigits:2}) + '  (' + (pnlPct >= 0 ? '+' : '') + pnlPct + '%)',
+                font: { size: 12 },
+                color: lineColor,
+                padding: { bottom: 4 },
+              },
+              tooltip: {
+                callbacks: {
+                  label: function(ctx) {
+                    return '$' + ctx.parsed.y.toLocaleString(undefined, {minimumFractionDigits:2, maximumFractionDigits:2});
+                  }
+                }
+              }
+            },
+            scales: {
+              x: {
+                display: true,
+                ticks: { maxTicksLimit: 8, font: { size: 10 }, color: '#999' },
+                grid: { display: false },
+              },
+              y: {
+                display: true,
+                ticks: {
+                  font: { size: 10 },
+                  color: '#999',
+                  callback: function(v) { return '$' + v.toLocaleString(); }
+                },
+                grid: { color: 'rgba(0,0,0,0.05)' },
+              }
+            },
+            interaction: { mode: 'nearest', axis: 'x', intersect: false },
+          }
+        });
+        window._equityCharts[configId] = chart;
+      })
+      .catch(function(err) {
+        console.warn('Equity chart load failed for ' + configId, err);
+        canvas.style.display = 'none';
+      });
+  });
+})();
+</script>
 

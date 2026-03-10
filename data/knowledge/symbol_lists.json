@@ -1169,7 +1169,16 @@
     "LFS",
     "CARR",
     "SSTI",
-    "FIGR"
+    "FIGR",
+    "MYGN",
+    "SEIC",
+    "IBM",
+    "ZNB",
+    "INTU",
+    "MRCC",
+    "FIVN",
+    "NRDBY",
+    "SGN"
   ],
   "crypto": [],
   "rejected": [
@@ -1307,5 +1316,5 @@
     "FEC",
     "FFH"
   ],
-  "last_updated": "2026-03-10T16:40:17.220100+00:00"
+  "last_updated": "2026-03-10T17:09:28.406468+00:00"
 }
