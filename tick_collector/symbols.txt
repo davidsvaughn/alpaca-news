@@ -1,0 +1,42 @@
+# Tick Collector — default symbol watchlist
+# One symbol per line. Comments (#) and blank lines are ignored.
+# Override with TICK_SYMBOLS env var (comma-separated).
+
+# Mega-cap / high-volume
+AAPL
+NVDA
+TSLA
+MSFT
+AMZN
+GOOGL
+META
+AMD
+
+# Indices / ETFs
+SPY
+QQQ
+IWM
+DIA
+
+# Semiconductor
+AVGO
+INTC
+MU
+MRVL
+
+# Finance
+JPM
+GS
+BAC
+
+# Energy
+XOM
+CVX
+
+# Other high-volume
+NFLX
+CRM
+ORCL
+UBER
+COIN
+PLTR
