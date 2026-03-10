@@ -336,8 +336,8 @@ def load_settings(*, dotenv_path: str | None = None, override: bool = False) -> 
         learning_mode=learning_mode,
         trading_mode=trading_mode,  # type: ignore[arg-type]
         debug=debug,
-        observer_mode=observer_mode,
-        observer_auto_market_hours=observer_auto_market_hours,
+        online=online,
+        online_auto_market_hours=online_auto_market_hours,
         news_watch_dirs=news_watch_dirs,
         data_dir=data_dir,
         sqlite_path=sqlite_path,

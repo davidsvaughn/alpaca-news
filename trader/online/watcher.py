@@ -169,13 +169,13 @@ class WatchMonitor:
         db: Database,
         bus: EventBus,
         market: MarketDataService | None = None,
-        observer: "ObserverMode | None" = None,
+        online: "OnlineMode | None" = None,
     ) -> None:
         self.settings = settings
         self.db = db
         self.bus = bus
         self.market = market
-        self.observer = observer
+        self.online = online
 
     def run_check_cycle(self) -> None:
         """Run one check cycle across all active (non-sealed) watches."""
@@ -226,8 +226,8 @@ class WatchMonitor:
 
         if depth == "lightweight":
             self._lightweight_checkin(watch_dict, minutes_held)
-        elif self.observer is not None and self.observer.enabled:
-            # Observer mode: downgrade LLM check-ins to lightweight (no API costs)
+        elif self.online is not None and not self.online.enabled:
+            # Offline: downgrade LLM check-ins to lightweight (no API costs)
             self._lightweight_checkin(watch_dict, minutes_held)
         else:
             self._agent_checkin(watch_dict, depth, minutes_held)

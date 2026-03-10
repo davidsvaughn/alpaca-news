@@ -80,19 +80,19 @@ class FollowUpCollector:
         bus: EventBus,
         market: MarketDataService | None = None,
         tracker: "ActivityTracker | None" = None,
-        observer: "ObserverMode | None" = None,
+        online: "OnlineMode | None" = None,
     ) -> None:
         self.settings = settings
         self.db = db
         self.bus = bus
         self.market = market or MarketDataService()
         self.tracker = tracker
-        self.observer = observer
+        self.online = online
 
     def run_cycle(self) -> None:
         """Check all active follow-ups, run collections that are due."""
-        if self.observer is not None and self.observer.enabled:
-            return  # Skip entire cycle in observer mode
+        if self.online is not None and not self.online.enabled:
+            return  # Skip entire cycle when offline
 
         for fu_dict in get_active_follow_ups(self.db):
             try:

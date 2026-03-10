@@ -1138,7 +1138,7 @@ def _worker_loop(
     bus: EventBus,
     xstream: XStreamService | None = None,
     tracker: "ActivityTracker | None" = None,
-    observer: "ObserverMode | None" = None,
+    online: "OnlineMode | None" = None,
 ) -> None:
     """Pull paths from the queue and process them one at a time."""
     while True:
@@ -1147,11 +1147,11 @@ def _worker_loop(
         except queue.Empty:
             continue
         try:
-            if observer is not None and observer.enabled:
-                print(f"OBSERVER: skipped {path.name}")
+            if online is not None and not online.enabled:
+                print(f"OFFLINE: skipped {path.name}")
                 bus.publish(PipelineEvent(
-                    type="observer_skipped",
-                    payload={"path": str(path), "reason": "observer_mode"},
+                    type="online_skipped",
+                    payload={"path": str(path), "reason": "offline"},
                 ))
                 continue
 
@@ -1182,7 +1182,7 @@ def run_watch_loop(
     bus: EventBus,
     xstream: XStreamService | None = None,
     tracker: "ActivityTracker | None" = None,
-    observer: "ObserverMode | None" = None,
+    online: "OnlineMode | None" = None,
     feed_registry: "FeedRegistry | None" = None,
 ) -> None:
     """Start watchdog observer + worker threads, block forever."""
@@ -1212,7 +1212,7 @@ def run_watch_loop(
                 "bus": bus,
                 "xstream": xstream,
                 "tracker": tracker,
-                "observer": observer,
+                "online": online,
             },
             name=f"explorer-{i}",
             daemon=True,
@@ -1248,7 +1248,7 @@ def run_watch_loop(
     if settings.watch_enabled and os.getenv("WATCH_LEGACY_MONITOR", "").lower() in ("1", "true", "yes"):
         from trader.online.watcher import WatchMonitor, monitoring_loop
 
-        monitor = WatchMonitor(settings=settings, db=db, bus=bus, observer=observer)
+        monitor = WatchMonitor(settings=settings, db=db, bus=bus, online=online)
         monitor_thread = threading.Thread(
             target=monitoring_loop,
             args=(monitor,),
@@ -1370,7 +1370,7 @@ def run_watch_loop(
     if settings.follow_up_enabled:
         from trader.online.follow_up_collector import FollowUpCollector, collector_loop
 
-        fu_collector = FollowUpCollector(settings=settings, db=db, bus=bus, tracker=tracker, observer=observer)
+        fu_collector = FollowUpCollector(settings=settings, db=db, bus=bus, tracker=tracker, online=online)
         fu_thread = threading.Thread(
             target=collector_loop,
             args=(fu_collector, settings.follow_up_collector_interval_s),

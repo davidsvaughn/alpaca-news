@@ -1,4 +1,4 @@
-{% if observer_mode %}<span class="badge bg-warning text-dark me-1">OBSERVER</span>{% endif %}
+{% if not online %}<span class="badge bg-warning text-dark me-1">OFFLINE</span>{% endif %}
 <span class="badge bg-primary">{{ holding_count }} holding</span>
 <span class="badge bg-info text-dark">{{ snapshots_today }} items today</span>
 <span class="badge {% if daily_cost > max_daily_cost * 0.8 %}bg-danger{% else %}bg-secondary{% endif %}">

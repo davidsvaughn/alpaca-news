@@ -55,7 +55,7 @@ from trader.knowledge.store import KnowledgeStore
 from trader.models.watch import WatchBuilder
 from trader.online.activity_tracker import ActivityTracker
 from trader.online.event_bus import EventBus, PipelineEvent
-from trader.online.observer_mode import ObserverMode
+from trader.online.online_mode import OnlineMode
 from trader.reflection.eval_record import build_eval_record, snapshot_export_to_markdown
 from trader.web.sse import sse_response
 
@@ -67,14 +67,14 @@ def create_app(
     db: Database,
     knowledge: KnowledgeStore,
     tracker: ActivityTracker | None = None,
-    observer: ObserverMode | None = None,
+    online: OnlineMode | None = None,
     feed_registry: "FeedRegistry | None" = None,
 ) -> FastAPI:
     from trader.online.feed_manager import FeedRegistry  # noqa: F811
 
     app = FastAPI(title="alpaca-news dashboard")
     app.state.settings = settings  # mutable ref for hot-reload
-    app.state.observer = observer
+    app.state.online = online
 
     # In-memory backtest job store: {job_id: {status, result, error, created_at, strategy}}
     _backtest_jobs: dict[str, dict[str, Any]] = {}
@@ -766,7 +766,7 @@ def create_app(
                 "snapshots_today": count_snapshots_today(db),
                 "daily_cost": sealed_cost + inflight,
                 "max_daily_cost": app.state.settings.max_daily_cost,
-                "observer_mode": observer.enabled if observer else False,
+                "online": online.enabled if online else False,
             },
         )
 
@@ -1773,13 +1773,13 @@ def create_app(
             if old_val != new_val:
                 changes.append((field.name, old_val, new_val))
 
-        # Sync observer mode if .env changed it
-        if observer is not None:
+        # Sync online mode if .env changed it
+        if online is not None:
             for name, old_v, new_v in changes:
-                if name == "observer_mode":
-                    observer.set(new_v)
+                if name == "online":
+                    online.set(new_v)
                     bus.publish(PipelineEvent(
-                        type="observer_mode_changed",
+                        type="online_mode_changed",
                         payload={"enabled": new_v, "source": "reload"},
                     ))
                     break
@@ -1838,12 +1838,12 @@ def create_app(
         return JSONResponse({"price_delay_minutes": new.price_delay_minutes})
 
     # ------------------------------------------------------------------
-    # Observer mode
+    # Online mode
     # ------------------------------------------------------------------
 
-    @app.get("/api/observer-status")
-    async def api_observer_status():
-        return {"observer_mode": observer.enabled if observer else False}
+    @app.get("/api/online-status")
+    async def api_online_status():
+        return {"online": online.enabled if online else False}
 
     @app.get("/api/schwab/token-status")
     async def api_schwab_token_status():
@@ -1875,20 +1875,20 @@ def create_app(
             status_code=500,
         )
 
-    @app.post("/api/observer-toggle", response_class=HTMLResponse)
-    async def api_observer_toggle(request: Request):
-        if observer is None:
+    @app.post("/api/online-toggle", response_class=HTMLResponse)
+    async def api_online_toggle(request: Request):
+        if online is None:
             return HTMLResponse(
-                "<div class='alert alert-danger'>Observer mode not configured</div>",
+                "<div class='alert alert-danger'>Online mode not configured</div>",
                 status_code=500,
             )
-        new_state = observer.toggle()
+        new_state = online.toggle()
         bus.publish(PipelineEvent(
-            type="observer_mode_changed",
+            type="online_mode_changed",
             payload={"enabled": new_state},
         ))
         label = "ON" if new_state else "OFF"
-        return HTMLResponse(f"<span class='small text-muted'>Observer mode: {label}</span>")
+        return HTMLResponse(f"<span class='small text-muted'>Online: {label}</span>")
 
     # ------------------------------------------------------------------
     # Feed toggles (Insight Sentry / Alpaca)
@@ -1966,9 +1966,9 @@ def create_app(
         symbols: str = Form(""),
     ):
         """Trigger manual exploration for a headline + symbols."""
-        if observer is not None and observer.enabled:
+        if online is not None and not online.enabled:
             return HTMLResponse(
-                "<div class='alert alert-warning'>Observer mode is active — manual exploration is blocked.</div>"
+                "<div class='alert alert-warning'>System is offline — manual exploration is blocked.</div>"
             )
         symbol_list = [s.strip().upper() for s in symbols.split(",") if s.strip()]
         if not headline.strip():
@@ -2331,7 +2331,7 @@ def _settings_groups(s: Settings) -> list[tuple[str, list[tuple[str, Any]]]]:
     """Group Settings fields by category for display."""
     # Map field names to groups (order matters for display)
     groups_map: list[tuple[str, list[str]]] = [
-        ("Modes", ["learning_mode", "trading_mode", "debug", "observer_mode"]),
+        ("Modes", ["learning_mode", "trading_mode", "debug", "online"]),
         ("Paths", ["news_watch_dirs", "data_dir", "sqlite_path", "snapshots_dir"]),
         (
             "Models",

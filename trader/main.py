@@ -23,7 +23,7 @@ import uvicorn
 
 from trader.config import load_settings
 from trader.online.feed_manager import FeedManager, FeedRegistry
-from trader.online.observer_mode import ObserverMode
+from trader.online.online_mode import OnlineMode
 from trader.db.database import insert_event, open_sqlite, prune_old_events
 from trader.knowledge.store import KnowledgeStore
 from trader.online.activity_tracker import Activity, ActivityTracker
@@ -77,8 +77,8 @@ def _kill_stale_servers(primary_port: int = 8000, legacy_port: int = 8765) -> No
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="alpaca-news trader")
-    parser.add_argument("--observer", action="store_true",
-                        help="Start in observer mode (no new jobs launched)")
+    parser.add_argument("--offline", action="store_true",
+                        help="Start offline (no new jobs launched)")
     args = parser.parse_args()
 
     _kill_stale_servers()
@@ -122,12 +122,12 @@ def main() -> None:
             remaining = token_status.refresh_expires - _dt.now(_tz.utc)
             print(f"SCHWAB: Refresh token expiring in {str(remaining).split('.')[0]} — consider reauthorizing soon.")
 
-    observer = ObserverMode(enabled=args.observer or settings.observer_mode)
-    if settings.observer_auto_market_hours:
-        observer.start_auto_market_hours()
-        print("OBSERVER MODE: auto market hours enabled (ON outside 9:30-16:00 ET)")
-    if observer.enabled:
-        print("OBSERVER MODE: active — no new jobs will be launched")
+    online = OnlineMode(enabled=not args.offline and settings.online)
+    if settings.online_auto_market_hours:
+        online.start_auto_market_hours()
+        print("ONLINE: auto market hours enabled (ON during 9:30-16:00 ET)")
+    if not online.enabled:
+        print("OFFLINE: no new jobs will be launched")
     db = open_sqlite(settings.sqlite_path)
     knowledge = KnowledgeStore(root_dir=Path(settings.data_dir))
     knowledge.ensure_defaults()
@@ -211,7 +211,7 @@ def main() -> None:
         )
     t = threading.Thread(
         target=run_watch_loop,
-        kwargs={"settings": settings, "db": db, "knowledge": knowledge, "bus": bus, "xstream": xstream, "tracker": tracker, "observer": observer, "feed_registry": feed_registry},
+        kwargs={"settings": settings, "db": db, "knowledge": knowledge, "bus": bus, "xstream": xstream, "tracker": tracker, "online": online, "feed_registry": feed_registry},
         daemon=True,
     )
     t.start()
@@ -230,8 +230,8 @@ def main() -> None:
     threading.Thread(target=_price_at_maintenance, daemon=True).start()
 
     # Optional: process last N existing files on startup (background thread)
-    if settings.backfill_on_start and observer.enabled:
-        print("OBSERVER: backfill skipped")
+    if settings.backfill_on_start and not online.enabled:
+        print("OFFLINE: backfill skipped")
     elif settings.backfill_on_start:
         def _backfill():
             files: list[Path] = []
@@ -287,7 +287,7 @@ def main() -> None:
 
         atexit.register(_shutdown_xstream)
 
-    app = create_app(settings=settings, bus=bus, db=db, knowledge=knowledge, tracker=tracker, observer=observer, feed_registry=feed_registry)
+    app = create_app(settings=settings, bus=bus, db=db, knowledge=knowledge, tracker=tracker, online=online, feed_registry=feed_registry)
     uvicorn.run(app, host="127.0.0.1", port=8000, log_level="info")
 
 

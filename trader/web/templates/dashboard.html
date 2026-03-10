@@ -10,13 +10,13 @@
 {% block content %}
 <div class="d-flex align-items-center mb-3">
   <h2 class="mb-0">Dashboard</h2>
-  <button id="observer-toggle-btn" class="btn btn-sm ms-3"
-          hx-post="/api/observer-toggle"
-          hx-target="#observer-toggle-result"
+  <button id="online-toggle-btn" class="btn btn-sm ms-3"
+          hx-post="/api/online-toggle"
+          hx-target="#online-toggle-result"
           hx-swap="innerHTML">
     Loading...
   </button>
-  <div id="observer-toggle-result" class="ms-2"></div>
+  <div id="online-toggle-result" class="ms-2"></div>
   <button id="feed-insight_sentry-btn" class="btn btn-sm ms-2"
           hx-post="/api/feed-toggle/insight_sentry"
           hx-target="#feed-toggle-result"
@@ -121,21 +121,21 @@
 })();
 </script>
 <script>
-// Observer mode toggle button
+// Online mode toggle button
 (function() {
   function updateBtn(enabled) {
-    var btn = document.getElementById('observer-toggle-btn');
+    var btn = document.getElementById('online-toggle-btn');
     if (!btn) return;
     if (enabled) {
-      btn.className = 'btn btn-warning btn-sm ms-3';
-      btn.textContent = 'Observer: ON';
+      btn.className = 'btn btn-success btn-sm ms-3';
+      btn.textContent = 'Online';
     } else {
       btn.className = 'btn btn-outline-secondary btn-sm ms-3';
-      btn.textContent = 'Observer: OFF';
+      btn.textContent = 'Offline';
     }
   }
-  fetch('/api/observer-status').then(function(r) { return r.json(); }).then(function(d) { updateBtn(d.observer_mode); }).catch(function() {});
-  document.body.addEventListener('sse:observer_mode_changed', function(e) {
+  fetch('/api/online-status').then(function(r) { return r.json(); }).then(function(d) { updateBtn(d.online); }).catch(function() {});
+  document.body.addEventListener('sse:online_mode_changed', function(e) {
     updateBtn(e.detail.enabled);
     document.body.dispatchEvent(new CustomEvent('sse-refresh', {bubbles: true}));
   });
@@ -202,8 +202,8 @@
     follow_up_collection: 'secondary',
     follow_up_complete: 'info',
     follow_up_collector_started: 'info',
-    observer_mode_changed: 'warning',
-    observer_skipped: 'secondary',
+    online_mode_changed: 'warning',
+    online_skipped: 'secondary',
     job_aborted: 'danger',
     exploration_aborted: 'danger',
     symbols_filtered: 'secondary',
@@ -295,9 +295,9 @@
         return '<span class="feed-dim">[' + (p.current||0) + '/' + (p.total||0) + '] ' + (p.file||'') + '</span>';
       case 'backfill_complete':
         return (p.succeeded||0) + '/' + (p.total||0) + ' succeeded';
-      case 'observer_mode_changed':
-        return p.enabled ? 'Observer mode ENABLED' : 'Observer mode DISABLED';
-      case 'observer_skipped':
+      case 'online_mode_changed':
+        return p.enabled ? 'System ONLINE' : 'System OFFLINE';
+      case 'online_skipped':
         return '<span class="feed-dim">Skipped: ' + ((p.path || '').split('/').pop() || '') + '</span>';
       case 'feed_toggled':
         return (p.enabled ? 'Started' : 'Stopped') + ' feed: ' + (p.feed || '?');
