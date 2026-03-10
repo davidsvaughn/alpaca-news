@@ -11,6 +11,8 @@ from __future__ import annotations
 import logging
 import os
 
+from datetime import timedelta
+
 import asyncpg
 import numpy as np
 import pandas as pd
@@ -70,10 +72,9 @@ async def get_vdd_bars(
         est_uptick, est_downtick, trade_count
     or None if no data.
     """
-    bucket_interval = f"{bucket_s} seconds"
+    bucket_interval = timedelta(seconds=bucket_s)
     # Add 10% buffer so rolling window has enough history
-    query_minutes = lookback_m * 1.1 + 2.0
-    query_interval = f"{query_minutes:.0f} minutes"
+    query_interval = timedelta(minutes=lookback_m * 1.1 + 2.0)
 
     async with pool.acquire() as conn:
         rows = await conn.fetch(_BARS_SQL, bucket_interval, symbol, query_interval)

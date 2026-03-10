@@ -1196,7 +1196,12 @@
     "FN",
     "VIAV",
     "SOAR",
-    "FLYX"
+    "FLYX",
+    "ADBE",
+    "CMCSA",
+    "LEMIF",
+    "VSBGF",
+    "EVO"
   ],
   "crypto": [],
   "rejected": [
@@ -1333,7 +1338,10 @@
     "DOM",
     "FEC",
     "FFH",
-    "1894.HK"
+    "1894.HK",
+    "PUNJLLOYD",
+    "ADANIENT",
+    "LEMSE"
   ],
-  "last_updated": "2026-03-10T17:46:00.208916+00:00"
+  "last_updated": "2026-03-10T18:27:08.263367+00:00"
 }

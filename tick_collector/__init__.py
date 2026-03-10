@@ -1,1 +1,1 @@
-"""Tick Collector: Schwab TIMESALE_EQUITY → TimescaleDB pipeline."""
+"""Tick Collector: Schwab L1 stream → TimescaleDB pipeline."""

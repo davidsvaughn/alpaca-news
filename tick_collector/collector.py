@@ -22,7 +22,7 @@ L1_FIELDS = "0,1,2,3,4,5,8,9,10,11,12,16,17,18,33,35,41,42"
 
 
 class TickCollector:
-    """Streams Schwab L1 (and optionally TIMESALE) data into TimescaleDB.
+    """Streams Schwab L1 data into TimescaleDB.
 
     Architecture:
     - schwabdev Stream runs its callback on a background thread
@@ -48,12 +48,10 @@ class TickCollector:
         self._stream = None
         self._pool = None
         self._stop = asyncio.Event()
-        self._timesale_available = False
 
         # Stats
         self._start_time: float | None = None
         self._l1_count = 0
-        self._ts_count = 0
         self._flush_count = 0
         self._last_message_time: float = 0
 
@@ -77,10 +75,6 @@ class TickCollector:
                     code = resp.get("content", {}).get("code", "?")
                     msg = resp.get("content", {}).get("msg", "")
                     log.info("[%s] %s → code=%s %s", service, command, code, msg)
-                    if service == "TIMESALE_EQUITY" and code == 0:
-                        self._timesale_available = True
-                    elif service == "TIMESALE_EQUITY" and code != 0:
-                        log.warning("TIMESALE_EQUITY unavailable (code=%s), using L1 only", code)
                 return
 
             self._last_message_time = time.time()
@@ -91,8 +85,6 @@ class TickCollector:
                 service = data.get("service")
                 if service == "LEVELONE_EQUITIES":
                     self._parse_l1(data, received_at)
-                elif service == "TIMESALE_EQUITY":
-                    self._parse_timesale(data, received_at)
 
         except Exception:
             log.exception("Error in message handler")
@@ -155,40 +147,6 @@ class TickCollector:
             self.buffer.append(trade)
             self._l1_count += 1
 
-    def _parse_timesale(self, data: dict, received_at: datetime) -> None:
-        """Parse TIMESALE_EQUITY messages into Trade records."""
-        for content in data.get("content", []):
-            symbol = content.get("key", content.get("0", ""))
-            if not symbol:
-                continue
-
-            time_ms = content.get("1")
-            price = content.get("2")
-            size = content.get("3")
-
-            if price is None or size is None:
-                continue
-
-            if time_ms is not None:
-                trade_time = datetime.fromtimestamp(time_ms / 1000, tz=timezone.utc)
-            else:
-                trade_time = received_at
-
-            direction = self.classifier.classify(symbol, float(price))
-
-            trade = Trade(
-                time=trade_time,
-                received_at=received_at,
-                symbol=symbol,
-                price=float(price),
-                size=int(size),
-                exchange=None,  # TIMESALE doesn't provide exchange in fields 0-4
-                direction=direction,
-                source="TS",
-            )
-            self.buffer.append(trade)
-            self._ts_count += 1
-
     # ------------------------------------------------------------------
     # Async flush loop
     # ------------------------------------------------------------------
@@ -214,18 +172,85 @@ class TickCollector:
             elapsed = time.time() - (self._start_time or time.time())
             stats = self.buffer.stats
             n_syms = len(self._portfolio.active_symbols)
+            active = self._stream.active if self._stream else False
             log.info(
-                "Status [%.0fs]: symbols=%d L1=%d TS=%d flushed=%d pending=%d",
-                elapsed, n_syms, self._l1_count, self._ts_count,
+                "Status [%.0fs]: symbols=%d L1=%d flushed=%d pending=%d stream=%s",
+                elapsed, n_syms, self._l1_count,
                 self._flush_count, stats["pending"],
+                "active" if active else "DEAD",
             )
+
+    # ------------------------------------------------------------------
+    # Stream health check
+    # ------------------------------------------------------------------
+
+    async def _health_check_loop(self) -> None:
+        """Monitor stream health and force-restart if dead."""
+        check_interval = 30  # seconds between checks
+        dead_threshold = 90  # seconds with no messages before restart
+        max_restarts = 10  # give up after this many consecutive restarts
+
+        consecutive_restarts = 0
+
+        while not self._stop.is_set():
+            await asyncio.sleep(check_interval)
+
+            if not self._stream or not self._last_message_time:
+                continue
+
+            silence = time.time() - self._last_message_time
+            stream_active = self._stream.active
+
+            # Stream is active and we got recent data — all good
+            if stream_active and silence < dead_threshold:
+                consecutive_restarts = 0
+                continue
+
+            # Stream looks dead
+            if not stream_active or silence >= dead_threshold:
+                consecutive_restarts += 1
+                if consecutive_restarts > max_restarts:
+                    log.error(
+                        "Stream restart limit reached (%d). Giving up — manual intervention required.",
+                        max_restarts,
+                    )
+                    continue
+
+                log.warning(
+                    "Stream appears dead (active=%s, silence=%.0fs). "
+                    "Attempting restart %d/%d...",
+                    stream_active, silence, consecutive_restarts, max_restarts,
+                )
+
+                try:
+                    self._restart_stream()
+                    log.info("Stream restarted successfully (active=%s)", self._stream.active)
+                except Exception:
+                    log.exception("Stream restart failed")
+
+    def _restart_stream(self) -> None:
+        """Stop and restart the schwabdev stream, preserving subscriptions."""
+        if not self._stream:
+            return
+
+        # Stop without clearing subscriptions — schwabdev replays them on reconnect
+        try:
+            self._stream.stop(clear_subscriptions=False)
+        except Exception:
+            log.exception("Error during stream stop")
+
+        # Small delay before reconnecting
+        time.sleep(2)
+
+        # Restart — schwabdev resets _should_stop and replays all subscriptions
+        self._stream.start(receiver=self._on_message)
 
     # ------------------------------------------------------------------
     # Main run
     # ------------------------------------------------------------------
 
     def _subscribe(self, symbols: list[str]) -> None:
-        """Subscribe to L1 (and attempt TIMESALE) for given symbols."""
+        """Subscribe to L1 for given symbols."""
         if not symbols or not self._stream:
             return
         keys = list(symbols)
@@ -234,13 +259,6 @@ class TickCollector:
         l1_req = self._stream.level_one_equities(keys=keys, fields=L1_FIELDS)
         log.info("Subscribing L1 (%d symbols): %s", len(keys), keys_str)
         self._stream.send(l1_req)
-
-        ts_req = self._stream.basic_request(
-            service="TIMESALE_EQUITY",
-            command="ADD",
-            parameters={"keys": keys_str, "fields": "0,1,2,3,4"},
-        )
-        self._stream.send(ts_req)
 
     def _unsubscribe(self, symbols: set[str]) -> None:
         """Unsubscribe symbols from L1 stream."""
@@ -311,12 +329,13 @@ class TickCollector:
         for sig in (signal.SIGTERM, signal.SIGINT):
             loop.add_signal_handler(sig, self._handle_signal)
 
-        # Run flush + status + portfolio sync loops until stopped
+        # Run flush + status + portfolio sync + health check loops until stopped
         log.info("Collector running. Press Ctrl+C to stop.")
         await asyncio.gather(
             self._flush_loop(),
             self._status_loop(),
             self._portfolio_sync_loop(),
+            self._health_check_loop(),
         )
 
         # Shutdown
@@ -349,6 +368,6 @@ class TickCollector:
 
         elapsed = time.time() - (self._start_time or time.time())
         log.info(
-            "Stopped after %.0fs. Total: L1=%d TS=%d flushed=%d",
-            elapsed, self._l1_count, self._ts_count, self._flush_count,
+            "Stopped after %.0fs. Total: L1=%d flushed=%d",
+            elapsed, self._l1_count, self._flush_count,
         )
