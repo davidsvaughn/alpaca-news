@@ -38,14 +38,35 @@ The shadow collector (LEVELONE_EQUITIES → 1-minute bars) has two fatal problem
 1. **Schwab WebSocket drops during market hours** with no reconnection logic.
    The collector captures almost no trading-hour data — only extended hours.
    (See [VDD-COMPARISON.md § Root Cause](VDD-COMPARISON.md#root-cause-schwab-stream-drops-during-market-hours))
+   **Update**: schwabdev has built-in reconnection (discovered 2026-03-10) — needs
+   market-hours testing to confirm it fixes this.
 
 2. **LEVELONE_EQUITIES provides aggregated snapshots**, not individual trades.
    `total_volume` is cumulative; we infer per-tick volume by differencing. This
    means we can't filter by trade size, can't compute sub-minute VDD, and can't
    distinguish institutional from retail flow.
 
-We need a new approach:
-- **TIMESALE_EQUITY** for per-trade data (price, size, timestamp, exchange)
+### Three Tiers of Volume Delta Accuracy
+
+| Tier | Source | Trade-Size Filtering | Status |
+|------|--------|---------------------|--------|
+| **1** (current) | L1: `last_price` + `total_volume` differencing | None — all trades lumped | Active |
+| **2** (quick win) | L1 + `last_size` (field 9), `trade_time` (35), `last_mic_id` (41) | Approximate (~30-50% of trades visible) | **Available now — just add fields to subscription** |
+| **3** (ideal) | `TIMESALE_EQUITY` per-trade feed | Exact — every trade visible | Testing (code=11 outside market hours) |
+
+**Tier 2 detail**: LEVELONE_EQUITIES updates ~1/sec. If 20 trades happen between
+updates, only the last trade's `last_size` is reported. `total_volume` captures
+aggregate volume, but individual trade sizes are lost. Still useful: if
+`last_size >= 1000`, at least one large trade happened. Combined with
+`total_volume` differencing, this provides an approximate institutional flow signal.
+
+**Tier 3 detail**: TIMESALE_EQUITY provides every individual trade with price,
+size, time, and exchange. Full trade-size filtering, sub-minute VDD, accurate
+tick classification. May not be available on Schwab's current API (returned
+`code=11` at 2 AM — needs market-hours testing).
+
+We need:
+- **TIMESALE_EQUITY** for per-trade data (Tier 3) — or Tier 2 as fallback
 - **Separate always-on service** decoupled from the trader app (which restarts frequently)
 - **Robust storage** for 50-100+ symbols of raw trade data
 - **Reliable reconnection** so we never lose market-hours data
@@ -463,15 +484,21 @@ services:
 
 ## Roadmap
 
-### Phase 1: Prove TIMESALE_EQUITY Works
-> **Goal**: Verify data quality, frequency, and subscription mechanics.
+### Phase 1: Streaming Data Quality (TIMESALE + L1 Extended)
+> **Goal**: Verify data quality, frequency, and subscription mechanics for both
+> TIMESALE_EQUITY (Tier 3) and LEVELONE_EQUITIES with extended fields (Tier 2).
 
-- [ ] Write standalone test script: connect to Schwab WebSocket, subscribe
-      to TIMESALE_EQUITY for 5 symbols, log raw trades for 30 minutes
-- [ ] Measure actual trade frequency per symbol (compare to estimates)
-- [ ] Verify fields available (timestamp precision, exchange codes, etc.)
+- [x] Write standalone test script: `scripts/test_timesale.py` + `scripts/run_timesale_test.sh`
+- [x] Add L1 extended fields (9=LastSize, 35=TradeTime, 41=LastMICID) to test script
+- [x] Add volume gap analysis (L1 total_volume jump vs last_size) to test script
+- [ ] **Run during market hours** — the critical next step (TIMESALE returned
+      code=11 at 2 AM; L1 extended fields untested with live data)
+- [ ] Measure actual TIMESALE trade frequency per symbol (compare to estimates)
+- [ ] Measure L1 volume gaps (how much volume is missed between L1 updates)
+- [ ] Verify TIMESALE fields available (timestamp precision, exchange codes, etc.)
 - [ ] Test: can TIMESALE_EQUITY and LEVELONE_EQUITIES coexist on same connection?
-- [ ] Test schwabdev `start_auto()` reconnection behavior
+- [ ] Test schwabdev built-in reconnection during market hours (does it fix dropouts?)
+- [ ] If TIMESALE unavailable: evaluate Tier 2 (L1 + last_size) as primary approach
 - [ ] Document findings in this file
 
 ### Phase 2: Resilient Collector Service
@@ -536,13 +563,19 @@ services:
 | 2026-03-10 | 50-100+ symbols target | Broad watchlist beyond just portfolio holdings for research and pre-screening |
 | 2026-03-10 | Shared DB for collector↔trader comm | Simplest; trader already does SQL. Optional Unix socket API for real-time control |
 | 2026-03-10 | Raw subscription bypass (not schwabdev fork) | Less maintenance; send TIMESALE_EQUITY JSON directly on existing WebSocket |
+| 2026-03-10 | Three-tier accuracy model (L1 basic → L1 extended → TIMESALE) | L1 already has `last_size` (field 9) we weren't using; Tier 2 is a free quick-win even if TIMESALE is unavailable |
+| 2026-03-10 | Test script captures both TIMESALE and L1 extended fields | Compare Tier 2 vs Tier 3 data quality side-by-side during market hours |
 
 ---
 
 ## Open Questions
 
-- [ ] **schwabdev `start_auto()` behavior**: Does it handle mid-session reconnection,
-      or only daily start/stop scheduling? Needs testing (Phase 1).
+- [x] **schwabdev `start_auto()` behavior**: Only does daily start/stop scheduling
+      (checks every 30s, starts/stops stream by time-of-day). Does NOT add heartbeat
+      or mid-session reconnection. However, `_run_streamer()` already has built-in
+      reconnection with exponential backoff (2s → 4s → ... → 120s cap) and auto
+      re-subscribes all recorded subscriptions. This may already fix the market-hours
+      dropout — needs testing during market hours.
 - [ ] **TIMESALE_EQUITY throttling**: Does Schwab throttle or aggregate trade data
       at the API level? Need to measure actual vs theoretical frequency.
 - [ ] **OAuth token refresh during stream**: Does schwabdev auto-refresh the OAuth
@@ -565,7 +598,19 @@ services:
 
 ## Issues / Blockers
 
-_None yet — project just started._
+### [ISSUE-1] TIMESALE services return "Service not available" outside trading hours
+**Status**: investigating (likely expected behavior)
+**Severity**: low
+**Description**: Tests at ~2 AM ET on 2026-03-10. All three TIMESALE services
+(EQUITY, OPTIONS, FUTURES) returned `code=11: Service not available or temporary
+down`. Meanwhile, LEVELONE services (EQUITIES, FUTURES), CHART_EQUITY, NYSE_BOOK,
+and NASDAQ_BOOK all subscribed successfully (code=0). LEVELONE_FUTURES was actively
+streaming live data (futures trade ~24h). LEVELONE_EQUITIES returned static
+snapshots (stale last-known state, not live trades). This confirms the WebSocket
+is fully functional — TIMESALE services simply don't activate outside trading
+sessions. US pre-market starts at 4 AM ET.
+**Next step**: Re-test during pre-market (4-9:30 AM ET) or regular hours (9:30 AM-4 PM ET).
+**Script**: `./scripts/run_timesale_test.sh --duration 300`
 
 <!-- Template for new issues:
 ### [ISSUE-N] Title

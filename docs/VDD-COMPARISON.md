@@ -86,11 +86,17 @@ delta — e.g., only count trades > 1,000 shares — to isolate what "big money"
 and filter out retail noise. This requires **per-trade data** with individual trade sizes.
 
 **Current limitation**: Schwab's `LEVELONE_EQUITIES` stream (what we use now) provides
-`last_price` + `total_volume` (cumulative for the day) at ~1-second intervals. The
-shadow collector infers incremental volume by differencing consecutive `total_volume`
-readings, but that increment is the **aggregate of all trades** in the ~1-second window.
-If 50 trades happened (some 100-share retail, some 10,000-share institutional), they're
-lumped into one number. No way to filter by trade size.
+~1 update/sec per symbol. The shadow collector uses `last_price` (field 3) +
+`total_volume` (field 8) and infers incremental volume by differencing consecutive
+`total_volume` readings.
+
+**Update (2026-03-10)**: L1 also provides `Last Size` (field 9), `Trade Time` (field 35),
+and `Last MIC ID` (field 41) — we were not subscribing to these. `Last Size` gives the
+size of the most recent trade, enabling *approximate* trade-size filtering. However, L1
+is **not a per-trade feed**: if 20 trades happen between ~1-sec updates, only the last
+trade's price/size is reported. `total_volume` may jump by far more than `last_size`,
+meaning we miss individual trades. Approximate coverage: ~30-50% of trades for liquid
+stocks. See [TICK-COLLECTOR.md](TICK-COLLECTOR.md) for the three-tier accuracy model.
 
 **Solution: Schwab TIMESALE_EQUITY**
 

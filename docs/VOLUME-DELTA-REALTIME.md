@@ -46,7 +46,7 @@ Can we trust the backtest's tuned parameters (lookback=80) in a tick-level envir
 | **Max symbols per stream** | **500** per subscription | 30 (trades/quotes), unlimited (bars) | No documented limit |
 | **Concurrent connections** | 1 per account | 1 per endpoint | Unknown (appears unlimited) |
 | **Update frequency** | ~1/sec (QoS 2), up to 2/sec (QoS 0) | Real-time per trade | ~1-2/sec |
-| **Fields for volume delta** | `last_price` (3) + `total_volume` (8) | trades: price + size; bars: OHLCV | price + day_volume |
+| **Fields for volume delta** | `last_price` (3) + `total_volume` (8) + `last_size` (9) + `trade_time` (35) + `last_mic_id` (41) | trades: price + size; bars: OHLCV | price + day_volume |
 | **Volume accuracy** | Full exchange (best) | IEX only (~2-3%, unreliable) | Full exchange (good) |
 | **Monthly cost** | $0 (with brokerage account) | $0 | $0 |
 | **Authentication** | OAuth2 (schwabdev auto-manages) | API key + secret | None |
@@ -332,6 +332,25 @@ time window.
 2. Keep bar-level as fallback (in case Schwab stream disconnects)
 3. May need to recalibrate lookback parameter
 
+### Three Tiers of Volume Delta Accuracy (2026-03-10)
+
+| Tier | Source | What You Get | Trade-Size Filtering |
+|------|--------|-------------|---------------------|
+| **1 (current)** | L1: `last_price` + `total_volume` differencing | Aggregate uptick/downtick per ~1s update | No — all trades lumped together |
+| **2 (available now)** | L1 + fields 9, 35, 41: `last_size`, `trade_time`, `last_mic_id` | Per-update: last trade's price, size, time, exchange | Approximate — only sees ~30-50% of individual trades (L1 coalesces between updates) |
+| **3 (ideal)** | `TIMESALE_EQUITY` per-trade feed | Every individual trade: price, size, time, exchange | Exact — every trade visible, full size filtering |
+
+**Why Tier 2 is approximate**: LEVELONE_EQUITIES updates ~1/sec. If 20 trades
+happen between updates, only the last trade's `last_size` is reported. The
+`total_volume` jump captures aggregate volume, but individual trade sizes are
+lost. Example: `total_volume` jumps by 5,000 but `last_size` = 200 — the other
+4,800 shares came from trades we never saw individually.
+
+**Tier 2 is still useful**: Even approximate large-trade detection is better than
+none. If `last_size >= 1000`, you know at least one large trade happened. Combined
+with `total_volume` differencing for aggregate flow, this provides a meaningful
+hybrid signal. See [TICK-COLLECTOR.md](TICK-COLLECTOR.md) for the full plan.
+
 ### Data Source Strategy for Live Trading
 
 ```
@@ -369,19 +388,28 @@ almost entirely from extended hours (after 4 PM ET).
 **Root cause:** `schwab_client.py` `start_stream()` creates a `schwabdev.Stream`
 and calls `start()` once. There is no reconnection logic — if the WebSocket drops
 mid-day, streaming silently stops until the next explicit `start_stream()` call.
-The schwabdev library may handle some reconnection internally, but it's clearly
-not sufficient for all-day reliability.
+
+**Update (2026-03-10):** Investigation of schwabdev internals revealed that
+`_run_streamer()` **already has built-in reconnection** with exponential backoff
+(2s → 4s → ... → 120s cap) and automatically re-subscribes all recorded
+subscriptions on reconnect. The reconnection triggers on `ConnectionClosedError`
+but NOT on silent disconnects (WebSocket stays open but no data flows). The
+trading-hour dropouts may be silent disconnects that bypass this logic. Needs
+market-hours testing to confirm. See [TICK-COLLECTOR.md](TICK-COLLECTOR.md)
+for the ongoing investigation.
 
 **Impact:**
 - Shadow collector captures almost no trading-hour data — useless for VDD comparison
 - Any live feature depending on Schwab streaming (real-time quotes, volume delta)
   is unreliable during market hours
 
-**Fix needed:** Add reconnection/heartbeat logic to `schwab_client.py`:
-- Monitor for stream disconnections (no updates received for N seconds)
-- Auto-reconnect and re-subscribe to all active symbols
-- Log reconnection events for debugging
-- Consider schwabdev's built-in reconnect capabilities (if any)
+**Fix needed:**
+- [x] Investigate schwabdev's built-in reconnect capabilities — has exponential
+      backoff + auto re-subscribe (2026-03-10)
+- [ ] Test during market hours to see if built-in reconnection is sufficient
+- [ ] If not: add heartbeat monitor (detect silent disconnects — no data for N
+      seconds → force reconnect)
+- [ ] Log reconnection events for debugging
 
 ---
 

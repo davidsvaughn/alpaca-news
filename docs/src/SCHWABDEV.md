@@ -156,28 +156,79 @@ Returns session times (pre-market, regular, post-market) and open/closed status.
 **Our method**: `SchwabMarketClient.start_stream(symbols)` / `stop_stream()`
 **Protocol**: `schwabdev.Stream` → WebSocket → `LEVELONE_EQUITIES`
 
-Streams real-time tick-by-tick updates:
+Streams real-time updates (~1/sec per symbol, ~55 updates/min):
 
-| Field ID | Name | Type |
-|----------|------|------|
-| 0 | symbol | str |
-| 1 | bid | float |
-| 2 | ask | float |
-| 3 | last_price | float |
-| 4 | bid_size | int |
-| 5 | ask_size | int |
-| 8 | total_volume | int |
-| 10 | high | float |
-| 11 | low | float |
-| 12 | close | float |
-| 17 | open | float |
-| 18 | net_change | float |
-| 33 | mark | float |
-| 42 | net_pct_change | float |
+| Field ID | Name | Type | Currently Subscribed |
+|----------|------|------|---------------------|
+| 0 | symbol | str | Yes |
+| 1 | bid | float | Yes |
+| 2 | ask | float | Yes |
+| 3 | last_price | float | Yes |
+| 4 | bid_size | int | Yes |
+| 5 | ask_size | int | Yes |
+| 8 | total_volume | int | Yes |
+| **9** | **last_size** | **long** | **No** — should add |
+| 10 | high | float | Yes |
+| 11 | low | float | Yes |
+| 12 | close | float | Yes |
+| **16** | **last_id** | **char** | **No** — exchange of last trade |
+| 17 | open | float | Yes |
+| 18 | net_change | float | Yes |
+| 33 | mark | float | Yes |
+| **35** | **trade_time_ms** | **long** | **No** — ms-precision trade time |
+| **41** | **last_mic_id** | **str** | **No** — 4-char MIC exchange code |
+| 42 | net_pct_change | float | Yes |
+
+**Missing fields (9, 16, 35, 41)**: These are available in the API but not
+currently subscribed. Adding them would enable "Tier 2" volume delta — tracking
+the size and exchange of each observed last-trade, enabling approximate
+trade-size filtering. See [TICK-COLLECTOR.md](../TICK-COLLECTOR.md) for the
+three-tier volume delta accuracy model.
+
+**Important limitation**: LEVELONE_EQUITIES is **not a per-trade feed**. Updates
+arrive ~1/sec. If 20 trades happen between updates, only the last trade's
+price/size is reported. The `total_volume` field captures aggregate volume, but
+`last_size` only reflects the most recent trade — so `total_volume` may jump by
+far more than `last_size`. This means trade-size filtering from L1 is approximate
+(you see ~30-50% of individual trades, not all of them).
 
 **Thread safety**: `StreamState` uses `threading.Lock` for concurrent access.
 
+**Reconnection**: schwabdev has built-in reconnection with exponential backoff
+(2s → 4s → ... → 120s cap) and automatically re-subscribes all recorded
+subscriptions on reconnect. This was discovered 2026-03-10 but needs market-hours
+testing to confirm it fixes the observed trading-hour dropouts.
+
 **Used by**: Real-time volume delta computation, uptick/downtick analysis
+
+### 8. TIMESALE_EQUITY (Per-Trade Feed — Not Yet Integrated)
+
+**Status**: Testing (see [TICK-COLLECTOR.md](../TICK-COLLECTOR.md))
+**Protocol**: Same Schwab WebSocket, different service subscription
+
+TIMESALE_EQUITY provides **individual trade prints** — each message is one
+trade with its price and size. This would enable:
+- Exact trade-size filtering (institutional flow isolation)
+- Sub-minute VDD computation
+- More accurate uptick/downtick classification
+
+| Field ID | Name | Type | Description |
+|----------|------|------|-------------|
+| 0 | symbol | str | Ticker symbol |
+| 1 | trade_time | long | Trade time (ms since epoch) |
+| 2 | last_price | double | Execution price |
+| 3 | last_size | int | Number of shares traded |
+| 4 | last_sequence | int | Trade sequence number |
+
+**Subscription**: Uses `stream.basic_request("TIMESALE_EQUITY", "ADD", ...)`
+since schwabdev doesn't have a dedicated wrapper method. Coexists on the same
+WebSocket connection as LEVELONE_EQUITIES.
+
+**Known issue**: Returns `code=11: Service not available` outside US trading
+sessions (tested 2 AM ET 2026-03-10). Needs market-hours testing.
+
+**Full reference**: See [`docs/refs/SchwabStreamerAPI_LEVELONE.md`](../refs/SchwabStreamerAPI_LEVELONE.md)
+for all 52 LEVELONE_EQUITIES fields.
 
 ---
 
@@ -281,6 +332,7 @@ There are **no monthly fees, no per-call charges, and no minimum account balance
 | `orders()` | Place/manage orders | Available (trading) |
 | `transactions()` | Transaction history | Available |
 | `instruments()` with `search` | Instrument search by name | Available |
+| TIMESALE_EQUITY | Per-trade prints (price, size, time, exchange) | Testing ([TICK-COLLECTOR.md](../TICK-COLLECTOR.md)) |
 | Level-2 streaming | NYSE/NASDAQ order book depth | Available (WebSocket) |
 | Options streaming | Real-time options quotes | Available (WebSocket) |
 | Futures data | Futures quotes/history | Available |
