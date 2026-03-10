@@ -442,6 +442,20 @@ class AlpacaBroker:
             results = [r for r in results if r.symbol == symbol.upper()]
         return results
 
+    def get_recent_sells(self, symbol: str, limit: int = 5) -> list[OrderResult]:
+        """Get recent closed sell orders for a symbol (filled, cancelled, etc.)."""
+        from alpaca.trading.requests import GetOrdersRequest
+        from alpaca.trading.enums import QueryOrderStatus, OrderSide
+
+        params = GetOrdersRequest(
+            status=QueryOrderStatus.CLOSED,
+            side=OrderSide.SELL,
+            symbols=[symbol.upper()],
+            limit=limit,
+        )
+        orders = self._client.get_orders(filter=params)
+        return [self._to_result(o) for o in orders]
+
     # ------------------------------------------------------------------
     # Confirmed execution — wait for fills
     # ------------------------------------------------------------------

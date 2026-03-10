@@ -1120,7 +1120,18 @@
     "WWD",
     "LEGN",
     "QCOM",
-    "FLNT"
+    "FLNT",
+    "LEG",
+    "MNDO",
+    "BG",
+    "CNC",
+    "SNN",
+    "KVHI",
+    "TCEHY",
+    "SMTC",
+    "CRSP",
+    "WLFC",
+    "RIVN"
   ],
   "crypto": [],
   "rejected": [
@@ -1251,7 +1262,8 @@
     "SUNPHARMA",
     "ZYDUSLIFE",
     "LUPIN",
-    "MANKIND"
+    "MANKIND",
+    "NAZARA"
   ],
-  "last_updated": "2026-03-10T14:18:12.918722+00:00"
+  "last_updated": "2026-03-10T14:57:57.816566+00:00"
 }

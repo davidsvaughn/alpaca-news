@@ -277,20 +277,33 @@ All events are published to the event bus as `alpaca_trade_update` for UI refres
 
 ## Reconciliation
 
-Runs on startup for each linked account. Alpaca is always the source of truth.
+Runs on startup for each linked account. Alpaca is always the source of truth. See `trader/market/alpaca_reconcile.py`.
 
 | Scenario | Action |
 |----------|--------|
 | Alpaca has position + we have matching watch | OK (update entry price if mismatched) |
-| We have watch + Alpaca has no position | Force-exit the watch (`reconcile_no_alpaca_position`) |
-| Alpaca has position + we have no watch | Cancel open orders (stops hold shares), then close the orphan position on Alpaca |
+| We have watch + Alpaca has no position | **Verify** (see safety rules below) |
+| Alpaca has position + we have no watch | Adopt orphan (create watch from config) |
 | Entry price differs by > $0.01 | Update watch entry to match Alpaca's `avg_entry_price` |
 
-**When would these happen?**
-- Process crash between buy confirmation and watch persist (unlikely but possible)
-- Process crash during an exit
-- Manual position changes on Alpaca dashboard
-- Stop order filled while process was down
+### Safety rules for "watch exists, no Alpaca position" (Rule 3)
+
+Reconciliation **never** force-exits a watch based on a single bulk `get_positions()` miss. It follows a 3-step verification:
+
+1. **Per-symbol check**: Calls `broker.get_position(symbol)` — a separate API call. If the position is found, the bulk lookup was a transient glitch. Logs a WARNING, does NOT force-exit.
+2. **Sell history check**: Queries `broker.get_recent_sells(symbol)` for recent filled sell orders. If a sell fill is found, uses the **actual sell price** for the exit record (not entry price).
+3. **No sell found**: If the position is gone AND no sell order exists, this is unexpected (possible API issue or manual intervention). Logs an ERROR, does NOT force-exit. Requires manual investigation.
+
+All anomalies are printed to console AND logged to `logs/trader.log` for visibility.
+
+### Pre-buy safety check
+
+Before every buy, `LivePortfolioManager` calls `broker.get_position(symbol)`. If Alpaca already holds the symbol, the buy is blocked. This prevents double-buys regardless of watch DB state.
+
+### When would reconciliation act?
+- Stop order filled while process was down → position sold, sell fill found → force-exit with actual price
+- Manual close on Alpaca dashboard → position gone, sell fill found → force-exit
+- Process crash during exit → position may or may not be gone, verified either way
 
 ---
 

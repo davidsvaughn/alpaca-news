@@ -8,8 +8,15 @@ Rules:
   1. Alpaca has a position, we have a matching "holding" watch → OK
   2. Alpaca has a position, we have NO matching watch → adopt (create watch
      from config) or force-close on Alpaca (if close_orphans=True)
-  3. We have a "holding" watch, Alpaca has NO position → force-exit the watch
+  3. We have a "holding" watch, Alpaca has NO position → VERIFY before
+     force-exiting (double-check with per-symbol lookup + check sell history)
   4. Entry price mismatch → update watch to match Alpaca's avg_entry_price
+
+SAFETY: Rule 3 never force-exits on a single bulk lookup miss. It requires:
+  - Per-symbol get_position() also returns None (confirms not a transient miss)
+  - If a recent sell fill is found, uses actual sell price (not entry price)
+  - If no sell found and position not found, logs ERROR and skips (phantom miss)
+  - All anomalies are printed to console + logged for user visibility
 """
 
 from __future__ import annotations
@@ -51,6 +58,7 @@ def reconcile(
     summary: dict[str, Any] = {
         "ok": [],
         "watch_force_exited": [],
+        "watch_phantom_miss": [],   # bulk miss but position still exists (transient)
         "alpaca_orphan_closed": [],
         "alpaca_orphan_adopted": [],
         "entry_price_updated": [],
@@ -114,21 +122,70 @@ def reconcile(
             _log_tx(db, account_id, "reconcile_ok", symbol,
                     detail={"entry_price": entry_price, "watch_id": watch["watch_id"]})
 
-    # Rule 3: We have a watch but Alpaca has no position → force-exit
+    # Rule 3: We have a watch but Alpaca has no position → VERIFY before force-exiting
     for symbol in watch_symbols - alpaca_symbols:
         watch = watch_by_symbol[symbol]
-        builder = WatchBuilder.from_dict(watch)
-        # Use last known price as exit price
+
+        # Step 1: Double-check with per-symbol lookup (bulk list may be stale)
+        per_symbol_pos = broker.get_position(symbol)
+        if per_symbol_pos is not None:
+            # Position exists! Bulk lookup was wrong (transient API issue).
+            summary["watch_phantom_miss"].append(symbol)
+            print(f"RECONCILE WARNING: {symbol} missing from bulk positions but per-symbol "
+                  f"lookup found it (qty={per_symbol_pos.qty:.4f}) — NOT force-exiting")
+            log.warning("RECONCILE: %s phantom miss — bulk positions missed it but "
+                        "per-symbol lookup found position (qty=%.4f). No action taken.",
+                        symbol, per_symbol_pos.qty)
+            _log_tx(db, account_id, "reconcile_phantom_miss", symbol,
+                    detail={"watch_id": watch["watch_id"], "qty": per_symbol_pos.qty})
+            continue
+
+        # Step 2: Position is truly gone. Check sell history for actual exit price.
         exit_price = watch["entry"]["price"]  # fallback
-        builder.record_exit(price=exit_price, reason="reconcile_no_alpaca_position")
+        exit_reason = "reconcile_no_alpaca_position"
+        try:
+            recent_sells = broker.get_recent_sells(symbol, limit=5)
+            for sell in recent_sells:
+                status = sell.status.lower() if isinstance(sell.status, str) else sell.status
+                if status == "filled" and sell.filled_avg_price:
+                    exit_price = sell.filled_avg_price
+                    exit_reason = f"reconcile_confirmed_sell (order={sell.order_id})"
+                    log.info("RECONCILE: %s found sell fill at $%.2f (order %s)",
+                             symbol, exit_price, sell.order_id)
+                    break
+            else:
+                # No sell fill found — position vanished without a sell order.
+                # This should NOT happen. Log loudly and skip to be safe.
+                print(f"RECONCILE ERROR: {symbol} has NO Alpaca position AND no recent sell "
+                      f"order found! This is unexpected. Watch NOT force-exited. "
+                      f"Manual investigation required!")
+                log.error("RECONCILE: %s — no position AND no sell fill found. "
+                          "Possible API issue or manual intervention. NOT force-exiting. "
+                          "Watch: %s", symbol, watch["watch_id"])
+                summary["watch_phantom_miss"].append(symbol)
+                _log_tx(db, account_id, "reconcile_no_sell_found", symbol,
+                        detail={"watch_id": watch["watch_id"]})
+                continue
+        except Exception:
+            log.exception("RECONCILE: %s — failed to query sell history. NOT force-exiting.", symbol)
+            summary["watch_phantom_miss"].append(symbol)
+            _log_tx(db, account_id, "reconcile_sell_query_failed", symbol,
+                    detail={"watch_id": watch["watch_id"]})
+            continue
+
+        # Step 3: Confirmed — position is gone AND we found the sell. Force-exit with real price.
+        builder = WatchBuilder.from_dict(watch)
+        builder.record_exit(price=exit_price, reason=exit_reason)
         updated = builder.to_watch()
         update_watch(db, watch["watch_id"], updated.to_dict())
         summary["watch_force_exited"].append({
             "symbol": symbol,
             "watch_id": watch["watch_id"],
+            "exit_price": exit_price,
         })
-        log.warning("RECONCILE: %s watch %s force-exited (no Alpaca position)",
-                    symbol, watch["watch_id"])
+        print(f"RECONCILE: {symbol} force-exited at ${exit_price:.2f} (confirmed sell on Alpaca)")
+        log.warning("RECONCILE: %s watch %s force-exited at $%.2f (confirmed sell)",
+                    symbol, watch["watch_id"], exit_price)
         _log_tx(db, account_id, "reconcile_force_exit", symbol,
                 detail={"watch_id": watch["watch_id"], "exit_price": exit_price})
 
@@ -195,13 +252,17 @@ def reconcile(
         + len(summary["alpaca_orphan_adopted"])
         + len(summary["entry_price_updated"])
     )
-    if total_actions > 0:
-        log.info("RECONCILE complete: %d OK, %d force-exited, %d orphans closed, "
-                 "%d adopted, %d prices updated",
-                 len(summary["ok"]), len(summary["watch_force_exited"]),
-                 len(summary["alpaca_orphan_closed"]),
-                 len(summary["alpaca_orphan_adopted"]),
-                 len(summary["entry_price_updated"]))
+    n_phantom = len(summary["watch_phantom_miss"])
+    if total_actions > 0 or n_phantom > 0:
+        msg = (f"RECONCILE complete: {len(summary['ok'])} OK, "
+               f"{len(summary['watch_force_exited'])} force-exited, "
+               f"{len(summary['alpaca_orphan_closed'])} orphans closed, "
+               f"{len(summary['alpaca_orphan_adopted'])} adopted, "
+               f"{len(summary['entry_price_updated'])} prices updated")
+        if n_phantom:
+            msg += f", {n_phantom} PHANTOM MISSES (investigate!)"
+        log.info(msg)
+        print(msg)
     else:
         log.info("RECONCILE complete: all %d positions in sync", len(summary["ok"]))
 

@@ -541,6 +541,16 @@ class LivePortfolioManager:
         # --- Execute Alpaca orders (if broker connected to this config) ---
         broker = self.broker_pool.get(cfg.alpaca_account_id) if self.broker_pool and cfg.alpaca_account_id else None
         if broker:
+            # SAFETY: Check Alpaca for existing position BEFORE buying.
+            # Prevents double-buys if watch DB is out of sync.
+            existing_pos = broker.get_position(symbol)
+            if existing_pos:
+                print(f"LIVE-EVAL: {symbol} SKIP — Alpaca already holds position "
+                      f"(qty={existing_pos.qty:.4f}, entry=${existing_pos.avg_entry_price:.2f})")
+                log.warning("LIVE-EVAL: %s blocked buy — Alpaca already holds %.4f shares",
+                            symbol, existing_pos.qty)
+                return False
+
             alloc_pct = float((cfg.allocation_params or {}).get("alloc_pct", 5))
             position_size = cfg.starting_capital * alloc_pct / 100.0
 

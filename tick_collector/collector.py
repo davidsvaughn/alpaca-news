@@ -282,7 +282,7 @@ class TickCollector:
         initial_symbols = sorted(self._portfolio.active_symbols)
 
         if not initial_symbols:
-            raise RuntimeError("No symbols configured (check symbols.txt and trader.db)")
+            raise RuntimeError("No portfolio holdings found in trader.db")
 
         log.info("Starting tick collector with %d portfolio symbols", len(initial_symbols))
 
