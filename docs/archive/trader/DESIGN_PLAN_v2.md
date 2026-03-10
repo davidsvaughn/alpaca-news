@@ -1535,7 +1535,7 @@ critical — the reasoning can be regenerated, the inputs cannot.
 
 ### TradingAgents (Tauric Research, 2024)
 
-`TradingAgents-main/` — Multi-agent LLM trading framework
+`TradingAgents/` — Multi-agent LLM trading framework
 
 **Key ideas adopted:** yfinance data layer, BM25 situation memory, lightweight
 bull/bear prompt pattern, data vendor fallback, signal extraction step. See

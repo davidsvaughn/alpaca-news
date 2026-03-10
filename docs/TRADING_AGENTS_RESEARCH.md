@@ -1,6 +1,6 @@
 # TradingAgents Research Notes
 
-Running document of findings and insights from the [TradingAgents](TradingAgents-main/) repo
+Running document of findings and insights from the [TradingAgents](TradingAgents/) repo
 that inform our pipeline design.
 
 ---
@@ -272,7 +272,7 @@ DEFAULT_CONFIG = {
 
 ---
 
-## File Reference (TradingAgents-main/)
+## File Reference (TradingAgents/)
 
 - `tradingagents/agents/utils/core_stock_tools.py` — OHLCV price data tool
 - `tradingagents/agents/utils/technical_indicators_tools.py` — 13 indicator tools
