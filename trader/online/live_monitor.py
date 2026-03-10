@@ -1022,6 +1022,18 @@ def _snapshot_equity(monitor: LiveExitMonitor, last_time: float) -> float:
         return last_time
 
 
+def _get_poll_interval(monitor: LiveExitMonitor, default: int = 60) -> int:
+    """Read poll_interval_s from active config's live_overrides, or use default."""
+    try:
+        config_dict = get_active_live_config(monitor.db)
+        if config_dict:
+            cfg = LiveConfig.from_dict(config_dict)
+            return int(cfg.live_overrides.get("poll_interval_s", default))
+    except Exception:
+        pass
+    return default
+
+
 def live_monitoring_loop(
     monitor: LiveExitMonitor,
     interval_s: int = 60,
@@ -1031,8 +1043,11 @@ def live_monitoring_loop(
     Bar-level data is persisted immediately via JSONL append (crash-safe).
     The periodic save_all here just writes clean summary JSON files for
     convenience — not needed for safety.
+
+    Poll interval can be overridden via live_overrides["poll_interval_s"]
+    in the active LiveConfig (re-read each cycle).
     """
-    log.info("Live exit monitor started (interval=%ds)", interval_s)
+    log.info("Live exit monitor started (default interval=%ds)", interval_s)
     last_summary_save = time.monotonic()
     last_ensure_stops_date: str | None = None
     last_reconcile_time = 0.0  # force immediate reconcile on first cycle
@@ -1070,7 +1085,7 @@ def live_monitoring_loop(
                         log.exception("Shadow summary export failed")
         except Exception:
             log.exception("Live monitor cycle error")
-        time.sleep(interval_s)
+        time.sleep(_get_poll_interval(monitor, interval_s))
 
 
 def _near_close() -> bool:

@@ -1007,9 +1007,11 @@ function _collectLiveOverrides() {
   var overrides = {};
   var cb = document.getElementById('bt-vdd-tick');
   if (cb && cb.checked) {
+    var bucketS = parseInt(document.getElementById('bt-bucket-s').value) || 30;
     overrides.vdd_tick = true;
-    overrides.bucket_s = parseInt(document.getElementById('bt-bucket-s').value) || 30;
+    overrides.bucket_s = bucketS;
     overrides.min_trades_per_bucket = parseInt(document.getElementById('bt-min-trades-bucket').value) || 3;
+    overrides.poll_interval_s = bucketS;  // match poll to bucket
   }
   return overrides;
 }

@@ -366,9 +366,10 @@ live_overrides: dict[str, Any] = field(default_factory=dict)
 
 # Example value:
 # {
-#     "vdd_tick": true,         # enable tick-based VDD supplement
-#     "bucket_s": 30,           # tick VDD bucket interval
-#     "min_trades_per_bucket": 3 # tick VDD min trades filter
+#     "vdd_tick": true,          # enable tick-based VDD supplement
+#     "bucket_s": 30,            # tick VDD bucket interval
+#     "min_trades_per_bucket": 3, # tick VDD min trades filter
+#     "poll_interval_s": 30      # monitor loop interval (auto-set to bucket_s)
 # }
 ```
 
@@ -378,8 +379,10 @@ live_overrides: dict[str, Any] = field(default_factory=dict)
   `live_overrides` dict is never passed to strategy runners.
 - **Live monitor reads it** — `_check_holding()` checks `live_overrides` for
   tick VDD settings (replaces `VDD_TICK_ENABLED` env var).
-- **Extensible** — future live-only features go here (e.g. different polling
-  intervals, position sizing tweaks, streaming config).
+- **Poll interval** — `poll_interval_s` controls how often the monitor loop
+  runs. Auto-set to `bucket_s` in the UI so the poll matches the VDD bucket.
+- **Extensible** — future live-only features go here (e.g. position sizing
+  tweaks, streaming config).
 - **Backward compatible** — existing configs without `live_overrides` work
   unchanged (defaults to empty dict).
 
