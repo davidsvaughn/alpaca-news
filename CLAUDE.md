@@ -11,6 +11,7 @@ Docs live in `docs/`, organized by topic. Two legacy overview docs plus topic-sp
   - `docs/VOLUME-DELTA-REALTIME.md` — Shadow collector, Schwab streaming, tick-level VDD
   - `docs/VDD-COMPARISON.md` — Bar-based vs tick-level VDD comparison experiment
   - `docs/TICK-COLLECTOR.md` — Tick collector service: raw trade data, TimescaleDB, roadmap
+  - `docs/VDD-REALTIME.md` — Real-time VDD from tick data: design, proportional distribution, sub-minute bucketing
   - `docs/BACKTEST-*.md` — Backtest architecture, strategies, metrics
   - `docs/ALLOCATION-STRATEGIES.md` — Portfolio allocation methods
   - `docs/RECONCILE-TEST-PLAN.md` — **TODO**: Stress test plan for reconciliation fixes (use Paper2/Paper3)

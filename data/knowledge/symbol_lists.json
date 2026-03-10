@@ -1143,7 +1143,16 @@
     "LEU",
     "CTOS",
     "FGMC",
-    "OSCR"
+    "OSCR",
+    "HPE",
+    "VTAK",
+    "SNGX",
+    "LIXT",
+    "CAN",
+    "TDOC",
+    "VWAGY",
+    "XGN",
+    "OCC"
   ],
   "crypto": [],
   "rejected": [
@@ -1278,5 +1287,5 @@
     "NAZARA",
     "FLERIE"
   ],
-  "last_updated": "2026-03-10T15:34:09.771812+00:00"
+  "last_updated": "2026-03-10T16:03:28.996229+00:00"
 }
