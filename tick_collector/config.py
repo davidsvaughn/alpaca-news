@@ -6,21 +6,22 @@ import os
 from dataclasses import dataclass, field
 from pathlib import Path
 
-# Default symbols file location (relative to project root)
-DEFAULT_SYMBOLS_FILE = Path(__file__).parent / "symbols.txt"
-
 
 @dataclass
 class CollectorConfig:
     # Database
     dsn: str = "postgresql://tickdata:tickdata_dev@localhost:5433/tickdata"
 
+    # Trader app SQLite DB (for portfolio sync)
+    trader_db_path: str = ""
+
     # Schwab credentials
     schwab_app_key: str = ""
     schwab_app_secret: str = ""
 
-    # Symbols
-    symbols: list[str] = field(default_factory=list)
+    # Portfolio sync
+    portfolio_sync_interval_sec: float = 60.0  # how often to poll trader.db
+    portfolio_cooloff_min: float = 60.0  # minutes to keep streaming after last held
 
     # Buffer / flush
     flush_interval_sec: float = 2.0
@@ -36,34 +37,19 @@ class CollectorConfig:
 
     @classmethod
     def from_env(cls) -> CollectorConfig:
-        """Load config from environment variables + symbols file."""
-        cfg = cls(
+        """Load config from environment variables."""
+        project_root = Path(__file__).parent.parent
+        default_trader_db = str(project_root / "data" / "trader.db")
+
+        return cls(
             dsn=os.getenv(
                 "TIMESCALE_DSN",
                 "postgresql://tickdata:tickdata_dev@localhost:5433/tickdata",
             ),
+            trader_db_path=os.getenv("TRADER_DB_PATH", default_trader_db),
             schwab_app_key=os.getenv("SCHWAB_APP_KEY", ""),
             schwab_app_secret=os.getenv("SCHWAB_APP_SECRET", ""),
             flush_interval_sec=float(os.getenv("TICK_FLUSH_INTERVAL", "2.0")),
+            portfolio_sync_interval_sec=float(os.getenv("TICK_PORTFOLIO_SYNC_INTERVAL", "60.0")),
+            portfolio_cooloff_min=float(os.getenv("TICK_PORTFOLIO_COOLOFF_MIN", "60.0")),
         )
-
-        # Load symbols from env var or file
-        env_symbols = os.getenv("TICK_SYMBOLS", "")
-        if env_symbols:
-            cfg.symbols = [s.strip().upper() for s in env_symbols.split(",") if s.strip()]
-        else:
-            cfg.symbols = load_symbols_file(DEFAULT_SYMBOLS_FILE)
-
-        return cfg
-
-
-def load_symbols_file(path: Path) -> list[str]:
-    """Load symbols from a text file (one per line, # comments, blank lines ok)."""
-    if not path.exists():
-        return []
-    symbols = []
-    for line in path.read_text().splitlines():
-        line = line.split("#")[0].strip().upper()
-        if line:
-            symbols.append(line)
-    return symbols

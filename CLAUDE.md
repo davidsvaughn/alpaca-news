@@ -16,6 +16,17 @@ Docs live in `docs/`, organized by topic. Two legacy overview docs plus topic-sp
 
 Reference papers are in `docs/refs/`. Archived older docs in `docs/archive/`.
 
+## Error Log
+
+**When debugging issues, ALWAYS check `logs/trader.log` first.** This rotating log file captures all WARNING+ messages from the trader app (errors, tracebacks, failed orders, timeouts, etc.). It persists across restarts and is the primary diagnostic tool.
+
+```bash
+cat logs/trader.log        # view recent errors
+tail -f logs/trader.log    # tail live
+```
+
+Configured via env vars: `LOG_FILE` (default: `logs/trader.log`), `LOG_LEVEL` (default: `WARNING`), `LOG_KEEP_DAYS` (default: `14`). Rotates daily at midnight. See `trader/logging_config.py`.
+
 ## Documentation Lookup
 
 When working with external libraries, frameworks, or APIs — **always use the Context7 MCP server** (`resolve-library-id` then `query-docs`) to look up current documentation and code examples before writing code or giving advice. Do not rely on training data for API signatures, parameter names, or usage patterns — they may be outdated or wrong.

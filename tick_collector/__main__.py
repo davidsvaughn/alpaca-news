@@ -8,6 +8,7 @@ from dotenv import load_dotenv
 
 from .collector import TickCollector
 from .config import CollectorConfig
+from .portfolio import PortfolioSync
 
 load_dotenv()
 
@@ -24,15 +25,26 @@ logging.getLogger("asyncpg").setLevel(logging.WARNING)
 def main() -> None:
     config = CollectorConfig.from_env()
 
-    if not config.symbols:
-        print("ERROR: No symbols configured. Set TICK_SYMBOLS or edit symbols.txt")
-        sys.exit(1)
+    # Preview portfolio symbols
+    ps = PortfolioSync(config.trader_db_path, config.portfolio_cooloff_min)
+    ps.sync()
+    active = sorted(ps.active_symbols)
 
-    print(f"Tick Collector")
-    print(f"  Symbols:  {len(config.symbols)} ({', '.join(config.symbols[:5])}{'...' if len(config.symbols) > 5 else ''})")
-    print(f"  DSN:      {config.dsn}")
-    print(f"  Flush:    every {config.flush_interval_sec}s, batch size {config.flush_batch_size}")
+    print("Tick Collector")
+    print(f"  Portfolio symbols: {len(active)}")
+    print(f"  Trader DB:         {config.trader_db_path}")
+    print(f"  DSN:               {config.dsn}")
+    print(f"  Flush:             every {config.flush_interval_sec}s")
+    print(f"  Portfolio sync:    every {config.portfolio_sync_interval_sec}s")
+    print(f"  Cool-off:          {config.portfolio_cooloff_min} min")
+    if active:
+        preview = ', '.join(active[:10])
+        print(f"  Symbols:           {preview}{'...' if len(active) > 10 else ''}")
     print()
+
+    if not active:
+        print("ERROR: No portfolio holdings found in trader.db")
+        sys.exit(1)
 
     collector = TickCollector(config)
     asyncio.run(collector.run())

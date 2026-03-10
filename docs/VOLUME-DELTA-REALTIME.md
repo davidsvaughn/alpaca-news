@@ -43,7 +43,14 @@ Can we trust the backtest's tuned parameters (lookback=80) in a tick-level envir
 The live exit monitor (`live_monitor.py`) calls `evaluate_exit()` from `backtest.py`,
 which uses `_compute_volume_delta()` — the inter-bar tick rule on 1-minute OHLCV bars.
 Each bar's entire volume is classified as uptick or downtick based on a single binary
-decision (`Close > prev Close`). This is identical to what backtesting uses.
+decision (`Close > prev Close`). This is identical to what backtesting uses. The live
+monitor polls once per minute (`interval_s=60`), fetching fresh 1-minute bars and
+running `evaluate_exit()` for every active position each cycle.
+
+For the VDD formula and parameter ranges, see
+[BACKTEST-STRATEGIES.md § Volume Delta Divergence](BACKTEST-STRATEGIES.md#15-volume-delta-divergence-volume_delta_divergence).
+For an empirical comparison of bar-based vs tick-level signal timing, see
+[VDD-COMPARISON.md § Background: The Two Methods](VDD-COMPARISON.md#background-the-two-methods).
 
 The tick-level alternative (`VolumeDeltaCollector.check_vdd_signal()` in
 `volume_delta_shadow.py`) exists and classifies volume at ~55 updates/minute per symbol

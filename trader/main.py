@@ -22,6 +22,7 @@ from pathlib import Path
 import uvicorn
 
 from trader.config import load_settings
+from trader.logging_config import setup_logging
 from trader.online.feed_manager import FeedManager, FeedRegistry
 from trader.online.online_mode import OnlineMode
 from trader.db.database import insert_event, open_sqlite, prune_old_events
@@ -82,6 +83,7 @@ def main() -> None:
     args = parser.parse_args()
 
     _kill_stale_servers()
+    setup_logging()
 
     # Make this process a session leader so all child processes (websockets,
     # threads) share our process group.  Killing the group kills everything.

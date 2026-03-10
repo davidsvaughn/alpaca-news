@@ -1095,7 +1095,30 @@
     "EBMT",
     "CASY",
     "WLDS",
-    "LULU"
+    "LULU",
+    "UNFI",
+    "INSE",
+    "EQIX",
+    "IPWR",
+    "LTH",
+    "GRAB",
+    "DOMH",
+    "CDE",
+    "VRTX",
+    "CNTB",
+    "UWMC",
+    "PSH",
+    "NIO",
+    "ATPC",
+    "AMMX",
+    "JUST",
+    "BAC",
+    "SPI",
+    "MATW",
+    "VSEE",
+    "RAIL",
+    "WWD",
+    "LEGN"
   ],
   "crypto": [],
   "rejected": [
@@ -1216,7 +1239,17 @@
     "NRN",
     "BBD-B.TO",
     "SWIGGY",
-    "DIXON"
+    "DIXON",
+    "CSU",
+    "JTC",
+    "SDR",
+    "NCC",
+    "PCTN",
+    "LMP",
+    "SUNPHARMA",
+    "ZYDUSLIFE",
+    "LUPIN",
+    "MANKIND"
   ],
-  "last_updated": "2026-03-09T20:00:03.268434+00:00"
+  "last_updated": "2026-03-10T14:08:33.224242+00:00"
 }

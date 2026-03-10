@@ -15,7 +15,8 @@ log = logging.getLogger(__name__)
 class Trade:
     """A single trade/update ready for DB insert."""
 
-    time: datetime
+    time: datetime  # Schwab trade_time (field 35) or stream_ts fallback
+    received_at: datetime  # local clock when message received
     symbol: str
     price: float
     size: int  # last_size (L1) or trade size (TIMESALE)
@@ -40,7 +41,7 @@ async def insert_trades(pool: asyncpg.Pool, trades: list[Trade]) -> int:
 
     records = [
         (
-            t.time, t.symbol, t.price, t.size, t.exchange,
+            t.time, t.received_at, t.symbol, t.price, t.size, t.exchange,
             t.direction, t.source, t.volume_delta, t.total_volume,
         )
         for t in trades
@@ -50,9 +51,9 @@ async def insert_trades(pool: asyncpg.Pool, trades: list[Trade]) -> int:
         await conn.executemany(
             """
             INSERT INTO trades
-                (time, symbol, price, size, exchange, direction,
+                (time, received_at, symbol, price, size, exchange, direction,
                  source, volume_delta, total_volume)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
             """,
             records,
         )

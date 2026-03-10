@@ -13,6 +13,7 @@ from .buffer import TradeBuffer
 from .classifier import TickClassifier
 from .config import CollectorConfig
 from .db import Trade, connect, insert_trades
+from .portfolio import PortfolioSync
 
 log = logging.getLogger(__name__)
 
@@ -33,6 +34,12 @@ class TickCollector:
         self.config = config
         self.buffer = TradeBuffer(max_batch=config.flush_batch_size)
         self.classifier = TickClassifier()
+
+        # Portfolio-aware symbol management
+        self._portfolio = PortfolioSync(
+            trader_db_path=config.trader_db_path,
+            cooloff_minutes=config.portfolio_cooloff_min,
+        )
 
         # Per-symbol L1 state for volume differencing
         self._prev_total_volume: dict[str, int] = {}
@@ -78,18 +85,22 @@ class TickCollector:
 
             self._last_message_time = time.time()
 
+            received_at = datetime.now(timezone.utc)
+
             for data in message.get("data", []):
                 service = data.get("service")
                 if service == "LEVELONE_EQUITIES":
-                    self._parse_l1(data)
+                    self._parse_l1(data, received_at)
                 elif service == "TIMESALE_EQUITY":
-                    self._parse_timesale(data)
+                    self._parse_timesale(data, received_at)
 
         except Exception:
             log.exception("Error in message handler")
 
-    def _parse_l1(self, data: dict) -> None:
+    def _parse_l1(self, data: dict, received_at: datetime) -> None:
         """Parse LEVELONE_EQUITIES update into Trade records."""
+        stream_ts = data.get("timestamp")  # Schwab message-level timestamp (ms)
+
         for content in data.get("content", []):
             symbol = content.get("key", "")
             if not symbol:
@@ -101,8 +112,8 @@ class TickCollector:
             trade_time_ms = content.get("35")  # Trade Time in Long
             last_mic_id = content.get("41")  # Last MIC ID
 
-            # Skip if no trade data
-            if last_price is None or last_size is None:
+            # Skip if no trade data or quote-only update (last_size=0)
+            if last_price is None or last_size is None or int(last_size) == 0:
                 continue
 
             # Volume differencing: compute volume_delta from total_volume
@@ -115,18 +126,23 @@ class TickCollector:
                     if volume_delta <= 0:
                         return  # no new trades
 
-            # Timestamp from trade_time_ms or fallback to now
+            # Trade time: prefer field 35, fall back to stream timestamp
             if trade_time_ms is not None:
                 trade_time = datetime.fromtimestamp(
                     trade_time_ms / 1000, tz=timezone.utc
                 )
+            elif stream_ts is not None:
+                trade_time = datetime.fromtimestamp(
+                    stream_ts / 1000, tz=timezone.utc
+                )
             else:
-                trade_time = datetime.now(timezone.utc)
+                trade_time = received_at
 
             direction = self.classifier.classify(symbol, float(last_price))
 
             trade = Trade(
                 time=trade_time,
+                received_at=received_at,
                 symbol=symbol,
                 price=float(last_price),
                 size=int(last_size),
@@ -139,7 +155,7 @@ class TickCollector:
             self.buffer.append(trade)
             self._l1_count += 1
 
-    def _parse_timesale(self, data: dict) -> None:
+    def _parse_timesale(self, data: dict, received_at: datetime) -> None:
         """Parse TIMESALE_EQUITY messages into Trade records."""
         for content in data.get("content", []):
             symbol = content.get("key", content.get("0", ""))
@@ -156,12 +172,13 @@ class TickCollector:
             if time_ms is not None:
                 trade_time = datetime.fromtimestamp(time_ms / 1000, tz=timezone.utc)
             else:
-                trade_time = datetime.now(timezone.utc)
+                trade_time = received_at
 
             direction = self.classifier.classify(symbol, float(price))
 
             trade = Trade(
                 time=trade_time,
+                received_at=received_at,
                 symbol=symbol,
                 price=float(price),
                 size=int(size),
@@ -196,9 +213,10 @@ class TickCollector:
             await asyncio.sleep(60)
             elapsed = time.time() - (self._start_time or time.time())
             stats = self.buffer.stats
+            n_syms = len(self._portfolio.active_symbols)
             log.info(
-                "Status [%.0fs]: L1=%d TS=%d flushed=%d pending=%d",
-                elapsed, self._l1_count, self._ts_count,
+                "Status [%.0fs]: symbols=%d L1=%d TS=%d flushed=%d pending=%d",
+                elapsed, n_syms, self._l1_count, self._ts_count,
                 self._flush_count, stats["pending"],
             )
 
@@ -206,16 +224,67 @@ class TickCollector:
     # Main run
     # ------------------------------------------------------------------
 
+    def _subscribe(self, symbols: list[str]) -> None:
+        """Subscribe to L1 (and attempt TIMESALE) for given symbols."""
+        if not symbols or not self._stream:
+            return
+        keys = list(symbols)
+        keys_str = ",".join(keys)
+
+        l1_req = self._stream.level_one_equities(keys=keys, fields=L1_FIELDS)
+        log.info("Subscribing L1 (%d symbols): %s", len(keys), keys_str)
+        self._stream.send(l1_req)
+
+        ts_req = self._stream.basic_request(
+            service="TIMESALE_EQUITY",
+            command="ADD",
+            parameters={"keys": keys_str, "fields": "0,1,2,3,4"},
+        )
+        self._stream.send(ts_req)
+
+    def _unsubscribe(self, symbols: set[str]) -> None:
+        """Unsubscribe symbols from L1 stream."""
+        if not symbols or not self._stream:
+            return
+        keys = sorted(symbols)
+        keys_str = ",".join(keys)
+
+        unsub_req = self._stream.basic_request(
+            service="LEVELONE_EQUITIES",
+            command="UNSUBS",
+            parameters={"keys": keys_str},
+        )
+        log.info("Unsubscribing L1 (%d symbols): %s", len(keys), keys_str)
+        self._stream.send(unsub_req)
+
+    async def _portfolio_sync_loop(self) -> None:
+        """Periodically sync symbols with trader app portfolio."""
+        while not self._stop.is_set():
+            await asyncio.sleep(self.config.portfolio_sync_interval_sec)
+            try:
+                added, removed = self._portfolio.sync()
+                if added:
+                    self._subscribe(sorted(added))
+                if removed:
+                    self._unsubscribe(removed)
+            except Exception:
+                log.exception("Portfolio sync error")
+
     async def run(self) -> None:
         """Start the collector. Blocks until stopped via signal."""
         cfg = self.config
 
         if not cfg.schwab_app_key or not cfg.schwab_app_secret:
             raise RuntimeError("Missing SCHWAB_APP_KEY / SCHWAB_APP_SECRET")
-        if not cfg.symbols:
-            raise RuntimeError("No symbols configured")
 
-        log.info("Starting tick collector with %d symbols", len(cfg.symbols))
+        # Initial portfolio sync: merge base symbols + current holdings
+        self._portfolio.sync()
+        initial_symbols = sorted(self._portfolio.active_symbols)
+
+        if not initial_symbols:
+            raise RuntimeError("No symbols configured (check symbols.txt and trader.db)")
+
+        log.info("Starting tick collector with %d portfolio symbols", len(initial_symbols))
 
         # Connect to TimescaleDB
         self._pool = await connect(cfg.dsn)
@@ -232,33 +301,22 @@ class TickCollector:
             raise RuntimeError("Stream failed to connect")
         log.info("WebSocket connected")
 
-        keys_str = ",".join(cfg.symbols)
         self._start_time = time.time()
 
-        # Subscribe to LEVELONE_EQUITIES with extended fields (always)
-        l1_req = self._stream.level_one_equities(keys=cfg.symbols, fields=L1_FIELDS)
-        log.info("Subscribing LEVELONE_EQUITIES: %s", keys_str)
-        self._stream.send(l1_req)
-
-        # Also try TIMESALE_EQUITY (may not be available)
-        ts_req = self._stream.basic_request(
-            service="TIMESALE_EQUITY",
-            command="ADD",
-            parameters={"keys": keys_str, "fields": "0,1,2,3,4"},
-        )
-        log.info("Subscribing TIMESALE_EQUITY: %s", keys_str)
-        self._stream.send(ts_req)
+        # Subscribe to all initial symbols
+        self._subscribe(initial_symbols)
 
         # Set up signal handlers
         loop = asyncio.get_running_loop()
         for sig in (signal.SIGTERM, signal.SIGINT):
             loop.add_signal_handler(sig, self._handle_signal)
 
-        # Run flush + status loops until stopped
+        # Run flush + status + portfolio sync loops until stopped
         log.info("Collector running. Press Ctrl+C to stop.")
         await asyncio.gather(
             self._flush_loop(),
             self._status_loop(),
+            self._portfolio_sync_loop(),
         )
 
         # Shutdown

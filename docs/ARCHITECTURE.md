@@ -703,6 +703,16 @@ BACKFILL_ON_START=false nohup uv run python -m trader.main > /tmp/alpaca-dashboa
 pkill -f "trader.main"
 ```
 
+**Error logging**: The trader app writes warnings and errors to a rotating log file. Check this first when diagnosing issues:
+```bash
+# View recent errors
+cat logs/trader.log
+
+# Tail live
+tail -f logs/trader.log
+```
+Configured via env vars: `LOG_FILE` (default: `logs/trader.log`), `LOG_LEVEL` (default: `WARNING`), `LOG_KEEP_DAYS` (default: `14`). Rotates daily at midnight. See `trader/logging_config.py`.
+
 **News websockets** are auto-launched as subprocesses by the trader app, controlled by env vars:
 
 | Env var | Default | Script |

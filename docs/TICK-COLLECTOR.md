@@ -231,7 +231,8 @@ docker compose up -d
 
 ```sql
 CREATE TABLE trades (
-    time           TIMESTAMPTZ      NOT NULL,
+    time           TIMESTAMPTZ      NOT NULL,   -- see "Timestamps" below
+    received_at    TIMESTAMPTZ      NOT NULL,   -- see "Timestamps" below
     symbol         TEXT             NOT NULL,
     price          DOUBLE PRECISION NOT NULL,
     size           INTEGER          NOT NULL,   -- last_size (L1) or trade size (TS)
@@ -245,6 +246,35 @@ CREATE TABLE trades (
 -- Hypertable + index
 SELECT create_hypertable('trades', 'time');
 CREATE INDEX idx_trades_symbol_time ON trades (symbol, time DESC);
+```
+
+### Timestamps
+
+Each trade row records **two** timestamps:
+
+| Column | Source | Description |
+|--------|--------|-------------|
+| `time` | Schwab field 35 (`trade_time_ms`) | When the trade actually occurred, per Schwab. Millisecond precision. Falls back to `data.timestamp` (Schwab stream message time) if field 35 is missing, or `received_at` as last resort. |
+| `received_at` | Local `datetime.now(UTC)` | When our collector received the WebSocket message. Always present. |
+
+**Why both?**
+- `time` is the authoritative trade time for bucketing and ordering.
+- `received_at` captures pipeline latency (`received_at - time`).
+- When `time` is missing (field 35 absent on ~11-36% of L1 updates), the gap
+  between `received_at` and real trade time can be estimated from rows that
+  have both values — enabling better interpolation for missing timestamps.
+- Comparing the two over time reveals if Schwab's reported times drift relative
+  to wall clock, or if there are systematic delays by exchange (`last_mic_id`).
+
+```sql
+-- Measure pipeline latency (Schwab trade_time → our receipt)
+SELECT symbol,
+       avg(EXTRACT(EPOCH FROM (received_at - time))) AS avg_latency_sec,
+       max(EXTRACT(EPOCH FROM (received_at - time))) AS max_latency_sec,
+       count(*) FILTER (WHERE time = received_at) AS missing_trade_time
+FROM trades
+WHERE time >= NOW() - INTERVAL '1 hour'
+GROUP BY symbol;
 ```
 
 ### Continuous Aggregate: bars_1m
@@ -465,12 +495,40 @@ WantedBy=multi-user.target
 - [x] Write standalone test script: `scripts/test_timesale.py` + `scripts/run_timesale_test.sh`
 - [x] Add L1 extended fields (9=LastSize, 35=TradeTime, 41=LastMICID) to test script
 - [x] Add volume gap analysis (L1 total_volume jump vs last_size) to test script
-- [ ] **Run during market hours** — the critical next step
-- [ ] Measure L1 update frequency and volume gaps per symbol
-- [ ] Determine if TIMESALE_EQUITY is available during market hours
-- [ ] Test: can TIMESALE_EQUITY and LEVELONE_EQUITIES coexist on same connection?
+- [x] **Run during pre-market hours** (2026-03-10 ~9 AM ET, 120s test)
+- [x] Measure L1 update frequency and volume gaps per symbol (see findings below)
+- [x] Determine if TIMESALE_EQUITY is available during market hours → **NO** (code=11)
+- [x] Test: can TIMESALE + L1 coexist? → Yes, same connection, but TIMESALE returns code=11
 - [ ] Test schwabdev built-in reconnection during market hours
-- [ ] Document findings in this file
+- [x] Document findings in this file (see Phase 1 Findings below)
+
+#### Phase 1 Findings (2026-03-10, pre-market ~9 AM ET)
+
+**TIMESALE_EQUITY**: Confirmed unavailable (`code=11`). Not just an after-hours
+limitation — also fails during pre-market. Likely not exposed on Schwab's API.
+**L1-primary design validated.**
+
+**L1 Extended Fields**: Working well. Results from 120-second pre-market test:
+
+| Symbol | Updates/min | Has last_size | Has trade_time | Has MIC ID | Missed volume % |
+|--------|-------------|---------------|----------------|------------|-----------------|
+| AAPL   | 18          | 83%           | 86%            | 47%        | 54%             |
+| AMD    | 18          | 75%           | 89%            | 61%        | 98%             |
+| NVDA   | 50          | 76%           | 87%            | 50%        | 77%             |
+| SPY    | 58          | 54%           | 64%            | 43%        | 94%             |
+| TSLA   | 50          | 75%           | 86%            | 45%        | 69%             |
+
+Key observations:
+- **`last_size` present ~54-83%** of updates. Missing = quote-only update (no trade).
+- **`trade_time_ms` present ~64-89%**. Millisecond precision, reliable.
+- **`last_mic_id` present ~43-61%**. Common values: XADF (dark pool), ARCX (Arca),
+  EDGX, XNAS (Nasdaq), BATS, MEMX. Missing on ~50% of updates.
+- **Missed volume: 54-98%** — significant. Most trades happen between L1 updates.
+  Pre-market volume is low; regular session will likely have higher gaps.
+- **`last_size: 0` updates** occur (quote-only) — collector skips these.
+- **Update frequency**: 18-58/min during pre-market. Expect higher during regular hours.
+- **Large trades visible**: 1700-share NVDA, 4000-share TSLA, 800-share TSLA — when
+  a large trade IS the last trade, we catch it. Good for institutional flow detection.
 
 ### Phase 2: Collector Service ← **current**
 > **Goal**: Always-on process with L1-primary streaming into TimescaleDB.
@@ -563,14 +621,15 @@ WantedBy=multi-user.target
       latency. Can tune via `TICK_FLUSH_INTERVAL` env var.
 - [x] **Symbol list management**: Config file (`symbols.txt`) as base, env var
       (`TICK_SYMBOLS`) for override. Dynamic API deferred to future phase.
-- [ ] **TIMESALE_EQUITY availability**: Does it work during market hours? Or is it
-      not exposed on Schwab's current API at all? Key Phase 1 question.
+- [x] **TIMESALE_EQUITY availability**: Does NOT work. Returns code=11 both at
+      2 AM and during pre-market (~9 AM). Likely not exposed on Schwab's current API.
+      L1-primary design is the correct approach.
+- [x] **L1 update frequency**: 18-58 updates/min during pre-market (varies by symbol).
+      NVDA/SPY/TSLA ~50/min, AAPL/AMD ~18/min. Roughly 1 update per 1-3 seconds.
+- [x] **Unclassified volume percentage**: 54-98% during pre-market. AMD and SPY
+      worst (94-98%), AAPL best (54%). Regular session will likely be similar or higher.
 - [ ] **OAuth token refresh during stream**: Does schwabdev auto-refresh the OAuth
       token while the WebSocket is open? Tokens expire every 30 minutes.
-- [ ] **L1 update frequency**: How often does L1 actually update per symbol? ~1/sec
-      is the assumption. Measure during market hours.
-- [ ] **Unclassified volume percentage**: What fraction of volume is hidden between
-      L1 updates for typical stocks? High volume (NVDA, AAPL) likely higher gap.
 - [ ] **Existing shadow collector**: Keep running in parallel during transition?
       Or disable once tick-collector is proven reliable?
 
@@ -578,16 +637,14 @@ WantedBy=multi-user.target
 
 ## Issues / Blockers
 
-### [ISSUE-1] TIMESALE services return "Service not available" outside trading hours
-**Status**: investigating (likely expected behavior — or permanently unavailable)
-**Severity**: medium (L1 fallback works, but Tier 3 would be ideal)
-**Description**: Tests at ~2 AM ET on 2026-03-10. All three TIMESALE services
-(EQUITY, OPTIONS, FUTURES) returned `code=11: Service not available or temporary
-down`. LEVELONE services worked fine. Could be:
-  (a) Normal — TIMESALE only available during market hours
-  (b) Permanent — Schwab doesn't expose TIMESALE on their current API
-**Next step**: Re-test during market hours (9:30 AM - 4 PM ET).
-**Script**: `./scripts/run_timesale_test.sh --duration 300`
+### [ISSUE-1] TIMESALE_EQUITY not available on Schwab API
+**Status**: resolved (confirmed unavailable)
+**Severity**: low (L1-primary design works well)
+**Description**: TIMESALE_EQUITY returns `code=11: Service not available` at all
+times tested: 2 AM ET (after hours), ~9 AM ET (pre-market). Not just a timing
+issue — Schwab likely does not expose TIMESALE services on their current streaming API.
+**Resolution**: L1-primary design (Tier 2) is the production approach. TIMESALE
+subscription attempt kept in collector for future-proofing but not expected to work.
 
 <!-- Template for new issues:
 ### [ISSUE-N] Title

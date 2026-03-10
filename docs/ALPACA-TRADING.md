@@ -348,6 +348,8 @@ Alpaca's free data is IEX-only (~2-5% of exchange volume), insufficient for VDD.
 
 If `buy_and_confirm()` raises (rejected, timeout, insufficient funds), **no watch is created**. The portfolio only tracks confirmed positions. Logged as `ALPACA BUY FAILED`.
 
+**Timeout handling**: When the fill timeout expires (controlled by `ALPACA_FILL_TIMEOUT`, default 30s), the pending order is **cancelled** to prevent orphan positions on Alpaca. If the order fills in the tiny window between timeout and cancel, it's still accepted. All failures are logged to the error log file (`logs/trader.log`).
+
 ### 1b. Non-fractionable stocks
 
 Some stocks (e.g., MMED) are not fractionable on Alpaca. Notional (dollar-based) orders require fractional share support and will be **rejected** for these assets.

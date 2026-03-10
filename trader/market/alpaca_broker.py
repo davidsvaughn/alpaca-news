@@ -30,6 +30,9 @@ log = logging.getLogger(__name__)
 # - fractional_day: buy() uses notional (fractional fill), stops use DAY TIF + daily re-submission
 ALPACA_STOP_MODE = os.getenv("ALPACA_STOP_MODE", "fractional_day").lower()
 
+# How long to wait for order fill confirmation (seconds)
+ALPACA_FILL_TIMEOUT = float(os.getenv("ALPACA_FILL_TIMEOUT", "30"))
+
 
 # ------------------------------------------------------------------
 # Data types
@@ -446,7 +449,7 @@ class AlpacaBroker:
     def wait_for_fill(
         self,
         order_id: str,
-        timeout_s: float = 15.0,
+        timeout_s: float = ALPACA_FILL_TIMEOUT,
         poll_interval_s: float = 0.5,
     ) -> OrderResult:
         """Poll an order until it fills, fails, or times out.
@@ -482,7 +485,7 @@ class AlpacaBroker:
         *,
         notional: float | None = None,
         qty: float | None = None,
-        timeout_s: float = 15.0,
+        timeout_s: float = ALPACA_FILL_TIMEOUT,
     ) -> OrderResult:
         """Submit a market buy and wait for fill confirmation.
 
@@ -492,6 +495,19 @@ class AlpacaBroker:
         result = self.buy(symbol, notional=notional, qty=qty)
         try:
             confirmed = self.wait_for_fill(result.order_id, timeout_s=timeout_s)
+        except TimeoutError:
+            # Cancel the unfilled order to prevent orphan positions
+            log.warning("Buy order %s for %s timed out — cancelling", result.order_id, symbol)
+            self.cancel_order(result.order_id)
+            # Check one more time — order may have filled between timeout and cancel
+            final = self.get_order(result.order_id)
+            if final and final.status.lower() == "filled":
+                log.info("Order %s for %s filled just before cancel — proceeding", result.order_id, symbol)
+                confirmed = final
+            else:
+                self._log_tx("buy_failed", symbol.upper(), order_id=result.order_id, status="timeout_cancelled",
+                             detail={"notional": notional, "qty": qty})
+                raise
         except Exception as e:
             self._log_tx("buy_failed", symbol.upper(), order_id=result.order_id, status="timeout_or_error",
                          detail={"error": str(e), "notional": notional, "qty": qty})
@@ -508,7 +524,7 @@ class AlpacaBroker:
     def close_position_and_confirm(
         self,
         symbol: str,
-        timeout_s: float = 15.0,
+        timeout_s: float = ALPACA_FILL_TIMEOUT,
     ) -> OrderResult | None:
         """Close a position and wait for sell fill confirmation.
 

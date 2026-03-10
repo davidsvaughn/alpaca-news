@@ -49,8 +49,12 @@ def generate_synthetic_l1_trades(
         t = start_time + timedelta(seconds=i)
         direction = classifier.classify(symbol, price)
 
+        # Simulate ~1.5s latency between trade_time and received_at
+        received = t + timedelta(milliseconds=random.randint(800, 2000))
+
         trades.append(Trade(
             time=t,
+            received_at=received,
             symbol=symbol,
             price=price,
             size=last_size,

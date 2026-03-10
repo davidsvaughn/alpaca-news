@@ -26,6 +26,11 @@ the exit signals have differed? Is there a systematic pattern (earlier? later? r
 
 ## Background: The Two Methods
 
+> For VDD formula and parameter ranges, see
+> [BACKTEST-STRATEGIES.md § Volume Delta Divergence](BACKTEST-STRATEGIES.md#15-volume-delta-divergence-volume_delta_divergence).
+> For how live trading is wired up (same backtest code, polled once per minute), see
+> [VOLUME-DELTA-REALTIME.md § Current Status](VOLUME-DELTA-REALTIME.md#current-status-whats-wired-up-today).
+
 Both methods produce 1-minute bars with uptick/downtick volume splits. The difference
 is **how volume is classified within each bar**:
 

@@ -428,6 +428,7 @@ Exit when price makes a new rolling high but cumulative volume delta is declinin
 | `lookback` | 30 | 10 – 100 | Lookback window (bars) |
 
 - Uses the **inter-bar tick rule**: each bar's entire volume is classified as uptick or downtick based on whether Close rose or fell vs the prior bar. If Close is unchanged, the prior direction carries forward.
+- **Live trading uses this same code path** — `live_monitor.py` calls `evaluate_exit()` from `backtest.py` once per minute. See [VOLUME-DELTA-REALTIME.md § Current Status](VOLUME-DELTA-REALTIME.md#current-status-whats-wired-up-today) for details on what's wired up and how it compares to the tick-level shadow collector.
 - Divergence between price highs and volume delta is a classic distribution signal
 - Exit price: bar's Close
 - Exit reason: `signal`

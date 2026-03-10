@@ -13,7 +13,8 @@
 
 -- Raw trade/update records
 CREATE TABLE trades (
-    time           TIMESTAMPTZ      NOT NULL,
+    time           TIMESTAMPTZ      NOT NULL,   -- Schwab trade_time (field 35) or stream_ts fallback
+    received_at    TIMESTAMPTZ      NOT NULL,   -- local clock when we received the message
     symbol         TEXT             NOT NULL,
     price          DOUBLE PRECISION NOT NULL,
     size           INTEGER          NOT NULL,   -- last_size (L1) or trade size (TIMESALE)
