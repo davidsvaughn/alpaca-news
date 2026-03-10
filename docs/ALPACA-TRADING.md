@@ -4,7 +4,7 @@
 > Covers architecture, multi-account setup, confirmed execution,
 > account sync, reconciliation, edge cases, and future considerations.
 >
-> Created: 2026-03-06 | Last updated: 2026-03-06
+> Created: 2026-03-06 | Last updated: 2026-03-10
 >
 > See also: [LIVE-TRADING.md](LIVE-TRADING.md) — overall live trading architecture, exit strategies, portfolio management
 
@@ -25,12 +25,13 @@
 11. [Trade Update Stream](#trade-update-stream)
 12. [Reconciliation](#reconciliation)
 13. [Portfolio ↔ Account Linking](#portfolio--account-linking)
-14. [Position Sizing](#position-sizing)
-15. [Data Source Separation](#data-source-separation)
-16. [Edge Cases & Complications](#edge-cases--complications)
-17. [Design Decisions](#design-decisions)
-18. [PDT Considerations](#pdt-considerations)
-19. [Future Work](#future-work)
+14. [Manual Portfolio Management](#manual-portfolio-management)
+15. [Position Sizing](#position-sizing)
+16. [Data Source Separation](#data-source-separation)
+17. [Edge Cases & Complications](#edge-cases--complications)
+18. [Design Decisions](#design-decisions)
+19. [PDT Considerations](#pdt-considerations)
+20. [Future Work](#future-work)
 
 ---
 
@@ -603,8 +604,12 @@ Every Alpaca interaction is recorded in the `alpaca_transactions` SQLite table f
 | **Stream** | `stream_expired` | WebSocket expiry event |
 | **Reconcile** | `reconcile_ok` | Position matches watch — no action |
 | **Reconcile** | `reconcile_price_updated` | Entry price corrected to match Alpaca |
+| **Reconcile** | `reconcile_qty_updated` | Qty corrected to match Alpaca's actual position |
 | **Reconcile** | `reconcile_force_exit` | Watch force-exited (Alpaca has no position) |
+| **Reconcile** | `reconcile_orphan_adopted` | Orphan Alpaca position adopted as new watch |
 | **Reconcile** | `reconcile_orphan_closed` | Orphan Alpaca position closed |
+| **Reconcile** | `reconcile_phantom_miss` | Bulk miss but per-symbol lookup found position |
+| **Reconcile** | `reconcile_no_sell_found` | Position gone but no sell order found — skipped |
 
 ### Querying
 
@@ -739,7 +744,10 @@ This means the actual allocation is `qty * price` which may be less than the tar
 
 ### Short-term
 - [ ] Handle partial fills explicitly in `wait_for_fill`
-- [ ] Periodic reconciliation (not just on startup)
+- [x] Periodic reconciliation (every 15 min, configurable) — done 2026-03-06
+- [x] Qty sync in reconciliation (Alpaca qty → watch qty) — done 2026-03-10
+- [x] Manual Sync button (on-demand reconciliation) — done 2026-03-10
+- [x] Liquidate selected positions (with post-sell background reconcile) — done 2026-03-10
 - [ ] Track slippage: snapshot price vs actual fill price in watch data
 
 ### Validation
