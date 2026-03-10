@@ -16,6 +16,7 @@ LivePortfolioManager:
 from __future__ import annotations
 
 import logging
+import os
 import threading
 import time
 from datetime import datetime, timedelta, timezone
@@ -805,6 +806,48 @@ def _ensure_stops_if_needed(monitor: LiveExitMonitor, last_date: str | None) -> 
         return last_date
 
 
+_RECONCILE_INTERVAL_S = float(os.getenv("RECONCILE_INTERVAL", "900"))  # 15 min default
+
+
+def _periodic_reconcile(monitor: LiveExitMonitor, last_time: float) -> float:
+    """Run reconciliation periodically (every RECONCILE_INTERVAL seconds).
+
+    Returns the monotonic timestamp of the last reconcile.
+    """
+    now = time.monotonic()
+    if now - last_time < _RECONCILE_INTERVAL_S:
+        return last_time
+
+    if not monitor.broker_pool or not is_market_open():
+        return last_time
+
+    try:
+        from trader.market.alpaca_reconcile import reconcile, ensure_stops
+        from trader.db.database import get_active_live_configs
+        from trader.models.live_config import LiveConfig
+
+        active_cfgs = get_active_live_configs(monitor.db)
+        for cfg_dict in active_cfgs:
+            acct_id = cfg_dict.get("alpaca_account_id")
+            if not acct_id:
+                continue
+            broker = monitor.broker_pool.get(acct_id)
+            if not broker:
+                continue
+            cfg = LiveConfig.from_dict(cfg_dict)
+            reconcile(broker=broker, db=monitor.db,
+                      live_config_id=cfg.config_id,
+                      live_config=cfg)
+            # Always re-check stops (DAY stops expire, stops can go missing)
+            ensure_stops(broker=broker, db=monitor.db,
+                         live_config_id=cfg.config_id,
+                         guard_stop_pct=cfg.guard_stop_pct)
+        return now
+    except Exception:
+        log.exception("Periodic reconciliation failed")
+        return last_time
+
+
 def live_monitoring_loop(
     monitor: LiveExitMonitor,
     interval_s: int = 60,
@@ -818,6 +861,7 @@ def live_monitoring_loop(
     log.info("Live exit monitor started (interval=%ds)", interval_s)
     last_summary_save = time.monotonic()
     last_ensure_stops_date: str | None = None
+    last_reconcile_time = 0.0  # force immediate reconcile on first cycle
     while True:
         try:
             # Only run during market hours (or within 30 min after close
@@ -828,6 +872,10 @@ def live_monitoring_loop(
                 # Ensure all positions have active stops (once per day at open)
                 last_ensure_stops_date = _ensure_stops_if_needed(
                     monitor, last_ensure_stops_date)
+
+                # Periodic reconciliation (every RECONCILE_INTERVAL seconds)
+                last_reconcile_time = _periodic_reconcile(
+                    monitor, last_reconcile_time)
 
             # Periodic clean summary export (convenience, not safety).
             # Bar data is already persisted via JSONL append on each flush.

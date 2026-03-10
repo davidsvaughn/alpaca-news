@@ -300,10 +300,19 @@ All anomalies are printed to console AND logged to `logs/trader.log` for visibil
 
 Before every buy, `LivePortfolioManager` calls `broker.get_position(symbol)`. If Alpaca already holds the symbol, the buy is blocked. This prevents double-buys regardless of watch DB state.
 
+### Periodic reconciliation
+
+Reconciliation runs:
+- **On startup** (full reconcile + ensure stops)
+- **Every 15 minutes** during market hours (configurable via `RECONCILE_INTERVAL` env var in seconds, default `900`)
+
+Periodic reconciliation catches drift that happens after startup: orphan positions from timed-out orders, stops that fired mid-session, or any other desynchronization. If issues are found, stops are also re-checked.
+
 ### When would reconciliation act?
 - Stop order filled while process was down → position sold, sell fill found → force-exit with actual price
 - Manual close on Alpaca dashboard → position gone, sell fill found → force-exit
 - Process crash during exit → position may or may not be gone, verified either way
+- Orphan from timed-out buy → adopted on next periodic reconcile
 
 ---
 

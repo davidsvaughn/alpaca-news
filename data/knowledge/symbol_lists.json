@@ -1131,7 +1131,19 @@
     "SMTC",
     "CRSP",
     "WLFC",
-    "RIVN"
+    "RIVN",
+    "CAPR",
+    "UEC",
+    "ABM",
+    "HBNB",
+    "PG",
+    "CL",
+    "CLX",
+    "ABNB",
+    "LEU",
+    "CTOS",
+    "FGMC",
+    "OSCR"
   ],
   "crypto": [],
   "rejected": [
@@ -1263,7 +1275,8 @@
     "ZYDUSLIFE",
     "LUPIN",
     "MANKIND",
-    "NAZARA"
+    "NAZARA",
+    "FLERIE"
   ],
-  "last_updated": "2026-03-10T14:57:57.816566+00:00"
+  "last_updated": "2026-03-10T15:34:09.771812+00:00"
 }

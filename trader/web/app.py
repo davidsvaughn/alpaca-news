@@ -1372,50 +1372,52 @@ def create_app(
         legacy_data["holding"] = [_enrich_holding(w) for w in legacy_data["holding"]]
 
         # Compute portfolio dollar value for each portfolio
-        def _compute_sim(p: dict) -> dict[str, Any]:
-            """Simple portfolio dollar simulation: equal-weight positions."""
+        def _compute_sim(p: dict, *, alpaca_equity: float | None = None) -> dict[str, Any]:
+            """Portfolio dollar value. Uses Alpaca equity when linked, sim otherwise."""
             cfg = p["config"]
             starting = cfg.get("starting_capital", 0) if isinstance(cfg, dict) else getattr(cfg, "starting_capital", 0)
             if not starting or starting <= 0:
                 return {}
 
-            alloc = cfg.get("allocation", "") if isinstance(cfg, dict) else getattr(cfg, "allocation", "")
-            alloc_params = cfg.get("allocation_params", {}) if isinstance(cfg, dict) else getattr(cfg, "allocation_params", {})
+            trade_count = len(p.get("holding", [])) + len(p.get("closed", [])) + len(p.get("cooling", []))
 
-            # Derive max concurrent positions (same logic as live_monitor)
-            if alloc == "max_positions":
-                max_pos = int((alloc_params or {}).get("max_pos", 10))
-            elif alloc in ("fixed_dollar", "ranking_realloc"):
-                alloc_pct = float((alloc_params or {}).get("alloc_pct", 5))
-                max_pos = max(1, int(100 / alloc_pct))
+            # If linked to Alpaca, use real equity (source of truth)
+            if alpaca_equity is not None:
+                ending = alpaca_equity
+                return_pct = (ending - starting) / starting * 100 if starting > 0 else 0.0
             else:
-                max_pos = 20
+                # Fallback: sim calculation for virtual-only portfolios
+                alloc = cfg.get("allocation", "") if isinstance(cfg, dict) else getattr(cfg, "allocation", "")
+                alloc_params = cfg.get("allocation_params", {}) if isinstance(cfg, dict) else getattr(cfg, "allocation_params", {})
 
-            pos_size = starting / max_pos
-            total_dollar_pnl = 0.0
-            trade_count = 0
+                if alloc == "max_positions":
+                    max_pos = int((alloc_params or {}).get("max_pos", 10))
+                elif alloc in ("fixed_dollar", "ranking_realloc"):
+                    alloc_pct = float((alloc_params or {}).get("alloc_pct", 5))
+                    max_pos = max(1, int(100 / alloc_pct))
+                else:
+                    max_pos = 20
 
-            # Closed trades: realized P&L
-            for w in p.get("closed", []) + p.get("cooling", []):
-                wd = w if isinstance(w, dict) else w.__dict__ if hasattr(w, "__dict__") else {}
-                ex = wd.get("exit") if isinstance(wd, dict) else getattr(wd, "exit", None)
-                if ex:
-                    ex_d = ex if isinstance(ex, dict) else getattr(ex, "__dict__", {})
-                    rpnl = ex_d.get("realized_pnl_pct")
-                    if rpnl is not None:
-                        total_dollar_pnl += pos_size * float(rpnl) / 100
-                        trade_count += 1
+                pos_size = starting / max_pos
+                total_dollar_pnl = 0.0
 
-            # Open trades: unrealized P&L (count even if price unavailable)
-            for w in p.get("holding", []):
-                wd = w if isinstance(w, dict) else w.__dict__ if hasattr(w, "__dict__") else {}
-                upnl = wd.get("unrealized_pnl")
-                if upnl is not None:
-                    total_dollar_pnl += pos_size * float(upnl) / 100
-                trade_count += 1
+                for w in p.get("closed", []) + p.get("cooling", []):
+                    wd = w if isinstance(w, dict) else w.__dict__ if hasattr(w, "__dict__") else {}
+                    ex = wd.get("exit") if isinstance(wd, dict) else getattr(wd, "exit", None)
+                    if ex:
+                        ex_d = ex if isinstance(ex, dict) else getattr(ex, "__dict__", {})
+                        rpnl = ex_d.get("realized_pnl_pct")
+                        if rpnl is not None:
+                            total_dollar_pnl += pos_size * float(rpnl) / 100
 
-            ending = starting + total_dollar_pnl
-            return_pct = (ending - starting) / starting * 100 if starting > 0 else 0.0
+                for w in p.get("holding", []):
+                    wd = w if isinstance(w, dict) else w.__dict__ if hasattr(w, "__dict__") else {}
+                    upnl = wd.get("unrealized_pnl")
+                    if upnl is not None:
+                        total_dollar_pnl += pos_size * float(upnl) / 100
+
+                ending = starting + total_dollar_pnl
+                return_pct = (ending - starting) / starting * 100 if starting > 0 else 0.0
 
             # Daily return (CAGR-based) over trading-day span
             sim_daily_pct = None
@@ -1445,8 +1447,36 @@ def create_app(
                 "sim_span_days": sim_span_days,
             }
 
+        # Fetch Alpaca equity for linked accounts (one API call per account)
+        alpaca_equity_by_account: dict[str, float] = {}
+        try:
+            from trader.market.alpaca_broker import AlpacaAccountRegistry, AlpacaBroker
+            registry = AlpacaAccountRegistry()
+            linked_accounts = {
+                (cfg.get("alpaca_account_id") if isinstance(cfg, dict)
+                 else getattr(cfg, "alpaca_account_id", None))
+                for cfg in (p["config"] for p in portfolios)
+            } - {None}
+            for acct_id in linked_accounts:
+                creds = registry.get(acct_id)
+                if creds:
+                    try:
+                        broker = AlpacaBroker(
+                            api_key=creds.api_key, secret_key=creds.secret_key,
+                            paper=creds.paper, account_id=acct_id, name=creds.name,
+                        )
+                        acct = broker.get_account()
+                        alpaca_equity_by_account[acct_id] = acct.equity
+                    except Exception:
+                        pass  # fallback to sim calculation
+        except Exception:
+            pass  # no Alpaca configured — use sim for all
+
         for p in portfolios:
-            p["sim"] = _compute_sim(p)
+            cfg = p["config"]
+            acct_id = cfg.get("alpaca_account_id") if isinstance(cfg, dict) else getattr(cfg, "alpaca_account_id", None)
+            alpaca_equity = alpaca_equity_by_account.get(acct_id) if acct_id else None
+            p["sim"] = _compute_sim(p, alpaca_equity=alpaca_equity)
 
         # Wrap for Jinja
         for p in portfolios:
