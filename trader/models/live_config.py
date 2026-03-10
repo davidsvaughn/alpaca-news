@@ -41,6 +41,8 @@ class LiveConfig:
     exit_strategy: str               # strategy key, e.g. "volume_delta_divergence"
     exit_params: dict[str, Any]      # e.g. {"lookback_m": 80, "bucket_s": 30}
 
+    paused: bool = False             # paused = no new buys, but exits still run
+
     # Guards
     guard_stop_pct: float = 0.0      # hard stop loss % (0 = disabled)
     guard_target_pct: float = 0.0    # hard take profit % (0 = disabled)

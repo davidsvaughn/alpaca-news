@@ -1324,7 +1324,9 @@
     "RCKT",
     "MMEX",
     "BCTX",
-    "SUMAU"
+    "SUMAU",
+    "ALDX",
+    "JOYY"
   ],
   "crypto": [],
   "rejected": [
@@ -1475,5 +1477,5 @@
     "MPW",
     "MRD"
   ],
-  "last_updated": "2026-03-10T22:37:16.962159+00:00"
+  "last_updated": "2026-03-10T23:01:59.484467+00:00"
 }

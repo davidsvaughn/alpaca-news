@@ -1672,6 +1672,18 @@ def create_app(
             return JSONResponse({"error": "not_found"}, status_code=404)
         return {"status": "deactivated", "config_id": config_id}
 
+    @app.post("/api/live/config/{config_id}/pause")
+    async def api_live_config_pause(config_id: str):
+        """Toggle pause on a live config (paused = no new buys, exits still run)."""
+        from trader.db.database import get_live_config, update_live_config
+        config_dict = get_live_config(db, config_id)
+        if not config_dict:
+            return JSONResponse({"error": "not_found"}, status_code=404)
+        config_dict["paused"] = not config_dict.get("paused", False)
+        update_live_config(db, config_id, config_dict)
+        state = "paused" if config_dict["paused"] else "resumed"
+        return {"status": state, "config_id": config_id, "paused": config_dict["paused"]}
+
     @app.delete("/api/live/config/{config_id}")
     async def api_live_config_delete(config_id: str):
         """Delete a live config."""

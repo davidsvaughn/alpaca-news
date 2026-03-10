@@ -468,6 +468,9 @@ class LivePortfolioManager:
         for config_dict in active_configs:
             try:
                 cfg = LiveConfig.from_dict(config_dict)
+                if cfg.paused:
+                    print(f"LIVE-PM: {symbol} config={cfg.name} PAUSED — skipping new buys")
+                    continue
                 result = self._evaluate_for_config(snapshot, symbol, cfg)
                 print(f"LIVE-PM: {symbol} config={cfg.name} -> {'BUY' if result else 'SKIP'}")
                 if result:
@@ -612,6 +615,12 @@ class LivePortfolioManager:
 
             alloc_pct = float((cfg.allocation_params or {}).get("alloc_pct", 5))
             position_size = cfg.starting_capital * alloc_pct / 100.0
+
+            # Guard: don't buy if we can't afford at least 1 whole share
+            if entry_price > 0 and position_size / entry_price < 1.0:
+                print(f"LIVE-EVAL: {symbol} SKIP — position size ${position_size:.0f} "
+                      f"< 1 share at ${entry_price:.2f}")
+                return False
 
             # Submit market buy and WAIT for fill confirmation
             try:

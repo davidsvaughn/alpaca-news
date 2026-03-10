@@ -1,3 +1,6 @@
+<!-- Strategy display name mapping -->
+{% set _strategy_short = {'volume_delta_divergence': 'VDD'} %}
+
 <!-- Macro: stats row -->
 {% macro stats_row(stats) %}
 <div class="row mb-0 g-2">
@@ -24,10 +27,10 @@
 {% macro holdings_table(watches, config_id='') %}
 {% if watches %}
 <div class="table-responsive">
-  <table class="table table-sm table-hover align-middle mb-1 _holdings-table" data-config-id="{{ config_id }}">
+  <table class="table table-sm table-hover align-middle mb-1 _holdings-table _sortable" data-config-id="{{ config_id }}">
     <thead class="table-light"><tr>
       {% if config_id %}<th style="width:30px"><input type="checkbox" class="_select-all" title="Select all"></th>{% endif %}
-      <th>Symbol</th><th>Dir</th><th>Qty</th><th>Entry</th><th>Current</th><th>P&L</th><th>Conf</th><th>Strategy</th><th>Entered</th><th></th>
+      <th data-sort="text">Symbol</th><th data-sort="text">Dir</th><th data-sort="num">Qty</th><th data-sort="num">Entry</th><th data-sort="num">Current</th><th data-sort="num">Value</th><th data-sort="num">P&L</th><th data-sort="num">Conf</th><th data-sort="text">Strategy</th><th data-sort="text">Entered</th><th></th>
     </tr></thead>
     <tbody>
     {% for w in watches %}
@@ -48,6 +51,14 @@
           <span class="text-muted">&mdash;</span>
         {% endif %}
       </td>
+      {% set qty = w.qty if w.qty is defined and w.qty else none %}
+      <td>
+        {% if cur and qty %}
+          ${{ "{:,.0f}".format(cur * qty) }}
+        {% else %}
+          <span class="text-muted">&mdash;</span>
+        {% endif %}
+      </td>
       <td>
         {% if pnl is not none %}
           <span class="{% if pnl >= 0 %}pnl-positive{% else %}pnl-negative{% endif %}">
@@ -58,7 +69,7 @@
         {% endif %}
       </td>
       <td>{{ "%.0f"|format(w.entry.confidence * 100) }}%</td>
-      <td class="small text-muted">{{ w.exit_strategy or 'legacy' }}</td>
+      <td class="small text-muted">{{ _strategy_short.get(w.exit_strategy, w.exit_strategy) or 'legacy' }}</td>
       <td class="small text-muted">{{ w.created_at[:16] }}</td>
       <td><a href="/watches/{{ w.watch_id }}" class="btn btn-sm btn-outline-secondary py-0" style="font-size:.75rem">Detail</a></td>
     </tr>
@@ -75,9 +86,9 @@
 {% macro cooling_table(watches) %}
 {% if watches %}
 <div class="table-responsive">
-  <table class="table table-sm table-hover align-middle mb-1">
+  <table class="table table-sm table-hover align-middle mb-1 _sortable">
     <thead class="table-light"><tr>
-      <th>Symbol</th><th>Status</th><th>Entry</th><th>Exit</th><th>P&L</th><th>Reason</th><th>Until</th><th></th>
+      <th data-sort="text">Symbol</th><th data-sort="text">Status</th><th data-sort="num">Entry</th><th data-sort="num">Exit</th><th data-sort="num">P&L</th><th data-sort="text">Reason</th><th data-sort="text">Until</th><th></th>
     </tr></thead>
     <tbody>
     {% for w in watches %}
@@ -104,9 +115,9 @@
 {% macro closed_table(watches, total) %}
 {% if watches %}
 <div class="table-responsive">
-  <table class="table table-sm table-hover align-middle mb-1">
+  <table class="table table-sm table-hover align-middle mb-1 _sortable">
     <thead class="table-light"><tr>
-      <th>Symbol</th><th>Entry</th><th>Exit</th><th>P&L</th><th>Reason</th><th>Entered</th><th>Sealed</th><th></th>
+      <th data-sort="text">Symbol</th><th data-sort="num">Entry</th><th data-sort="num">Exit</th><th data-sort="num">P&L</th><th data-sort="text">Reason</th><th data-sort="text">Entered</th><th data-sort="text">Sealed</th><th></th>
     </tr></thead>
     <tbody>
     {% for w in watches %}
@@ -142,6 +153,11 @@
     <span class="_drag-handle" title="Drag to reorder" style="cursor:grab; margin-right:6px; color:#aaa; font-size:1rem; user-select:none;">&#9776;</span>
     <h5 class="mb-0 me-2">{{ p.config.config_id }}</h5>
     {% if p.config.active %}
+    <button class="btn btn-sm py-0 px-1 {% if p.config.paused is defined and p.config.paused %}btn-outline-success{% else %}btn-outline-warning{% endif %}"
+            hx-post="/api/live/config/{{ p.config.config_id }}/pause"
+            hx-swap="none"
+            onclick="setTimeout(() => location.reload(), 500)"
+            style="font-size: 0.7rem;">{% if p.config.paused is defined and p.config.paused %}Resume{% else %}Pause{% endif %}</button>
     <button class="btn btn-sm btn-outline-danger py-0 px-1"
             hx-post="/api/live/config/{{ p.config.config_id }}/deactivate"
             hx-swap="none"
@@ -157,7 +173,10 @@
             style="font-size: 0.7rem;">Delete</button>
     {% endif %}
   </div>
-  {% if p.config.alpaca_account_id %}<div class="mb-1"><span class="badge bg-warning text-dark" style="font-size:.65rem">Alpaca: {{ p.config.alpaca_account_id }}</span></div>{% endif %}
+  <div class="mb-1">
+    {% if p.config.paused is defined and p.config.paused %}<span class="badge bg-warning text-dark me-1" style="font-size:.65rem">PAUSED</span>{% endif %}
+    {% if p.config.alpaca_account_id %}<span class="badge bg-warning text-dark" style="font-size:.65rem">Alpaca: {{ p.config.alpaca_account_id }}</span>{% endif %}
+  </div>
 
   <!-- Sim value display -->
   {% if p.sim and p.sim.sim_trades %}
@@ -204,7 +223,7 @@
   <div class="small text-muted mb-0">{{ af | join(' | ') }}</div>
   {% endif %}
   <div class="small text-muted mb-0">
-    {{ p.config.exit_strategy }} | Stop: {{ p.config.guard_stop_pct }}% | {{ p.config.allocation }}
+    {{ _strategy_short.get(p.config.exit_strategy, p.config.exit_strategy) }} | Stop: {{ p.config.guard_stop_pct }}% | {{ p.config.allocation }}
   </div>
   {% if p.config.exit_strategy is defined %}
   <div class="mb-1">
@@ -360,6 +379,45 @@
 
 <script>
 (function() {
+  // Sortable tables
+  document.querySelectorAll('._sortable').forEach(function(table) {
+    table.querySelectorAll('th[data-sort]').forEach(function(th) {
+      th.style.cursor = 'pointer';
+      th.style.userSelect = 'none';
+      th.addEventListener('click', function() {
+        var tbody = table.querySelector('tbody');
+        var rows = Array.from(tbody.querySelectorAll('tr'));
+        var idx = Array.from(th.parentNode.children).indexOf(th);
+        var sortType = th.dataset.sort;
+        var asc = th.dataset.sortDir !== 'asc';
+        // Reset all headers in this table
+        th.parentNode.querySelectorAll('th[data-sort]').forEach(function(h) {
+          h.dataset.sortDir = '';
+          h.textContent = h.textContent.replace(/ [▲▼]$/, '');
+        });
+        th.dataset.sortDir = asc ? 'asc' : 'desc';
+        th.textContent = th.textContent + (asc ? ' ▲' : ' ▼');
+
+        rows.sort(function(a, b) {
+          var aCell = a.children[idx];
+          var bCell = b.children[idx];
+          if (!aCell || !bCell) return 0;
+          var aText = (aCell.textContent || '').trim();
+          var bText = (bCell.textContent || '').trim();
+          if (sortType === 'num') {
+            var aNum = parseFloat(aText.replace(/[$,%+]/g, '')) || 0;
+            var bNum = parseFloat(bText.replace(/[$,%+]/g, '')) || 0;
+            if (aText === '—' || aText === '') aNum = -Infinity;
+            if (bText === '—' || bText === '') bNum = -Infinity;
+            return asc ? aNum - bNum : bNum - aNum;
+          }
+          return asc ? aText.localeCompare(bText) : bText.localeCompare(aText);
+        });
+        rows.forEach(function(r) { tbody.appendChild(r); });
+      });
+    });
+  });
+
   // Convert UTC timestamps to local human-readable format
   document.querySelectorAll('._local-time').forEach(function(el) {
     var utc = el.dataset.utc;

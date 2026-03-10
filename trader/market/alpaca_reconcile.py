@@ -38,6 +38,35 @@ def _log_tx(db: Any, account_id: str, event: str, symbol: str, **kwargs: Any) ->
         log.warning("Failed to log reconcile transaction: %s %s", event, symbol)
 
 
+def _lookup_snapshot_prediction(db: Any, symbol: str) -> dict[str, Any]:
+    """Find the most recent snapshot prediction for a symbol.
+
+    Returns dict with 'confidence' and 'direction', or defaults if not found.
+    Per-symbol snapshots have IDs like 'abc123_SYMBOL'.
+    """
+    import json
+    from sqlalchemy import text
+    try:
+        with db.engine.connect() as conn:
+            row = conn.execute(
+                text("SELECT snapshot_json FROM snapshots "
+                     "WHERE snapshot_id LIKE :pattern "
+                     "ORDER BY created_at DESC LIMIT 1"),
+                {"pattern": f"%_{symbol}"},
+            ).fetchone()
+        if row:
+            snap = json.loads(row[0]) if isinstance(row[0], str) else row[0]
+            pred = snap.get("prediction") or {}
+            if pred.get("confidence") is not None:
+                return {
+                    "confidence": pred["confidence"],
+                    "direction": (pred.get("direction") or "bullish").lower(),
+                }
+    except Exception as e:
+        log.warning("RECONCILE: failed to look up snapshot for %s: %s", symbol, e)
+    return {"confidence": 0.5, "direction": "bullish"}
+
+
 def reconcile(
     *,
     broker: Any,  # AlpacaBroker
@@ -222,12 +251,14 @@ def reconcile(
         if live_config and live_config_id:
             # Adopt: create a watch for this orphan position
             try:
+                # Look up real confidence/direction from the most recent snapshot
+                snap_pred = _lookup_snapshot_prediction(db, symbol)
                 builder = WatchBuilder.create_from_live_config(
                     snapshot_id="reconcile_adopted",
                     symbol=symbol,
                     entry_price=pos.avg_entry_price,
-                    confidence=0.5,
-                    direction="bullish",
+                    confidence=snap_pred["confidence"],
+                    direction=snap_pred["direction"],
                     live_config_id=live_config_id,
                     exit_strategy=live_config.exit_strategy,
                     exit_params=live_config.exit_params,

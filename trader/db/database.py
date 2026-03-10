@@ -318,21 +318,29 @@ def get_watch_by_snapshot(db: Database, snapshot_id: str) -> dict[str, Any] | No
 def count_holding_watches(db: Database, *, live_config_id: str | None = None) -> int:
     """Count watches currently in 'holding' status.
 
+    Excludes fractional dust (qty < 1 share) — these are leftover remnants
+    from extended-hours sells and should not block new position slots.
+
     If live_config_id is provided, counts only watches for that portfolio.
     """
+    # Watches without qty (legacy) or with qty >= 1 count as real positions.
+    # Watches with qty < 1 are fractional dust and are excluded.
+    dust = ("AND (json_extract(watch_json, '$.qty') IS NULL "
+            "OR json_extract(watch_json, '$.qty') >= 1)")
     if live_config_id:
         with db.engine.connect() as conn:
             row = conn.execute(
                 text(
                     "SELECT COUNT(*) FROM watches WHERE status = 'holding' "
-                    "AND json_extract(watch_json, '$.live_config_id') = :cid"
+                    "AND json_extract(watch_json, '$.live_config_id') = :cid "
+                    + dust
                 ),
                 {"cid": live_config_id},
             ).fetchone()
     else:
         with db.engine.connect() as conn:
             row = conn.execute(
-                text("SELECT COUNT(*) FROM watches WHERE status = 'holding'"),
+                text("SELECT COUNT(*) FROM watches WHERE status = 'holding' " + dust),
             ).fetchone()
     return row[0] if row else 0
 
