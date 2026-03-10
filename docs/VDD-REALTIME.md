@@ -7,9 +7,20 @@
 > **Status**: Design complete, not yet implemented.
 >
 > See also:
-> - [TICK-COLLECTOR.md](TICK-COLLECTOR.md) — Collector service (streams L1 data → TimescaleDB)
-> - [BACKTEST-STRATEGIES.md](BACKTEST-STRATEGIES.md) — Backtest VDD implementation (bar-based)
+> - [TICK-COLLECTOR.md](TICK-COLLECTOR.md) — Collector service, TimescaleDB schema, L1 field details, timestamps
+> - [TICK-COLLECTOR.md § Volume Gap Tracking](TICK-COLLECTOR.md#volume-gap-tracking) — How unclassified volume works
+> - [TICK-COLLECTOR.md § Timestamps](TICK-COLLECTOR.md#timestamps) — Dual timestamp design (`time` vs `received_at`)
+> - [TICK-COLLECTOR.md § Phase 1 Findings](TICK-COLLECTOR.md#phase-1-findings-2026-03-10-pre-market-9-am-et) — L1 data quality measurements
+> - [BACKTEST-STRATEGIES.md](BACKTEST-STRATEGIES.md) — Backtest VDD implementation (bar-based, § 15)
 > - [VOLUME-DELTA-REALTIME.md](VOLUME-DELTA-REALTIME.md) — Shadow collector (predecessor)
+> - [VDD-COMPARISON.md](VDD-COMPARISON.md) — Bar-based vs tick-level VDD comparison experiment
+> - [LIVE-TRADING.md](LIVE-TRADING.md) — Live exit monitor that will consume this VDD signal
+>
+> Key source files:
+> - `trader/market/backtest.py` — `_compute_vdd_signal_indices()` (line ~1304), `_run_volume_delta_divergence()` (line ~1852)
+> - `trader/online/live_monitor.py` — `LiveExitMonitor`, `evaluate_exit()` integration point
+> - `tick_collector/init.sql` — TimescaleDB `trades` table schema
+> - `tick_collector/collector.py` — L1 parser, direction classifier, volume differencing
 
 ---
 
@@ -17,8 +28,9 @@
 
 ### Current VDD (backtest / live exit monitor)
 
-The existing VDD exit strategy in `trader/market/backtest.py` works on **1-minute
-candle bars** from yfinance/Schwab candle API:
+The existing VDD exit strategy in `trader/market/backtest.py`
+(see [BACKTEST-STRATEGIES.md § 15](BACKTEST-STRATEGIES.md) for full description)
+works on **1-minute candle bars** from yfinance/Schwab candle API:
 
 1. **Classify each bar**: if `Close > prev_Close` → entire bar's volume = uptick;
    else downtick. (Inter-bar tick rule — crude, all-or-nothing per bar.)
@@ -28,9 +40,10 @@ candle bars** from yfinance/Schwab candle API:
 
 ### What tick data enables
 
-The tick collector stores L1 updates in TimescaleDB with per-update `direction`
-(uptick/downtick from price comparison) and `volume_delta` (true volume from
-`total_volume` differencing). This enables:
+The [tick collector](TICK-COLLECTOR.md) stores L1 updates in TimescaleDB with
+per-update `direction` (uptick/downtick from price comparison) and `volume_delta`
+(true volume from `total_volume` differencing — see
+[Volume Gap Tracking](TICK-COLLECTOR.md#volume-gap-tracking)). This enables:
 
 - **Sub-minute bucketing**: 10s, 30s, or any interval — not locked to 1-minute bars
 - **Intra-bar directional data**: ~20-50 L1 updates per minute, each independently
@@ -123,8 +136,9 @@ close-to-close direction as fallback (same as current bar-based approach).
 
 ### Step 3: VDD signal detection (Python)
 
-Same math as `_compute_vdd_signal_indices()` in backtest.py, but operating
-on the bucketed data with time-based lookback:
+Same math as `_compute_vdd_signal_indices()` in
+[backtest.py:1304](../trader/market/backtest.py), but operating on the bucketed
+data with time-based lookback:
 
 ```python
 import pandas as pd
@@ -173,8 +187,8 @@ async def check_vdd_exit(
 ```
 
 This replaces the current `evaluate_exit("volume_delta_divergence", ...)` call
-in the live exit monitor when tick data is available, with fallback to the
-bar-based approach when it's not.
+in [live_monitor.py](../trader/online/live_monitor.py) when tick data is
+available, with fallback to the bar-based approach when it's not.
 
 ---
 
@@ -262,8 +276,9 @@ work best.
 
 ### L1 Sample Quality at Fine Granularity
 
-With L1 data updating ~1/sec per symbol, different bucket sizes give different
-sample counts:
+With L1 data updating ~1/sec per symbol (measured in
+[Phase 1 Findings](TICK-COLLECTOR.md#phase-1-findings-2026-03-10-pre-market-9-am-et)),
+different bucket sizes give different sample counts:
 
 | Bucket | ~Samples/bucket (active stock) | Reliability |
 |--------|-------------------------------|-------------|
@@ -278,7 +293,8 @@ per bucket for a reliable uptick/downtick ratio estimate.
 
 ### Dual Timestamps
 
-Each trade has `time` (Schwab trade time) and `received_at` (local receipt time).
+Each trade has `time` (Schwab trade time) and `received_at` (local receipt time) —
+see [TICK-COLLECTOR.md § Timestamps](TICK-COLLECTOR.md#timestamps) for details.
 The VDD query should bucket by `time` for accurate economic ordering. The
 `received_at` is useful for latency monitoring but not for the VDD computation.
 
@@ -299,7 +315,8 @@ to have recent data. The live exit monitor should:
 
 ### Performance
 
-The query hits the `trades` hypertable with an index on `(symbol, time DESC)`.
+The query hits the `trades` hypertable (see [schema](TICK-COLLECTOR.md#schema))
+with an index on `(symbol, time DESC)`.
 For 80 minutes of data at ~50 updates/min = ~4,000 rows per symbol. This should
 be sub-100ms even without the continuous aggregate. If performance becomes an
 issue, we can add a continuous aggregate at the most common bucket interval.

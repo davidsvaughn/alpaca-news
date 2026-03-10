@@ -1152,7 +1152,10 @@
     "TDOC",
     "VWAGY",
     "XGN",
-    "OCC"
+    "OCC",
+    "CPHC",
+    "ADM",
+    "BABB"
   ],
   "crypto": [],
   "rejected": [
@@ -1285,7 +1288,8 @@
     "LUPIN",
     "MANKIND",
     "NAZARA",
-    "FLERIE"
+    "FLERIE",
+    "DOM"
   ],
-  "last_updated": "2026-03-10T16:03:28.996229+00:00"
+  "last_updated": "2026-03-10T16:07:04.711033+00:00"
 }
