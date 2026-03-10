@@ -1815,7 +1815,9 @@ def create_app(
             import threading
 
             def _poll_and_reconcile() -> None:
+                import logging as _logging
                 import time as _time
+                _log = _logging.getLogger(__name__)
                 _TERMINAL = {"filled", "canceled", "expired", "rejected", "suspended"}
                 _POLL_S = 2.0
                 _TIMEOUT_S = 300.0  # 5 min max
@@ -1841,9 +1843,9 @@ def create_app(
                     ensure_stops(broker=broker, db=db,
                                  live_config_id=config_id,
                                  guard_stop_pct=cfg.guard_stop_pct)
-                    log.info("LIQUIDATE: post-sell reconcile complete for %s", config_id)
+                    _log.info("LIQUIDATE: post-sell reconcile complete for %s", config_id)
                 except Exception:
-                    log.exception("LIQUIDATE: post-sell reconcile failed for %s", config_id)
+                    _log.exception("LIQUIDATE: post-sell reconcile failed for %s", config_id)
 
             t = threading.Thread(target=_poll_and_reconcile, daemon=True,
                                  name=f"liquidate-reconcile-{config_id[:8]}")

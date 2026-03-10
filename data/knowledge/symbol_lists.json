@@ -1323,7 +1323,8 @@
     "SSM",
     "RCKT",
     "MMEX",
-    "BCTX"
+    "BCTX",
+    "SUMAU"
   ],
   "crypto": [],
   "rejected": [
@@ -1474,5 +1475,5 @@
     "MPW",
     "MRD"
   ],
-  "last_updated": "2026-03-10T22:26:13.458009+00:00"
+  "last_updated": "2026-03-10T22:37:16.962159+00:00"
 }
