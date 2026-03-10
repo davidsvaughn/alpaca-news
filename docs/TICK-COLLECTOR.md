@@ -1,8 +1,8 @@
-# Tick Collector: Raw Trade Data Collection Service
+# Tick Collector: Schwab Streaming → TimescaleDB
 
-> Standalone service for streaming Schwab TIMESALE_EQUITY data, storing raw
-> individual trades in TimescaleDB, and providing tick-level volume delta
-> to the trader app.
+> Standalone service for streaming Schwab LEVELONE_EQUITIES (with extended
+> fields) into TimescaleDB, providing tick-level volume delta to the trader app.
+> TIMESALE_EQUITY is subscribed opportunistically but may not be available.
 >
 > Hub document: plan, roadmap, progress, issues, decisions.
 >
@@ -11,29 +11,34 @@
 > See also:
 > - [VOLUME-DELTA-REALTIME.md](VOLUME-DELTA-REALTIME.md) — Shadow collector architecture (predecessor)
 > - [VDD-COMPARISON.md](VDD-COMPARISON.md) — Bar-based vs tick-level comparison (blocked on data)
+> - [SchwabStreamerAPI_LEVELONE.md](refs/SchwabStreamerAPI_LEVELONE.md) — L1 field reference
+> - [docker-compose.yml](../docker-compose.yml) — TimescaleDB container
+> - [tick_collector/](../tick_collector/) — Collector package source
 
 ---
 
 ## Table of Contents
 
 1. [Motivation](#motivation)
-2. [Goals](#goals)
+2. [Three Tiers of Volume Delta Accuracy](#three-tiers-of-volume-delta-accuracy)
 3. [Architecture](#architecture)
-4. [Data Source: TIMESALE_EQUITY](#data-source-timesale_equity)
-5. [Resilient WebSocket Connection](#resilient-websocket-connection)
+4. [Package Structure](#package-structure)
+5. [Data Sources](#data-sources)
 6. [Storage: TimescaleDB](#storage-timescaledb)
-7. [Collector ↔ Trader Communication](#collector--trader-communication)
-8. [Deployment](#deployment)
-9. [Roadmap](#roadmap)
-10. [Decisions Log](#decisions-log)
-11. [Open Questions](#open-questions)
-12. [Issues / Blockers](#issues--blockers)
+7. [Volume Gap Tracking](#volume-gap-tracking)
+8. [Collector ↔ Trader Communication](#collector--trader-communication)
+9. [Running the Collector](#running-the-collector)
+10. [Deployment](#deployment)
+11. [Roadmap](#roadmap)
+12. [Decisions Log](#decisions-log)
+13. [Open Questions](#open-questions)
+14. [Issues / Blockers](#issues--blockers)
 
 ---
 
 ## Motivation
 
-The shadow collector (LEVELONE_EQUITIES → 1-minute bars) has two fatal problems:
+The shadow collector (LEVELONE_EQUITIES → 1-minute bars) has two problems:
 
 1. **Schwab WebSocket drops during market hours** with no reconnection logic.
    The collector captures almost no trading-hour data — only extended hours.
@@ -41,60 +46,37 @@ The shadow collector (LEVELONE_EQUITIES → 1-minute bars) has two fatal problem
    **Update**: schwabdev has built-in reconnection (discovered 2026-03-10) — needs
    market-hours testing to confirm it fixes this.
 
-2. **LEVELONE_EQUITIES provides aggregated snapshots**, not individual trades.
-   `total_volume` is cumulative; we infer per-tick volume by differencing. This
-   means we can't filter by trade size, can't compute sub-minute VDD, and can't
-   distinguish institutional from retail flow.
-
-### Three Tiers of Volume Delta Accuracy
-
-| Tier | Source | Trade-Size Filtering | Status |
-|------|--------|---------------------|--------|
-| **1** (current) | L1: `last_price` + `total_volume` differencing | None — all trades lumped | Active |
-| **2** (quick win) | L1 + `last_size` (field 9), `trade_time` (35), `last_mic_id` (41) | Approximate (~30-50% of trades visible) | **Available now — just add fields to subscription** |
-| **3** (ideal) | `TIMESALE_EQUITY` per-trade feed | Exact — every trade visible | Testing (code=11 outside market hours) |
-
-**Tier 2 detail**: LEVELONE_EQUITIES updates ~1/sec. If 20 trades happen between
-updates, only the last trade's `last_size` is reported. `total_volume` captures
-aggregate volume, but individual trade sizes are lost. Still useful: if
-`last_size >= 1000`, at least one large trade happened. Combined with
-`total_volume` differencing, this provides an approximate institutional flow signal.
-
-**Tier 3 detail**: TIMESALE_EQUITY provides every individual trade with price,
-size, time, and exchange. Full trade-size filtering, sub-minute VDD, accurate
-tick classification. May not be available on Schwab's current API (returned
-`code=11` at 2 AM — needs market-hours testing).
+2. **Current L1 subscription uses only basic fields** (`last_price` + `total_volume`
+   differencing). By adding fields 9, 35, and 41, we get approximate trade-size
+   visibility for institutional flow detection.
 
 We need:
-- **TIMESALE_EQUITY** for per-trade data (Tier 3) — or Tier 2 as fallback
-- **Separate always-on service** decoupled from the trader app (which restarts frequently)
-- **Robust storage** for 50-100+ symbols of raw trade data
+- **Extended L1 fields** for approximate trade-size filtering (Tier 2)
+- **TIMESALE_EQUITY** if available for exact per-trade data (Tier 3)
+- **Separate always-on service** decoupled from the trader app
+- **Robust storage** for 50-100+ symbols
 - **Reliable reconnection** so we never lose market-hours data
 
 ---
 
-## Goals
+## Three Tiers of Volume Delta Accuracy
 
-### Must Have
-- Stream TIMESALE_EQUITY for 50-100+ symbols simultaneously
-- Persist every individual trade (price, size, timestamp, exchange)
-- Auto-reconnect on WebSocket disconnect with exponential backoff
-- Run independently of trader app (survives trader restarts)
-- Trader app can query aggregated bars with tick-level volume delta
-- Trade-size filtering capability (e.g., only trades > 1,000 shares)
+| Tier | Source | Trade-Size Filtering | Status |
+|------|--------|---------------------|--------|
+| **1** (legacy) | L1: `last_price` + `total_volume` differencing | None — all trades lumped | Shadow collector (active) |
+| **2** (primary) | L1 + `last_size` (9), `trade_time` (35), `last_mic_id` (41) | Approximate — visible trade + volume gap tracking | **Collector built, needs market-hours test** |
+| **3** (ideal) | `TIMESALE_EQUITY` per-trade feed | Exact — every trade visible | May be unavailable (code=11 outside hours) |
 
-### Should Have
-- Auto-aggregated 1-minute bars with uptick/downtick splits (continuous aggregates)
-- Compression and retention policies (raw ticks → compressed after N days)
-- Health monitoring / status endpoint
-- Dynamic symbol management (add/remove without restart)
-- Graceful shutdown (flush buffers, close connections cleanly)
+**Tier 2 detail**: LEVELONE_EQUITIES updates ~1/sec. Between updates, multiple
+trades may occur. Only the last trade's `last_size` is reported, but
+`total_volume` differencing captures the total volume that moved. The difference
+(`volume_delta - last_size`) is "unclassified volume" — trades we can see in
+aggregate but can't individually classify as uptick/downtick.
 
-### Nice to Have
-- Sub-minute VDD computation (5-second, 15-second bars)
-- Multiple aggregation windows simultaneously
-- Dashboard integration (collector status, symbol count, data rates)
-- Docker deployment option (in addition to systemd)
+**Why L1-primary**: TIMESALE_EQUITY returned `code=11` (service unavailable)
+during testing at 2 AM. It may only work during market hours, or it may not
+be available at all on Schwab's current API. The collector subscribes to both
+but is designed to work with L1 alone.
 
 ---
 
@@ -102,34 +84,35 @@ We need:
 
 ```
 ┌────────────────────────────────────────────────────────────────────┐
-│                        Same Machine (for now)                      │
+│                        Same Machine                                │
 │                                                                    │
 │  ┌───────────────────────────┐    ┌─────────────────────────────┐ │
-│  │  tick-collector            │    │  TimescaleDB (Docker)        │ │
-│  │  (systemd service)        │    │  ├── trades (hypertable)     │ │
+│  │  tick_collector            │    │  TimescaleDB (Docker:5433)   │ │
+│  │  (python -m tick_collector)│    │  ├── trades (hypertable)     │ │
 │  │                           │    │  ├── bars_1m (cont. agg)     │ │
-│  │  ├── Schwab WebSocket     │───►│  ├── compression (7d)        │ │
-│  │  │   ├── TIMESALE_EQUITY  │    │  └── retention (30d raw)     │ │
-│  │  │   └── Auto-reconnect   │    └─────────────────────────────┘ │
-│  │  │       (exp. backoff)   │                 ▲                   │
+│  │  Schwab WebSocket         │    │  ├── compression (7d)        │ │
+│  │  ├── LEVELONE_EQUITIES    │    │  └── retention (30d raw)     │ │
+│  │  │   (primary, always)    │    └─────────────────────────────┘ │
+│  │  ├── TIMESALE_EQUITY      │                 ▲                   │
+│  │  │   (optional, if avail) │                 │                   │
 │  │  │                        │                 │                   │
-│  │  ├── Write buffer         │                 │                   │
-│  │  │   └── Batch inserts    │                 │                   │
-│  │  │       (every N sec)    │                 │                   │
+│  │  ├── TickClassifier       │                 │                   │
+│  │  │   └── uptick/downtick  │                 │                   │
 │  │  │                        │                 │                   │
-│  │  ├── Symbol manager       │                 │                   │
-│  │  │   └── Config file or   │                 │                   │
-│  │  │       Unix socket API  │                 │                   │
-│  │  │                        │                 │                   │
-│  │  └── Health/status        │                 │                   │
-│  │      └── /health endpoint │                 │                   │
-│  └───────────────────────────┘                 │                   │
-│                                                │                   │
-│  ┌───────────────────────────┐                 │                   │
-│  │  trader app (start/stop)  │─── SQL reads ───┘                   │
+│  │  ├── TradeBuffer          │                 │                   │
+│  │  │   └── thread-safe      │    asyncpg      │                   │
+│  │  │       deque            │───batch INSERT──┘                   │
+│  │  │       (flush every 2s) │                                     │
+│  │  │                        │                                     │
+│  │  └── Config               │                                     │
+│  │      └── symbols.txt      │                                     │
+│  │          or TICK_SYMBOLS   │                                     │
+│  └───────────────────────────┘                                     │
+│                                                                    │
+│  ┌───────────────────────────┐                                     │
+│  │  trader app               │─── SQL reads (asyncpg) ────────────┘│
 │  │  ├── VDD from bars_1m     │                                     │
 │  │  ├── Trade-size filtering │                                     │
-│  │  ├── Sub-minute analysis  │                                     │
 │  │  └── Fallback: bar-based  │                                     │
 │  └───────────────────────────┘                                     │
 └────────────────────────────────────────────────────────────────────┘
@@ -138,254 +121,230 @@ We need:
 ### Data Flow
 
 ```
-Schwab WebSocket
-  └── TIMESALE_EQUITY messages
-        └── Per-trade: {timestamp, symbol, price, size, exchange}
-              └── Write buffer (in-memory, batched)
-                    └── Batch INSERT into TimescaleDB `trades` table
-                          └── Continuous aggregate → `bars_1m` view
-                                └── Trader app queries bars_1m for VDD
+schwabdev Stream (background thread)
+  ├── LEVELONE_EQUITIES message
+  │     └── Parse: last_price(3), total_volume(8), last_size(9),
+  │               trade_time(35), last_mic_id(41)
+  │           └── Volume differencing (total_volume - prev_total_volume)
+  │                 └── Skip if volume_delta <= 0 (no new trades)
+  │
+  └── TIMESALE_EQUITY message (if available)
+        └── Parse: time(1), price(2), size(3)
+
+  Both produce Trade objects:
+        └── TickClassifier → direction (+1/-1/0)
+              └── TradeBuffer.append() (thread-safe)
+                    └── Async flush loop (every 2s)
+                          └── Batch INSERT → TimescaleDB `trades` table
+                                └── Continuous aggregate → `bars_1m` view
+                                      └── Trader app queries bars_1m
 ```
-
-### Key Design Decisions
-
-- **Separate process, not a thread** — must survive trader app restarts
-- **TimescaleDB, not SQLite** — handles concurrent read/write, time-series
-  optimized, built-in compression and aggregation
-- **Batch writes** — buffer trades in memory, flush every 1-5 seconds to
-  reduce DB write overhead
-- **TIMESALE_EQUITY, not LEVELONE_EQUITIES** — individual trades vs aggregated
-  snapshots
 
 ---
 
-## Data Source: TIMESALE_EQUITY
+## Package Structure
 
-### What It Provides
-
-Each message is a single trade execution:
-
-| Field | Description |
-|-------|-------------|
-| `timestamp` | Trade time (millisecond precision) |
-| `symbol` | Ticker symbol |
-| `price` | Execution price |
-| `size` | Number of shares traded |
-| `exchange` | Exchange code (e.g., "Q" = NASDAQ) |
-
-### How to Subscribe
-
-TIMESALE_EQUITY uses the **same Schwab WebSocket** as LEVELONE_EQUITIES.
-The schwabdev library doesn't expose a `timesale_equity()` method, but we
-can send the subscription JSON directly on the existing connection:
-
-```json
-{
-  "requests": [{
-    "service": "TIMESALE_EQUITY",
-    "requestid": "timesale_1",
-    "command": "ADD",
-    "SchwabClientCustomerId": "...",
-    "SchwabClientCorrelId": "...",
-    "parameters": {
-      "keys": "AAPL,NVDA,TSLA,...",
-      "fields": "0,1,2,3,4"
-    }
-  }]
-}
+```
+tick_collector/
+  __init__.py
+  __main__.py        # Entry point: python -m tick_collector
+  config.py          # CollectorConfig from env vars + symbols.txt
+  symbols.txt        # Default 28-symbol watchlist (editable)
+  classifier.py      # TickClassifier: uptick/downtick/zero-tick
+  buffer.py          # TradeBuffer: thread-safe deque, drain in batches
+  db.py              # Trade dataclass, asyncpg connect + batch insert
+  collector.py       # TickCollector: schwabdev → parse → buffer → flush
+  init.sql           # TimescaleDB schema (auto-run on container init)
 ```
 
-Fields: 0=symbol, 1=trade_time, 2=last_price, 3=last_size, 4=last_sequence
+### Key Components
 
-### Capacity
+| Component | File | Description |
+|-----------|------|-------------|
+| `CollectorConfig` | `config.py` | Loads DSN, Schwab creds, symbols from env + file |
+| `TickClassifier` | `classifier.py` | Compares current price to previous per-symbol. First trade = 0. |
+| `TradeBuffer` | `buffer.py` | Thread-safe deque. schwabdev thread appends, async loop drains. |
+| `Trade` | `db.py` | Dataclass with `source` ("L1"/"TS"), `volume_delta`, `total_volume` |
+| `TickCollector` | `collector.py` | Main orchestrator. Subscribes to both L1 and TIMESALE, parses messages, manages buffer + flush loop. |
 
-- Schwab supports **up to 500 symbols** per WebSocket subscription
-- Can run TIMESALE_EQUITY and LEVELONE_EQUITIES on the **same connection**
+---
+
+## Data Sources
+
+### Primary: LEVELONE_EQUITIES (Tier 2)
+
+Subscribed fields:
+
+| Field | Name | Type | Use |
+|-------|------|------|-----|
+| 0 | Symbol | String | Key |
+| 3 | Last Price | double | Price for tick classification |
+| 8 | Total Volume | long | Volume differencing (total moved between updates) |
+| 9 | Last Size | long | Size of most recent trade (visible trade) |
+| 16 | Last ID | char | Exchange of last trade |
+| 35 | Trade Time in Long | Long | Millisecond-precision trade timestamp |
+| 41 | Last MIC ID | String | 4-char Market Identifier Code (exchange) |
+
+Full L1 field subscription string:
+```
+0,1,2,3,4,5,8,9,10,11,12,16,17,18,33,35,41,42
+```
+
+See [SchwabStreamerAPI_LEVELONE.md](refs/SchwabStreamerAPI_LEVELONE.md) for all field definitions.
+
+### Optional: TIMESALE_EQUITY (Tier 3)
+
+Subscribed via `stream.basic_request()`. Provides individual trade executions:
+
+| Field | Name |
+|-------|------|
+| 0 | Symbol |
+| 1 | Trade Time (ms) |
+| 2 | Last Price |
+| 3 | Last Size |
+| 4 | Last Sequence |
+
+When available, TIMESALE trades are stored with `source='TS'` and no
+`volume_delta`/`total_volume` (not needed — every trade is individually visible).
+
+### Schwab WebSocket Capacity
+
+- Up to **500 symbols** per subscription
+- L1 and TIMESALE can coexist on the **same connection**
 - One connection per Schwab account
-
-### Data Volume Estimates
-
-| Scenario | Trades/min/symbol | Symbols | Trades/day | Raw Size/day |
-|----------|-------------------|---------|------------|--------------|
-| Low (mid-cap) | ~50 | 50 | ~975K | ~30 MB |
-| Medium (mixed) | ~100 | 75 | ~2.9M | ~90 MB |
-| High (large-cap) | ~200 | 100 | ~7.8M | ~240 MB |
-
-With TimescaleDB compression (10-20x): **~5-25 MB/day compressed**.
-
-**Note**: Actual trade frequency from TIMESALE_EQUITY needs to be measured.
-Schwab may throttle or aggregate differently than raw exchange feeds. This
-is a key Phase 1 deliverable.
-
----
-
-## Resilient WebSocket Connection
-
-### Current Problem
-
-`schwab_client.py` calls `schwabdev.Stream().start()` once. No heartbeat,
-no reconnection. If the WebSocket drops during market hours, streaming
-silently stops.
-
-### Reconnection Strategy
-
-```
-┌─────────┐     ┌───────────┐     ┌──────────────┐
-│ CONNECT │────►│ STREAMING │────►│ DISCONNECTED │
-└─────────┘     └───────────┘     └──────────────┘
-     ▲               │                    │
-     │               │ heartbeat          │ backoff
-     │               │ timeout            │ delay
-     │               ▼                    ▼
-     │          ┌───────────┐     ┌──────────────┐
-     └──────────│ RECONNECT │◄────│   WAITING    │
-                └───────────┘     └──────────────┘
-```
-
-**Heartbeat monitor**: During market hours, if no message received for
-`HEARTBEAT_TIMEOUT` seconds (e.g., 10s), assume disconnected.
-
-**Exponential backoff**: Reconnect delays: 1s → 2s → 5s → 10s → 30s (cap).
-Reset backoff on successful reconnection + first message received.
-
-**Re-subscribe on reconnect**: Maintain in-memory set of active symbols.
-On reconnect, re-send TIMESALE_EQUITY subscription for all symbols.
-
-**schwabdev `start_auto()`**: The library has an auto-scheduling method.
-Needs testing to determine if it handles mid-session reconnection or only
-handles daily start/stop scheduling. (See [Open Questions](#open-questions).)
-
-### Failure Modes to Handle
-
-| Failure | Detection | Recovery |
-|---------|-----------|----------|
-| WebSocket close frame | `on_close` callback | Reconnect immediately |
-| Silent disconnect | Heartbeat timeout | Reconnect with backoff |
-| Auth token expired | 401/error message | Refresh OAuth token, reconnect |
-| Schwab API outage | Repeated reconnect failures | Back off to 60s, log alerts |
-| Network down | Connection refused | Back off, keep retrying |
-| Process crash | systemd detects exit | systemd auto-restart |
 
 ---
 
 ## Storage: TimescaleDB
 
-### Why TimescaleDB
+### Setup
 
-- PostgreSQL extension — standard SQL, mature ecosystem
-- **Hypertables**: automatic time-based partitioning (old data doesn't slow queries)
-- **Continuous aggregates**: auto-materialized 1-min, 5-min bars from raw trades
-- **Compression**: 10-20x for time-series data
-- **Retention policies**: auto-drop raw ticks after N days, keep aggregates forever
-- **Concurrent read/write**: trader app queries while collector writes
+```bash
+# Start TimescaleDB (port 5433, system Postgres uses 5432)
+docker compose up -d
+
+# Schema auto-applied from tick_collector/init.sql on first start
+# DSN: postgresql://tickdata:tickdata_dev@localhost:5433/tickdata
+```
 
 ### Schema
 
 ```sql
--- Raw individual trades
 CREATE TABLE trades (
-    time        TIMESTAMPTZ    NOT NULL,
-    symbol      TEXT           NOT NULL,
-    price       DOUBLE PRECISION NOT NULL,
-    size        INTEGER        NOT NULL,
-    exchange    TEXT,
-    direction   SMALLINT       -- +1 uptick, -1 downtick, 0 zero-tick
+    time           TIMESTAMPTZ      NOT NULL,
+    symbol         TEXT             NOT NULL,
+    price          DOUBLE PRECISION NOT NULL,
+    size           INTEGER          NOT NULL,   -- last_size (L1) or trade size (TS)
+    exchange       TEXT,                        -- last_mic_id (L1) or exchange (TS)
+    direction      SMALLINT,                    -- +1 uptick, -1 downtick, 0 zero-tick
+    source         CHAR(2)          NOT NULL DEFAULT 'L1',  -- 'L1' or 'TS'
+    volume_delta   INTEGER,                     -- total volume change since prev update (L1)
+    total_volume   BIGINT                       -- running total_volume snapshot (L1)
 );
 
--- Convert to hypertable (automatic time-based partitioning)
+-- Hypertable + index
 SELECT create_hypertable('trades', 'time');
-
--- Index for symbol + time range queries
 CREATE INDEX idx_trades_symbol_time ON trades (symbol, time DESC);
+```
 
--- Auto-aggregate 1-minute bars with tick-level volume delta
-CREATE MATERIALIZED VIEW bars_1m
-WITH (timescaledb.continuous) AS
+### Continuous Aggregate: bars_1m
+
+```sql
+CREATE MATERIALIZED VIEW bars_1m WITH (timescaledb.continuous) AS
 SELECT
     time_bucket('1 minute', time) AS bucket,
     symbol,
-    first(price, time)  AS open,
-    max(price)          AS high,
-    min(price)          AS low,
-    last(price, time)   AS close,
-    sum(size)           AS volume,
-    sum(size) FILTER (WHERE direction = 1)  AS uptick_vol,
-    sum(size) FILTER (WHERE direction = -1) AS downtick_vol,
-    sum(size * direction)                   AS net_delta,
-    count(*)            AS trade_count
-FROM trades
-GROUP BY bucket, symbol;
-
--- Compress raw trades older than 7 days
-ALTER TABLE trades SET (
-    timescaledb.compress,
-    timescaledb.compress_segmentby = 'symbol',
-    timescaledb.compress_orderby = 'time'
-);
-SELECT add_compression_policy('trades', INTERVAL '7 days');
-
--- Drop raw trades older than 30 days (aggregated bars kept forever)
-SELECT add_retention_policy('trades', INTERVAL '30 days');
+    first(price, time) AS open, max(price) AS high,
+    min(price) AS low, last(price, time) AS close,
+    -- volume: uses volume_delta (true total) when available, else size
+    sum(COALESCE(volume_delta, size))           AS volume,
+    -- uptick/downtick: uses size (the visible trade we can classify)
+    sum(size) FILTER (WHERE direction = 1)      AS uptick_vol,
+    sum(size) FILTER (WHERE direction = -1)     AS downtick_vol,
+    sum(size * direction)                       AS net_delta,
+    count(*)                                    AS trade_count,
+    -- how much volume we couldn't classify (L1 gap)
+    sum(COALESCE(volume_delta, size) - size)    AS unclassified_vol
+FROM trades GROUP BY bucket, symbol;
 ```
+
+Key columns in bars_1m:
+- **`volume`**: True total volume (from `total_volume` differencing)
+- **`uptick_vol`/`downtick_vol`**: Classified by visible `last_size` trades
+- **`unclassified_vol`**: Volume that moved between L1 updates but couldn't be
+  individually classified. High values = L1 missing many trades.
+- **`trade_count`**: Number of L1 updates (not actual trades)
+
+### Policies
+
+| Policy | Setting |
+|--------|---------|
+| Continuous aggregate refresh | Every 1 minute (10-min start offset, 1-min end offset) |
+| Compression | Raw trades compressed after 7 days |
+| Retention | Raw trades dropped after 30 days (bars kept forever) |
 
 ### Query Examples
 
 ```sql
--- Get 1-minute bars for VDD computation (same interface as current shadow data)
-SELECT bucket, open, high, low, close, volume, uptick_vol, downtick_vol, net_delta
+-- 1-minute bars for VDD computation
+SELECT bucket, open, high, low, close, volume,
+       uptick_vol, downtick_vol, net_delta
 FROM bars_1m
-WHERE symbol = 'AAPL'
-  AND bucket >= NOW() - INTERVAL '80 minutes'
+WHERE symbol = 'AAPL' AND bucket >= NOW() - INTERVAL '80 minutes'
 ORDER BY bucket;
 
--- Institutional flow: only trades >= 1000 shares
-SELECT
-    time_bucket('1 minute', time) AS bucket,
-    sum(size) FILTER (WHERE direction = 1)  AS big_uptick,
-    sum(size) FILTER (WHERE direction = -1) AS big_downtick
+-- Institutional flow: only visible trades >= 500 shares
+SELECT time_bucket('1 minute', time) AS bucket,
+       sum(size) FILTER (WHERE direction = 1) AS big_uptick,
+       sum(size) FILTER (WHERE direction = -1) AS big_downtick
 FROM trades
-WHERE symbol = 'AAPL'
-  AND size >= 1000
+WHERE symbol = 'AAPL' AND size >= 500
   AND time >= NOW() - INTERVAL '80 minutes'
-GROUP BY bucket
-ORDER BY bucket;
+GROUP BY bucket ORDER BY bucket;
 
--- 5-second bars for sub-minute VDD
-SELECT
-    time_bucket('5 seconds', time) AS bucket,
-    first(price, time) AS open, last(price, time) AS close,
-    sum(size * direction) AS net_delta
+-- Data quality: what % of volume is unclassified?
+SELECT symbol,
+       sum(volume) AS total_vol,
+       sum(unclassified_vol) AS unclassified,
+       round(sum(unclassified_vol)::numeric / NULLIF(sum(volume), 0) * 100, 1)
+           AS pct_unclassified
+FROM bars_1m
+WHERE bucket >= NOW() - INTERVAL '1 day'
+GROUP BY symbol ORDER BY pct_unclassified DESC;
+
+-- 5-second bars for sub-minute VDD (query raw trades directly)
+SELECT time_bucket('5 seconds', time) AS bucket,
+       first(price, time) AS open, last(price, time) AS close,
+       sum(size * direction) AS net_delta
 FROM trades
 WHERE symbol = 'NVDA' AND time >= NOW() - INTERVAL '10 minutes'
 GROUP BY bucket ORDER BY bucket;
-
--- Data health: trades per minute per symbol (monitoring)
-SELECT symbol, count(*) / 390.0 AS avg_trades_per_min
-FROM trades
-WHERE time::date = CURRENT_DATE
-GROUP BY symbol ORDER BY avg_trades_per_min DESC;
 ```
 
-### Docker Setup
+---
 
-```yaml
-# docker-compose.yml (database only, for now)
-services:
-  timescaledb:
-    image: timescale/timescaledb:latest-pg17
-    ports:
-      - "5432:5432"
-    environment:
-      POSTGRES_USER: tickdata
-      POSTGRES_PASSWORD: ${TIMESCALE_PASSWORD}
-      POSTGRES_DB: tickdata
-    volumes:
-      - timescale_data:/var/lib/postgresql/data
-    restart: unless-stopped
+## Volume Gap Tracking
 
-volumes:
-  timescale_data:
+The key insight for L1 data: **`total_volume` differencing captures ALL volume**,
+but `last_size` only shows the most recent trade. The gap tells us how much we're
+missing.
+
 ```
+L1 Update #1: total_volume = 1,000,000  last_size = 200  last_price = 225.10
+L1 Update #2: total_volume = 1,000,800  last_size = 100  last_price = 225.15
+              ─────────────────────────
+              volume_delta = 800  (true volume that moved)
+              last_size    = 100  (visible trade, classified as uptick)
+              gap          = 700  (hidden trades, unclassified)
+```
+
+In `bars_1m`:
+- `volume = 800` (accurate total from volume_delta)
+- `uptick_vol = 100` (only the visible trade was uptick)
+- `unclassified_vol = 700` (we know it moved but can't assign direction)
+
+This is an inherent limitation of Tier 2. If TIMESALE_EQUITY becomes available,
+all trades are individually visible and `unclassified_vol` drops to 0.
 
 ---
 
@@ -394,51 +353,92 @@ volumes:
 ### Primary: Shared Database (SQL)
 
 The trader app connects to the same TimescaleDB instance and queries
-`bars_1m` (or raw `trades`) directly. This is the simplest approach and
-sufficient for VDD computation on every check cycle.
+`bars_1m` (or raw `trades`) directly via asyncpg.
 
 ```python
 # In trader app — query tick-level 1-min bars for VDD
-import psycopg2  # or asyncpg
-
-def get_tick_bars(symbol: str, lookback: int = 80) -> pd.DataFrame:
-    query = """
+async def get_tick_bars(pool, symbol: str, lookback: int = 80):
+    return await pool.fetch("""
         SELECT bucket as time, open, high, low, close, volume,
-               uptick_vol, downtick_vol, net_delta
+               uptick_vol, downtick_vol, net_delta, unclassified_vol
         FROM bars_1m
-        WHERE symbol = %s AND bucket >= NOW() - INTERVAL '%s minutes'
+        WHERE symbol = $1 AND bucket >= NOW() - make_interval(mins => $2)
         ORDER BY bucket
-    """
-    return pd.read_sql(query, conn, params=[symbol, lookback])
+    """, symbol, lookback)
 ```
 
-### Optional: Lightweight API (Unix Socket)
+### Future: Lightweight Control API (Unix Socket)
 
-For real-time state queries (e.g., "is the collector alive?", "what symbols
-are streaming?", "add AAPL to the stream"), the collector can expose a
-simple Unix domain socket or TCP API.
+For real-time state queries and dynamic symbol management without restarting:
 
 ```
-Commands:
-  STATUS          → {"connected": true, "symbols": 87, "trades_today": 1234567}
-  ADD AAPL,NVDA   → {"ok": true, "symbols": 89}
-  REMOVE AAPL     → {"ok": true, "symbols": 88}
-  HEALTH          → {"uptime": 3600, "last_trade": "2026-03-10T15:30:01Z"}
+STATUS     → {"connected": true, "symbols": 28, "trades_today": 123456}
+ADD AAPL   → {"ok": true, "symbols": 29}
+REMOVE XOM → {"ok": true, "symbols": 27}
 ```
 
-This lets the trader app dynamically manage the symbol list without
-restarting the collector.
+---
+
+## Running the Collector
+
+### Prerequisites
+
+```bash
+# TimescaleDB must be running
+docker compose up -d
+
+# Schwab credentials in .env
+SCHWAB_APP_KEY=...
+SCHWAB_APP_SECRET=...
+```
+
+### Start
+
+```bash
+# Using default symbols from tick_collector/symbols.txt
+uv run python -m tick_collector
+
+# Or override symbols via env var
+TICK_SYMBOLS=AAPL,NVDA,TSLA uv run python -m tick_collector
+```
+
+### Configuration (env vars)
+
+| Var | Default | Description |
+|-----|---------|-------------|
+| `TIMESCALE_DSN` | `postgresql://tickdata:tickdata_dev@localhost:5433/tickdata` | TimescaleDB connection |
+| `SCHWAB_APP_KEY` | (required) | Schwab API key |
+| `SCHWAB_APP_SECRET` | (required) | Schwab API secret |
+| `TICK_SYMBOLS` | (from `symbols.txt`) | Comma-separated symbol override |
+| `TICK_FLUSH_INTERVAL` | `2.0` | Seconds between buffer flushes |
+
+### Test (no Schwab connection needed)
+
+```bash
+# Synthetic data → buffer → DB → bars_1m pipeline test
+uv run python scripts/test_collector_db.py
+```
 
 ---
 
 ## Deployment
 
-### Phase 1: systemd Service
+### Current: Manual / Development
+
+```bash
+# Terminal 1: TimescaleDB
+docker compose up -d
+
+# Terminal 2: Collector
+uv run python -m tick_collector
+```
+
+### Phase 2: systemd Service
 
 ```ini
 # /etc/systemd/system/tick-collector.service
 [Unit]
-Description=Schwab TIMESALE_EQUITY Tick Collector
+Description=Schwab Tick Collector (L1 + TIMESALE → TimescaleDB)
 After=network.target docker.service
 Requires=docker.service
 
@@ -449,79 +449,58 @@ WorkingDirectory=/home/david/code/davidsvaughn/alpaca-news
 ExecStart=/home/david/.local/bin/uv run python -m tick_collector
 Restart=always
 RestartSec=5
-Environment=TIMESCALE_DSN=postgresql://tickdata:password@localhost:5432/tickdata
+EnvironmentFile=/home/david/code/davidsvaughn/alpaca-news/.env
 
 [Install]
 WantedBy=multi-user.target
-```
-
-### Future: Full Docker Compose
-
-```yaml
-services:
-  timescaledb:
-    image: timescale/timescaledb:latest-pg17
-    # ... (see above)
-
-  tick-collector:
-    build: .
-    depends_on:
-      - timescaledb
-    environment:
-      - TIMESCALE_DSN=postgresql://tickdata:password@timescaledb:5432/tickdata
-      - SCHWAB_APP_KEY=${SCHWAB_APP_KEY}
-      - SCHWAB_APP_SECRET=${SCHWAB_APP_SECRET}
-    restart: unless-stopped
-
-  trader:
-    build: .
-    depends_on:
-      - timescaledb
-    # ... started/stopped independently
 ```
 
 ---
 
 ## Roadmap
 
-### Phase 1: Streaming Data Quality (TIMESALE + L1 Extended)
-> **Goal**: Verify data quality, frequency, and subscription mechanics for both
-> TIMESALE_EQUITY (Tier 3) and LEVELONE_EQUITIES with extended fields (Tier 2).
+### Phase 1: Streaming Data Quality
+> **Goal**: Verify L1 extended fields and TIMESALE availability during market hours.
 
 - [x] Write standalone test script: `scripts/test_timesale.py` + `scripts/run_timesale_test.sh`
 - [x] Add L1 extended fields (9=LastSize, 35=TradeTime, 41=LastMICID) to test script
 - [x] Add volume gap analysis (L1 total_volume jump vs last_size) to test script
-- [ ] **Run during market hours** — the critical next step (TIMESALE returned
-      code=11 at 2 AM; L1 extended fields untested with live data)
-- [ ] Measure actual TIMESALE trade frequency per symbol (compare to estimates)
-- [ ] Measure L1 volume gaps (how much volume is missed between L1 updates)
-- [ ] Verify TIMESALE fields available (timestamp precision, exchange codes, etc.)
+- [ ] **Run during market hours** — the critical next step
+- [ ] Measure L1 update frequency and volume gaps per symbol
+- [ ] Determine if TIMESALE_EQUITY is available during market hours
 - [ ] Test: can TIMESALE_EQUITY and LEVELONE_EQUITIES coexist on same connection?
-- [ ] Test schwabdev built-in reconnection during market hours (does it fix dropouts?)
-- [ ] If TIMESALE unavailable: evaluate Tier 2 (L1 + last_size) as primary approach
+- [ ] Test schwabdev built-in reconnection during market hours
 - [ ] Document findings in this file
 
-### Phase 2: Resilient Collector Service
-> **Goal**: Always-on process with automatic reconnection.
+### Phase 2: Collector Service ← **current**
+> **Goal**: Always-on process with L1-primary streaming into TimescaleDB.
 
-- [ ] Build `tick_collector/` package (separate from trader app)
-- [ ] Implement resilient WebSocket wrapper (heartbeat + exponential backoff)
-- [ ] Symbol management (config file for initial list, API for dynamic changes)
-- [ ] Write buffer with batch inserts (flush every 1-5 seconds)
-- [ ] Graceful shutdown (SIGTERM handler, flush buffers)
-- [ ] systemd unit file
+- [x] Build `tick_collector/` package (separate from trader app)
+- [x] L1 message parser with extended fields (9, 35, 41)
+- [x] TIMESALE message parser (optional, graceful fallback)
+- [x] Volume differencing (total_volume tracking per symbol)
+- [x] Tick classifier (uptick/downtick/zero-tick)
+- [x] Thread-safe write buffer with batch drain
+- [x] asyncpg batch inserts to TimescaleDB
+- [x] Graceful shutdown (SIGTERM/SIGINT handler, final flush)
+- [x] Config from env vars + symbols.txt file
+- [x] Entry point: `python -m tick_collector`
+- [ ] **Run during market hours** with live Schwab connection
+- [ ] Implement heartbeat monitoring (detect silent disconnects)
+- [ ] systemd unit file (tested)
 - [ ] Integration test: kill WebSocket, verify reconnection + no data loss
 
-### Phase 3: TimescaleDB + Schema
+### Phase 3: TimescaleDB + Schema ← **done**
 > **Goal**: Production storage with auto-aggregation.
 
-- [ ] docker-compose.yml for TimescaleDB
-- [ ] Schema: trades hypertable + indexes
-- [ ] Continuous aggregate: bars_1m
-- [ ] Compression policy (7 days)
-- [ ] Retention policy (30 days raw, bars forever)
-- [ ] Verify query performance with realistic data volume
-- [ ] Migrate collector from SQLite/file writes to TimescaleDB
+- [x] docker-compose.yml for TimescaleDB (port 5433)
+- [x] Schema: trades hypertable + indexes
+- [x] L1-aware schema: `source`, `volume_delta`, `total_volume` columns
+- [x] Continuous aggregate: bars_1m with `unclassified_vol`
+- [x] Compression policy (7 days)
+- [x] Retention policy (30 days raw, bars forever)
+- [x] Verify pipeline with synthetic data (`scripts/test_collector_db.py`)
+- [ ] Verify query performance with realistic data volume (after market-hours collection)
 
 ### Phase 4: Trader Integration
 > **Goal**: Trader app consumes tick-level bars from TimescaleDB.
@@ -537,9 +516,9 @@ services:
 
 - [ ] Collect at least 1 full trading week of continuous data
 - [ ] Re-run `scripts/vdd_comparison.py` with TimescaleDB bars
+- [ ] Measure L1 unclassified_vol percentage across symbols
 - [ ] Trade-size filtering experiments (isolate institutional flow)
-- [ ] Sub-minute VDD signal analysis
-- [ ] Determine optimal lookback for tick-level VDD
+- [ ] Compare L1-based vs TIMESALE-based VDD (if both available)
 - [ ] Document results in [VDD-COMPARISON.md](VDD-COMPARISON.md)
 
 ### Future
@@ -547,6 +526,7 @@ services:
 - [ ] Dashboard: collector status, data rates, symbol health
 - [ ] Multiple aggregation windows (5s, 15s, 1m, 5m)
 - [ ] Alerting: stream disconnect notifications
+- [ ] Dynamic symbol management via Unix socket API
 - [ ] Remote deployment option (separate server)
 
 ---
@@ -555,42 +535,42 @@ services:
 
 | Date | Decision | Rationale |
 |------|----------|-----------|
-| 2026-03-10 | Use TIMESALE_EQUITY over LEVELONE_EQUITIES | Per-trade data enables size filtering, sub-minute VDD, more accurate tick classification |
+| 2026-03-10 | L1-primary design (Tier 2), TIMESALE optional (Tier 3) | TIMESALE returned code=11; may not be available. L1 extended fields provide useful approximation. |
+| 2026-03-10 | Track `volume_delta` and `unclassified_vol` | L1 `total_volume` differencing captures true volume; gap between that and `last_size` = hidden trades. Transparency about data quality. |
+| 2026-03-10 | `source` column ("L1" vs "TS") in trades table | When both sources active, allows quality comparison. Future: prefer TS rows over L1 for same symbol. |
 | 2026-03-10 | Separate process, not thread in trader app | Trader restarts frequently during development; collector must stay up |
-| 2026-03-10 | TimescaleDB over SQLite/DuckDB/Supabase | Time-series optimized, continuous aggregates, compression, concurrent R/W, standard SQL |
+| 2026-03-10 | TimescaleDB over SQLite/DuckDB | Time-series optimized, continuous aggregates, compression, concurrent R/W, standard SQL |
+| 2026-03-10 | Port 5433 (not 5432) | System PostgreSQL 14 already on 5432 |
 | 2026-03-10 | systemd first, Docker later | Simplest path to always-on; containerize after core logic is proven |
-| 2026-03-10 | Schwab free tier (not Alpaca SIP) | Already integrated, free, 500 symbol capacity, sufficient for current needs |
-| 2026-03-10 | 50-100+ symbols target | Broad watchlist beyond just portfolio holdings for research and pre-screening |
-| 2026-03-10 | Shared DB for collector↔trader comm | Simplest; trader already does SQL. Optional Unix socket API for real-time control |
-| 2026-03-10 | Raw subscription bypass (not schwabdev fork) | Less maintenance; send TIMESALE_EQUITY JSON directly on existing WebSocket |
-| 2026-03-10 | Three-tier accuracy model (L1 basic → L1 extended → TIMESALE) | L1 already has `last_size` (field 9) we weren't using; Tier 2 is a free quick-win even if TIMESALE is unavailable |
-| 2026-03-10 | Test script captures both TIMESALE and L1 extended fields | Compare Tier 2 vs Tier 3 data quality side-by-side during market hours |
+| 2026-03-10 | Schwab free tier (not Alpaca SIP) | Already integrated, free, 500 symbol capacity |
+| 2026-03-10 | Shared DB for collector↔trader comm | Simplest; trader already does SQL. Optional Unix socket API later. |
+| 2026-03-10 | Three-tier accuracy model | L1 basic (Tier 1) → L1 extended (Tier 2) → TIMESALE (Tier 3). Each tier improves on the previous. |
+| 2026-03-10 | asyncpg for DB access | Async-native, matches collector's asyncio flush loop. Batch `executemany` for inserts. |
+| 2026-03-10 | Thread-safe buffer (deque + lock) | schwabdev callback runs on its own thread; async flush loop runs on asyncio. Buffer bridges the two. |
+| 2026-03-10 | Direction classified in collector, not DB | Per-symbol price state tracking is simpler in Python than SQL window functions. First trade of session = 0 (zero-tick). |
 
 ---
 
 ## Open Questions
 
-- [x] **schwabdev `start_auto()` behavior**: Only does daily start/stop scheduling
-      (checks every 30s, starts/stops stream by time-of-day). Does NOT add heartbeat
-      or mid-session reconnection. However, `_run_streamer()` already has built-in
-      reconnection with exponential backoff (2s → 4s → ... → 120s cap) and auto
-      re-subscribes all recorded subscriptions. This may already fix the market-hours
-      dropout — needs testing during market hours.
-- [ ] **TIMESALE_EQUITY throttling**: Does Schwab throttle or aggregate trade data
-      at the API level? Need to measure actual vs theoretical frequency.
+- [x] **schwabdev `start_auto()` behavior**: Only does daily start/stop scheduling.
+      Does NOT add heartbeat or mid-session reconnection. However, `_run_streamer()`
+      has built-in reconnection with exponential backoff (2s → 4s → ... → 120s cap)
+      and auto re-subscribes all recorded subscriptions. Needs market-hours testing.
+- [x] **Direction classification**: Classify in collector before DB insert. Simple
+      price comparison per symbol. First trade of session = zero-tick (direction 0).
+- [x] **Buffer flush strategy**: Time-based (every 2 seconds). Simple, predictable
+      latency. Can tune via `TICK_FLUSH_INTERVAL` env var.
+- [x] **Symbol list management**: Config file (`symbols.txt`) as base, env var
+      (`TICK_SYMBOLS`) for override. Dynamic API deferred to future phase.
+- [ ] **TIMESALE_EQUITY availability**: Does it work during market hours? Or is it
+      not exposed on Schwab's current API at all? Key Phase 1 question.
 - [ ] **OAuth token refresh during stream**: Does schwabdev auto-refresh the OAuth
-      token while the WebSocket is open? If not, we need to handle token expiry
-      (tokens expire every 30 minutes).
-- [ ] **Direction classification**: Compute `direction` (uptick/downtick) in the
-      collector before DB insert, or in the continuous aggregate query? In-collector
-      is simpler (per-symbol state tracking); in-query requires window functions.
-- [ ] **Tick direction for first trade of day**: No previous price to compare against.
-      Use previous day's close? Classify as zero-tick? Needs a rule.
-- [ ] **Symbol list management**: Static config file? Dynamic API? Both?
-      For 100+ symbols, a config file makes sense as the base, with API for
-      temporary additions from the trader app.
-- [ ] **Buffer flush strategy**: Time-based (every N seconds) vs size-based
-      (every N trades) vs hybrid? Tradeoff: latency vs write efficiency.
+      token while the WebSocket is open? Tokens expire every 30 minutes.
+- [ ] **L1 update frequency**: How often does L1 actually update per symbol? ~1/sec
+      is the assumption. Measure during market hours.
+- [ ] **Unclassified volume percentage**: What fraction of volume is hidden between
+      L1 updates for typical stocks? High volume (NVDA, AAPL) likely higher gap.
 - [ ] **Existing shadow collector**: Keep running in parallel during transition?
       Or disable once tick-collector is proven reliable?
 
@@ -599,17 +579,14 @@ services:
 ## Issues / Blockers
 
 ### [ISSUE-1] TIMESALE services return "Service not available" outside trading hours
-**Status**: investigating (likely expected behavior)
-**Severity**: low
+**Status**: investigating (likely expected behavior — or permanently unavailable)
+**Severity**: medium (L1 fallback works, but Tier 3 would be ideal)
 **Description**: Tests at ~2 AM ET on 2026-03-10. All three TIMESALE services
 (EQUITY, OPTIONS, FUTURES) returned `code=11: Service not available or temporary
-down`. Meanwhile, LEVELONE services (EQUITIES, FUTURES), CHART_EQUITY, NYSE_BOOK,
-and NASDAQ_BOOK all subscribed successfully (code=0). LEVELONE_FUTURES was actively
-streaming live data (futures trade ~24h). LEVELONE_EQUITIES returned static
-snapshots (stale last-known state, not live trades). This confirms the WebSocket
-is fully functional — TIMESALE services simply don't activate outside trading
-sessions. US pre-market starts at 4 AM ET.
-**Next step**: Re-test during pre-market (4-9:30 AM ET) or regular hours (9:30 AM-4 PM ET).
+down`. LEVELONE services worked fine. Could be:
+  (a) Normal — TIMESALE only available during market hours
+  (b) Permanent — Schwab doesn't expose TIMESALE on their current API
+**Next step**: Re-test during market hours (9:30 AM - 4 PM ET).
 **Script**: `./scripts/run_timesale_test.sh --duration 300`
 
 <!-- Template for new issues:
