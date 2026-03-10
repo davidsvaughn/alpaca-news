@@ -1315,15 +1315,19 @@ def run_watch_loop(
                         print(f"  {acct_info.name} ({acct_id}): equity=${acct_info.equity:,.2f} "
                               f"cash=${acct_info.cash:,.2f}")
 
-                        # Reconcile this account
-                        reconcile(broker=broker, db=db)
-
-                        # Ensure all holding positions have active stop orders
+                        # Look up the config linked to this account
                         cfg_dict = next((c for c in active_cfgs
                                          if c.get("alpaca_account_id") == acct_id), None)
-                        if cfg_dict:
-                            from trader.models.live_config import LiveConfig
-                            _cfg = LiveConfig.from_dict(cfg_dict)
+                        from trader.models.live_config import LiveConfig
+                        _cfg = LiveConfig.from_dict(cfg_dict) if cfg_dict else None
+
+                        # Reconcile this account (filtered to its config's watches)
+                        reconcile(broker=broker, db=db,
+                                  live_config_id=_cfg.config_id if _cfg else None,
+                                  live_config=_cfg)
+
+                        # Ensure all holding positions have active stop orders
+                        if _cfg:
                             ensure_stops(broker=broker, db=db,
                                          live_config_id=_cfg.config_id,
                                          guard_stop_pct=_cfg.guard_stop_pct)

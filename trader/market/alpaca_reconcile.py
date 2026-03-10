@@ -6,8 +6,8 @@ of truth.
 
 Rules:
   1. Alpaca has a position, we have a matching "holding" watch → OK
-  2. Alpaca has a position, we have NO matching watch → force-close on Alpaca
-     (or create an "orphan" watch — configurable, default: close)
+  2. Alpaca has a position, we have NO matching watch → adopt (create watch
+     from config) or force-close on Alpaca (if close_orphans=True)
   3. We have a "holding" watch, Alpaca has NO position → force-exit the watch
   4. Entry price mismatch → update watch to match Alpaca's avg_entry_price
 """
@@ -35,13 +35,15 @@ def reconcile(
     *,
     broker: Any,  # AlpacaBroker
     db: Any,      # Database
-    close_orphans: bool = True,
+    live_config_id: str | None = None,  # filter watches to this config only
+    live_config: Any = None,  # LiveConfig — needed for adopting orphan positions
+    close_orphans: bool = False,
 ) -> dict[str, Any]:
     """Reconcile Alpaca positions with watch state.
 
     Returns a summary dict with actions taken.
     """
-    from trader.db.database import get_active_watches, update_watch
+    from trader.db.database import get_active_watches, insert_watch, update_watch
     from trader.models.watch import WatchBuilder
 
     account_id = getattr(broker, "account_id", None) or "unknown"
@@ -50,6 +52,7 @@ def reconcile(
         "ok": [],
         "watch_force_exited": [],
         "alpaca_orphan_closed": [],
+        "alpaca_orphan_adopted": [],
         "entry_price_updated": [],
     }
 
@@ -60,6 +63,11 @@ def reconcile(
     # Get our holding watches
     all_watches = get_active_watches(db)
     holding_watches = [w for w in all_watches if w.get("status") == "holding"]
+
+    # Filter to this config's watches only (prevents cross-account confusion)
+    if live_config_id:
+        holding_watches = [w for w in holding_watches
+                           if w.get("live_config_id") == live_config_id]
 
     # Build symbol → watch mapping (only watches with Alpaca orders)
     watch_by_symbol: dict[str, dict] = {}
@@ -124,21 +132,47 @@ def reconcile(
         _log_tx(db, account_id, "reconcile_force_exit", symbol,
                 detail={"watch_id": watch["watch_id"], "exit_price": exit_price})
 
-    # Rule 2: Alpaca has a position but we have no watch → close on Alpaca
-    # First, get all open orders so we can cancel stops before closing
-    all_open_orders = broker.get_open_orders()
-    open_orders_by_symbol: dict[str, list] = {}
-    for o in all_open_orders:
-        open_orders_by_symbol.setdefault(o.symbol, []).append(o)
-
+    # Rule 2: Alpaca has a position but we have no watch
+    # Default: adopt (create watch from config). Fallback: close on Alpaca.
     for symbol in alpaca_symbols - watch_symbols:
         pos = alpaca_positions[symbol]
-        if close_orphans:
+
+        if live_config and live_config_id:
+            # Adopt: create a watch for this orphan position
             try:
-                # Cancel any open orders first (stops hold shares, preventing close)
-                for o in open_orders_by_symbol.get(symbol, []):
-                    broker.cancel_order(o.order_id)
-                    log.info("RECONCILE: cancelled order %s for orphan %s", o.order_id, symbol)
+                builder = WatchBuilder.create_from_live_config(
+                    snapshot_id="reconcile_adopted",
+                    symbol=symbol,
+                    entry_price=pos.avg_entry_price,
+                    confidence=0.5,
+                    direction="bullish",
+                    live_config_id=live_config_id,
+                    exit_strategy=live_config.exit_strategy,
+                    exit_params=live_config.exit_params,
+                )
+                builder.qty = pos.qty
+                builder.alpaca_buy_order_id = "adopted"
+                watch = builder.to_watch()
+                insert_watch(db, watch=watch.to_dict())
+                summary["alpaca_orphan_adopted"].append(symbol)
+                log.warning("RECONCILE: %s adopted orphan position (qty=%.4f, entry=%.2f)",
+                            symbol, pos.qty, pos.avg_entry_price)
+                _log_tx(db, account_id, "reconcile_orphan_adopted", symbol,
+                        detail={"qty": pos.qty, "avg_entry_price": pos.avg_entry_price,
+                                "watch_id": watch.watch_id,
+                                "market_value": pos.market_value})
+            except Exception as e:
+                log.exception("RECONCILE: failed to adopt orphan %s", symbol)
+                _log_tx(db, account_id, "reconcile_orphan_adopt_failed", symbol,
+                        detail={"error": str(e), "qty": pos.qty})
+        elif close_orphans:
+            # Emergency fallback: close orphan on Alpaca
+            try:
+                all_open_orders = broker.get_open_orders()
+                for o in all_open_orders:
+                    if o.symbol == symbol:
+                        broker.cancel_order(o.order_id)
+                        log.info("RECONCILE: cancelled order %s for orphan %s", o.order_id, symbol)
                 broker.close_position(symbol)
                 summary["alpaca_orphan_closed"].append(symbol)
                 log.warning("RECONCILE: %s closed orphan Alpaca position", symbol)
@@ -150,19 +184,24 @@ def reconcile(
                 _log_tx(db, account_id, "reconcile_orphan_close_failed", symbol,
                         detail={"error": str(e), "qty": pos.qty})
         else:
-            log.warning("RECONCILE: %s orphan Alpaca position (not closing)", symbol)
+            log.warning("RECONCILE: %s orphan Alpaca position (no config to adopt, not closing)",
+                        symbol)
             _log_tx(db, account_id, "reconcile_orphan_skipped", symbol,
                     detail={"qty": pos.qty, "avg_entry_price": pos.avg_entry_price})
 
     total_actions = (
         len(summary["watch_force_exited"])
         + len(summary["alpaca_orphan_closed"])
+        + len(summary["alpaca_orphan_adopted"])
         + len(summary["entry_price_updated"])
     )
     if total_actions > 0:
-        log.info("RECONCILE complete: %d OK, %d force-exited, %d orphans closed, %d prices updated",
+        log.info("RECONCILE complete: %d OK, %d force-exited, %d orphans closed, "
+                 "%d adopted, %d prices updated",
                  len(summary["ok"]), len(summary["watch_force_exited"]),
-                 len(summary["alpaca_orphan_closed"]), len(summary["entry_price_updated"]))
+                 len(summary["alpaca_orphan_closed"]),
+                 len(summary["alpaca_orphan_adopted"]),
+                 len(summary["entry_price_updated"]))
     else:
         log.info("RECONCILE complete: all %d positions in sync", len(summary["ok"]))
 

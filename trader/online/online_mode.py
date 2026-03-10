@@ -1,6 +1,6 @@
-"""Thread-safe observer mode flag.
+"""Thread-safe online mode flag.
 
-When observer mode is ON:
+When online mode is OFF (system is offline):
 - No new news files are processed
 - No new follow-up collection cycles run
 - No new backfill processing
@@ -9,10 +9,10 @@ When observer mode is ON:
 - WatchMonitor continues running but LLM check-ins are downgraded
   to lightweight (price-only, free APIs). No API costs incurred.
 
-Auto market hours mode (OBSERVER_AUTO_MARKET_HOURS=1):
-- Observer turns ON at market close (4:00 PM ET, Mon-Fri)
-- Observer turns OFF at market open (9:30 AM ET, Mon-Fri)
-- Stays ON all weekend
+Auto market hours mode (ONLINE_AUTO_MARKET_HOURS=1):
+- System goes ONLINE at market open (9:30 AM ET, Mon-Fri)
+- System goes OFFLINE at market close (4:00 PM ET, Mon-Fri)
+- Stays OFFLINE all weekend
 - Manual toggle sets an override that persists until the next natural auto transition
 """
 
@@ -25,8 +25,8 @@ import time
 log = logging.getLogger(__name__)
 
 
-class ObserverMode:
-    """Thread-safe boolean flag for observer mode."""
+class OnlineMode:
+    """Thread-safe boolean flag for online mode."""
 
     def __init__(self, enabled: bool = False) -> None:
         self._lock = threading.Lock()
@@ -51,16 +51,16 @@ class ObserverMode:
             return self._enabled
 
     def start_auto_market_hours(self) -> None:
-        """Start background thread that syncs observer mode to market hours."""
+        """Start background thread that syncs online mode to market hours."""
         if self._auto_thread and self._auto_thread.is_alive():
             return
         self._auto_thread = threading.Thread(
             target=self._auto_loop,
-            name="observer-auto-market",
+            name="online-auto-market",
             daemon=True,
         )
         self._auto_thread.start()
-        log.info("Observer auto-market-hours enabled")
+        log.info("Online auto-market-hours enabled")
 
     def _auto_loop(self) -> None:
         from trader.market.market_hours import is_market_open
@@ -68,7 +68,7 @@ class ObserverMode:
         while True:
             try:
                 market_open = is_market_open()
-                auto_value = not market_open  # Observer ON when market closed
+                auto_value = market_open  # Online when market open
                 with self._lock:
                     if self._manual_override:
                         # Clear override once auto state matches what user set
@@ -79,11 +79,11 @@ class ObserverMode:
                     old = self._enabled
                     self._enabled = auto_value
                     if self._enabled != old:
-                        state = "ON (market closed)" if self._enabled else "OFF (market open)"
-                        log.info("OBSERVER AUTO: %s", state)
+                        state = "ONLINE (market open)" if self._enabled else "OFFLINE (market closed)"
+                        log.info("ONLINE AUTO: %s", state)
                         self._notify_change(state)
             except Exception:
-                log.exception("Observer auto-market-hours check failed")
+                log.exception("Online auto-market-hours check failed")
             finally:
                 time.sleep(30)
 
@@ -95,8 +95,8 @@ class ObserverMode:
             from zoneinfo import ZoneInfo
             now = datetime.now(tz=ZoneInfo("US/Eastern")).strftime("%I:%M %p ET")
             send_email(
-                subject=f"Alpaca News — Observer {state}",
-                body=f"Observer mode changed to {state} at {now}.",
+                subject=f"Alpaca News — {state}",
+                body=f"System changed to {state} at {now}.",
             )
         except Exception:
-            log.warning("Failed to send observer change notification")
+            log.warning("Failed to send online mode change notification")

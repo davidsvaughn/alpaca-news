@@ -80,8 +80,8 @@ class Settings:
     learning_mode: bool
     trading_mode: Literal["paper", "live"]
     debug: bool
-    observer_mode: bool
-    observer_auto_market_hours: bool
+    online: bool
+    online_auto_market_hours: bool
 
     # Paths
     news_watch_dirs: list[str]
@@ -216,8 +216,8 @@ def load_settings(*, dotenv_path: str | None = None, override: bool = False) -> 
         raise ValueError("TRADING_MODE must be 'paper' or 'live'")
 
     debug = _env_bool("DEBUG", False)
-    observer_mode = _env_bool("OBSERVER_MODE", False)
-    observer_auto_market_hours = _env_bool("OBSERVER_AUTO_MARKET_HOURS", False)
+    online = _env_bool("ONLINE", False)
+    online_auto_market_hours = _env_bool("ONLINE_AUTO_MARKET_HOURS", False)
 
     # NEWS_WATCH_DIRS (comma-separated) takes priority; fall back to legacy ALPACA_OUTPUT_DIR
     _watch_dirs_raw = _env_str("NEWS_WATCH_DIRS", "") or ""
