@@ -1679,6 +1679,44 @@ def create_app(
             return JSONResponse({"error": "not_found"}, status_code=404)
         return {"status": "deleted", "config_id": config_id}
 
+    @app.get("/api/portfolio/{config_id}/equity-history")
+    async def api_equity_history(config_id: str, since: str | None = None, until: str | None = None):
+        """Return equity snapshots for a portfolio as JSON time series."""
+        from trader.db.database import get_equity_history, get_live_config
+
+        cfg = get_live_config(db, config_id)
+        if not cfg:
+            return JSONResponse({"error": "config not found"}, status_code=404)
+
+        snapshots = get_equity_history(db, config_id, since=since, until=until)
+        return {
+            "config_id": config_id,
+            "name": cfg.get("name", ""),
+            "starting_capital": cfg.get("starting_capital", 0),
+            "snapshots": snapshots,
+        }
+
+    @app.post("/api/portfolio/{config_id}/equity-backfill")
+    async def api_equity_backfill(config_id: str):
+        """Backfill equity snapshots for a single portfolio from watch history."""
+        from trader.db.database import get_live_config
+        from trader.db.equity_backfill import backfill_portfolio
+
+        cfg = get_live_config(db, config_id)
+        if not cfg:
+            return JSONResponse({"error": "config not found"}, status_code=404)
+
+        count = backfill_portfolio(db, config_id, cfg)
+        return {"config_id": config_id, "snapshots_created": count}
+
+    @app.post("/api/portfolio/equity-backfill-all")
+    async def api_equity_backfill_all():
+        """Backfill equity snapshots for all portfolios."""
+        from trader.db.equity_backfill import backfill_all_portfolios
+
+        results = backfill_all_portfolios(db)
+        return {"results": results, "total": sum(results.values())}
+
     @app.get("/api/alpaca/status")
     async def api_alpaca_status():
         """Return all configured Alpaca accounts and their availability."""

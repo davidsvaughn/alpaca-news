@@ -68,12 +68,16 @@ bucket intervals and lookback windows without schema changes.
 | Parameter | Type | Example | Description |
 |-----------|------|---------|-------------|
 | `symbol` | str | `"AAPL"` | Stock symbol |
-| `lookback_minutes` | float | `80.0` | Time window for divergence detection |
-| `bucket_seconds` | int | `30` | Bucket interval for aggregation (10, 30, 60, etc.) |
+| `lookback_m` | float | `80.0` | Time window for divergence detection (minutes). Shared with bar-based VDD — same param, same meaning. |
+| `bucket_s` | int | `30` | Bucket interval for aggregation (10, 30, 60, etc.). Tick-based only. |
 | `min_trades_per_bucket` | int | `3` | Skip buckets with fewer L1 updates (too noisy) |
 
-The number of bars in the lookback is derived: `lookback_bars = lookback_minutes * 60 / bucket_seconds`.
+The number of bars in the lookback is derived: `lookback_bars = lookback_m * 60 / bucket_s`.
 For 80 minutes with 30-second buckets: 160 bars.
+
+> **Note**: `lookback_m` is the single lookback parameter for both bar-based and tick-based VDD.
+> Bar-based treats it as bar count (1 bar = 1 minute). Tick-based converts to bucket count.
+> Legacy `{"lookback": 80}` configs still work (treated as minutes).
 
 ### Step 1: Query bucketed bars from TimescaleDB
 
@@ -172,8 +176,8 @@ def compute_vdd_signal(bars: pd.DataFrame, lookback_bars: int) -> pd.DataFrame:
 async def check_vdd_exit(
     pool: asyncpg.Pool,
     symbol: str,
-    lookback_minutes: float = 80.0,
-    bucket_seconds: int = 30,
+    lookback_m: float = 80.0,
+    bucket_s: int = 30,
     min_trades_per_bucket: int = 3,
 ) -> bool:
     """Check if VDD exit signal is active for a symbol.
@@ -216,18 +220,18 @@ available, with fallback to the bar-based approach when it's not.
 **Files to create/modify:**
 
 1. **`tick_collector/vdd.py`** (new) — Core VDD computation:
-   - `async def get_vdd_bars(pool, symbol, lookback_minutes, bucket_seconds)` — query + proportional distribution
+   - `async def get_vdd_bars(pool, symbol, lookback_m, bucket_s)` — query + proportional distribution
    - `def compute_vdd_signal(bars, lookback_bars)` — signal detection (pandas)
    - `async def check_vdd_exit(pool, symbol, ...)` — public API for live exit monitor
 
-2. **`trader/market/backtest.py`** (modify) — Add tick-based VDD as an option:
-   - New exit strategy variant: `"volume_delta_divergence_tick"`
-   - Params: `{"lookback_minutes": 80, "bucket_seconds": 30}`
-   - Falls back to bar-based if TimescaleDB is unavailable
+2. **`trader/market/backtest.py`** (modify) — Accept `lookback_m` param:
+   - Bar-based VDD reads `lookback_m` (falls back to legacy `lookback` key)
+   - Same exit strategy key `"volume_delta_divergence"`, no new variant needed
 
 3. **`trader/online/live_monitor.py`** (modify) — Wire up tick-based VDD:
-   - When evaluating VDD exit, try tick-based first, fall back to bar-based
-   - Requires asyncpg pool connection to TimescaleDB (add to LiveExitMonitor)
+   - When bar-based VDD doesn't fire, try tick-based as supplement
+   - Enabled via `VDD_TICK_ENABLED=1` env var
+   - Lazy asyncpg pool to TimescaleDB (auto-connects, falls back on failure)
 
 **Things to experiment with** (once implemented):
 - Bucket sizes: 10s, 15s, 30s, 60s — which gives best signal-to-noise?
@@ -248,15 +252,15 @@ async def check_vdd_exit_multi(
     pool: asyncpg.Pool,
     symbol: str,
     # Fast signal: fine granularity, detects divergence forming
-    fast_bucket_seconds: int = 15,
-    fast_lookback_minutes: float = 20.0,
+    fast_bucket_s: int = 15,
+    fast_lookback_m: float = 20.0,
     # Slow signal: coarse granularity, confirms trend
-    slow_bucket_seconds: int = 60,
-    slow_lookback_minutes: float = 80.0,
+    slow_bucket_s: int = 60,
+    slow_lookback_m: float = 80.0,
 ) -> bool:
     """Multi-resolution VDD: exit when fast signal fires AND slow confirms."""
-    fast = await check_vdd_exit(pool, symbol, fast_lookback_minutes, fast_bucket_seconds)
-    slow = await check_vdd_exit(pool, symbol, slow_lookback_minutes, slow_bucket_seconds)
+    fast = await check_vdd_exit(pool, symbol, fast_lookback_m, fast_bucket_s)
+    slow = await check_vdd_exit(pool, symbol, slow_lookback_m, slow_bucket_s)
     return fast and slow
 ```
 
@@ -323,16 +327,16 @@ issue, we can add a continuous aggregate at the most common bucket interval.
 
 ---
 
-## Open Questions
+## Open Questions (Resolved)
 
-- [ ] What's the minimum `trade_count` per bucket for a reliable ratio estimate?
-      Start with 3, but may need tuning.
-- [ ] Should we fill-forward empty buckets (no trades in that interval) or skip
-      them? During low-volume periods (pre-market), some 10-second buckets may
-      be empty.
-- [ ] For the proportional distribution, should we weight by `last_size`
-      (volume-weighted ratio) or count each L1 update equally? Currently
-      using volume-weighted (sum of sizes per direction / total size).
-- [ ] How do we handle the first few buckets after collector startup when
-      `total_volume` differencing hasn't established a baseline? (First update
-      per symbol has no `volume_delta`.)
+- [x] **Min `trade_count` per bucket?** Start with 3. Skip buckets below threshold
+      (don't fill-forward — avoids fabricating data from thin samples).
+- [x] **Fill-forward empty buckets?** No — skip them. The signal math tolerates
+      gaps; fabricating bars from no data adds noise. During low-volume periods
+      the lookback window naturally covers more wall-clock time.
+- [x] **Volume-weighted or count-weighted ratio?** Volume-weighted (sum of `size`
+      per direction / total classified `size`). Larger trades carry more signal.
+- [x] **First buckets after collector startup?** Filter `volume_delta IS NULL`
+      rows out of the query. The first L1 update per symbol has no baseline;
+      these rows contribute `size` but no `volume_delta`, so exclude them from
+      the proportional distribution.

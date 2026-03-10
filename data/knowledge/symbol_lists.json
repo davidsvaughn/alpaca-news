@@ -1155,7 +1155,21 @@
     "OCC",
     "CPHC",
     "ADM",
-    "BABB"
+    "BABB",
+    "ARWYF",
+    "NEXCF",
+    "KRO",
+    "BASFY",
+    "EGY",
+    "VYGR",
+    "PSX",
+    "WKC",
+    "MUSA",
+    "TENX",
+    "LFS",
+    "CARR",
+    "SSTI",
+    "FIGR"
   ],
   "crypto": [],
   "rejected": [
@@ -1289,7 +1303,9 @@
     "MANKIND",
     "NAZARA",
     "FLERIE",
-    "DOM"
+    "DOM",
+    "FEC",
+    "FFH"
   ],
-  "last_updated": "2026-03-10T16:07:04.711033+00:00"
+  "last_updated": "2026-03-10T16:40:17.220100+00:00"
 }

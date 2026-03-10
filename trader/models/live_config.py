@@ -39,7 +39,7 @@ class LiveConfig:
 
     # Exit strategy
     exit_strategy: str               # strategy key, e.g. "volume_delta_divergence"
-    exit_params: dict[str, Any]      # strategy-specific params, e.g. {"lookback": 80}
+    exit_params: dict[str, Any]      # e.g. {"lookback_m": 80, "bucket_s": 30}
 
     # Guards
     guard_stop_pct: float = 0.0      # hard stop loss % (0 = disabled)

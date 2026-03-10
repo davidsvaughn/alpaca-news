@@ -1852,7 +1852,8 @@ def _run_adx_trend_decay(
 def _run_volume_delta_divergence(
     df, entry_idx, entry_price, params, guard_stop=None, guard_target=None, indicator_cache=None,
 ):
-    lookback = int(params["lookback"])
+    # lookback_m (minutes) is canonical; fall back to legacy "lookback" (bar count = minutes for 1-min bars)
+    lookback = int(params.get("lookback_m") or params["lookback"])
     uptick, downtick = _get_cached_indicator(
         indicator_cache, ("volume_delta",), lambda: _compute_volume_delta(df),
     )

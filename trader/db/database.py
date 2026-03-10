@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from sqlalchemy import JSON, Column, DateTime, Integer, MetaData, String, Table, create_engine, text
+from sqlalchemy import JSON, Column, DateTime, Float, Integer, MetaData, String, Table, create_engine, text
 from sqlalchemy.engine import Engine
 from sqlalchemy.sql import func
 
@@ -111,6 +111,21 @@ live_configs_table = Table(
 )
 
 
+equity_snapshots_table = Table(
+    "portfolio_equity_snapshots",
+    metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("config_id", String, nullable=False),           # links to live_configs.config_id
+    Column("timestamp", DateTime(timezone=True), nullable=False),
+    Column("equity", Float, nullable=False),               # total portfolio value
+    Column("cash", Float, nullable=False),                 # uninvested capital
+    Column("unrealized_pnl", Float, nullable=False),       # open position P&L
+    Column("realized_pnl", Float, nullable=False),         # cumulative closed P&L
+    Column("position_count", Integer, nullable=False),     # number of holdings
+    Column("source", String, nullable=False),              # "backfill" | "live" | "alpaca"
+)
+
+
 @dataclass(frozen=True)
 class Database:
     engine: Engine
@@ -131,6 +146,10 @@ def open_sqlite(path: str) -> Database:
         conn.execute(text(
             "CREATE INDEX IF NOT EXISTS idx_snapshots_symbols "
             "ON snapshots(symbols)"
+        ))
+        conn.execute(text(
+            "CREATE INDEX IF NOT EXISTS idx_equity_snapshots_config_ts "
+            "ON portfolio_equity_snapshots(config_id, timestamp)"
         ))
     return Database(engine=engine)
 
@@ -1177,6 +1196,116 @@ def get_alpaca_transactions(
         }
         for r in rows
     ]
+
+
+# ---------------------------------------------------------------------------
+# Portfolio equity snapshots
+# ---------------------------------------------------------------------------
+
+
+def insert_equity_snapshot(
+    db: Database,
+    *,
+    config_id: str,
+    timestamp: str,
+    equity: float,
+    cash: float,
+    unrealized_pnl: float,
+    realized_pnl: float,
+    position_count: int,
+    source: str = "live",
+) -> None:
+    """Insert a single portfolio equity snapshot."""
+    with db.engine.begin() as conn:
+        conn.execute(
+            text(
+                "INSERT INTO portfolio_equity_snapshots "
+                "(config_id, timestamp, equity, cash, unrealized_pnl, realized_pnl, position_count, source) "
+                "VALUES (:cid, :ts, :eq, :cash, :upnl, :rpnl, :pcnt, :src)"
+            ),
+            {
+                "cid": config_id,
+                "ts": timestamp,
+                "eq": equity,
+                "cash": cash,
+                "upnl": unrealized_pnl,
+                "rpnl": realized_pnl,
+                "pcnt": position_count,
+                "src": source,
+            },
+        )
+
+
+def insert_equity_snapshots_bulk(
+    db: Database,
+    rows: list[dict[str, Any]],
+) -> int:
+    """Bulk insert equity snapshots (for backfill). Returns count inserted."""
+    if not rows:
+        return 0
+    with db.engine.begin() as conn:
+        conn.execute(
+            text(
+                "INSERT INTO portfolio_equity_snapshots "
+                "(config_id, timestamp, equity, cash, unrealized_pnl, realized_pnl, position_count, source) "
+                "VALUES (:config_id, :timestamp, :equity, :cash, :unrealized_pnl, :realized_pnl, :position_count, :source)"
+            ),
+            rows,
+        )
+    return len(rows)
+
+
+def get_equity_history(
+    db: Database,
+    config_id: str,
+    *,
+    since: str | None = None,
+    until: str | None = None,
+    limit: int = 10000,
+) -> list[dict[str, Any]]:
+    """Fetch equity snapshots for a portfolio, ordered by timestamp ASC."""
+    clauses = ["config_id = :cid"]
+    params: dict[str, Any] = {"cid": config_id, "lim": limit}
+    if since:
+        clauses.append("timestamp >= :since")
+        params["since"] = since
+    if until:
+        clauses.append("timestamp <= :until")
+        params["until"] = until
+
+    where = " AND ".join(clauses)
+    sql = (
+        f"SELECT timestamp, equity, cash, unrealized_pnl, realized_pnl, position_count, source "
+        f"FROM portfolio_equity_snapshots WHERE {where} "
+        f"ORDER BY timestamp ASC LIMIT :lim"
+    )
+    with db.engine.connect() as conn:
+        rows = conn.execute(text(sql), params).fetchall()
+    return [
+        {
+            "timestamp": str(r[0]),
+            "equity": r[1],
+            "cash": r[2],
+            "unrealized_pnl": r[3],
+            "realized_pnl": r[4],
+            "position_count": r[5],
+            "source": r[6],
+        }
+        for r in rows
+    ]
+
+
+def delete_equity_history(db: Database, config_id: str, *, source: str | None = None) -> int:
+    """Delete equity snapshots for a portfolio. Optionally filter by source. Returns count deleted."""
+    clauses = ["config_id = :cid"]
+    params: dict[str, Any] = {"cid": config_id}
+    if source:
+        clauses.append("source = :src")
+        params["src"] = source
+    where = " AND ".join(clauses)
+    with db.engine.begin() as conn:
+        result = conn.execute(text(f"DELETE FROM portfolio_equity_snapshots WHERE {where}"), params)
+    return result.rowcount
 
 
 def get_recent_evaluations(db: Database, *, limit: int = 20) -> list[dict[str, Any]]:

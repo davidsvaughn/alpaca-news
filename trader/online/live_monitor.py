@@ -15,6 +15,7 @@ LivePortfolioManager:
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import threading
@@ -102,6 +103,42 @@ class LiveExitMonitor:
                 # "retrospective" and "sealed" are ignored
             except Exception:
                 log.exception("Error processing watch %s", watch_dict.get("watch_id"))
+
+    # ------------------------------------------------------------------
+    # Tick-based VDD (optional, from TimescaleDB)
+    # ------------------------------------------------------------------
+
+    def _try_tick_vdd(self, symbol: str, exit_params: dict) -> bool | None:
+        """Try tick-based VDD check. Returns True/False or None if unavailable."""
+        if not os.getenv("VDD_TICK_ENABLED", "").lower() in ("1", "true", "yes"):
+            return None
+        try:
+            from tick_collector.vdd import check_vdd_exit, get_pool
+
+            loop = getattr(self, "_loop", None)
+            if loop is None or loop.is_closed():
+                loop = asyncio.new_event_loop()
+                self._loop = loop
+
+            pool = loop.run_until_complete(get_pool())
+            if pool is None:
+                return None
+
+            # lookback_m shared with bar-based; fall back to legacy "lookback" key
+            lookback_m = float(exit_params.get("lookback_m")
+                               or exit_params.get("lookback", 80))
+            bucket_s = int(exit_params.get("bucket_s", 30))
+            min_trades = int(exit_params.get("min_trades_per_bucket", 3))
+
+            result = loop.run_until_complete(
+                check_vdd_exit(pool, symbol, lookback_m, bucket_s, min_trades)
+            )
+            log.debug("VDD tick check %s: signal=%s", symbol, result)
+            return result
+        except Exception:
+            log.warning("VDD tick check failed for %s, falling back to bar-based",
+                        symbol, exc_info=True)
+            return None
 
     # ------------------------------------------------------------------
     # Holding: evaluate exit strategy
@@ -195,6 +232,23 @@ class LiveExitMonitor:
             min_hold=min_hold,
             indicator_cache=cache,
         )
+
+        # If bar-based VDD didn't fire, try tick-based VDD as supplement
+        if (
+            not result.should_exit
+            and strategy_key == "volume_delta_divergence"
+        ):
+            tick_signal = self._try_tick_vdd(symbol, exit_params)
+            if tick_signal is True:
+                current_price = float(bars.iloc[-1]["Close"])
+                bars_held = len(bars) - entry_idx
+                result = ExitResult(
+                    should_exit=True,
+                    exit_price=current_price,
+                    reason="signal_tick",
+                    bars_held=bars_held,
+                )
+                log.info("VDD tick signal fired for %s (bar-based did not)", symbol)
 
         # Update last_checkin_at
         builder = WatchBuilder.from_dict(watch_dict)
@@ -765,6 +819,7 @@ class LivePortfolioManager:
 
 
 _SHADOW_SUMMARY_INTERVAL_S = 3600  # write clean summary JSON hourly
+_EQUITY_SNAPSHOT_INTERVAL_S = float(os.getenv("EQUITY_SNAPSHOT_INTERVAL", "900"))  # 15 min default
 
 
 def _ensure_stops_if_needed(monitor: LiveExitMonitor, last_date: str | None) -> str | None:
@@ -848,6 +903,122 @@ def _periodic_reconcile(monitor: LiveExitMonitor, last_time: float) -> float:
         return last_time
 
 
+def _snapshot_equity(monitor: LiveExitMonitor, last_time: float) -> float:
+    """Capture equity snapshots for all active portfolios periodically."""
+    now = time.monotonic()
+    if now - last_time < _EQUITY_SNAPSHOT_INTERVAL_S:
+        return last_time
+
+    try:
+        from trader.db.database import (
+            get_active_live_configs,
+            get_all_watches,
+            insert_equity_snapshot,
+        )
+
+        active_cfgs = get_active_live_configs(monitor.db)
+        if not active_cfgs:
+            return now
+
+        # Get all watches once
+        all_watches = get_all_watches(monitor.db, limit=500)
+
+        # Group watches by config
+        by_config: dict[str, list] = {}
+        for w in all_watches:
+            cid = w.get("live_config_id")
+            if cid:
+                by_config.setdefault(cid, []).append(w)
+
+        ts_now = datetime.now(tz=timezone.utc).isoformat()
+
+        for cfg_dict in active_cfgs:
+            config_id = cfg_dict.get("config_id", "")
+            if not config_id:
+                continue
+
+            starting = cfg_dict.get("starting_capital", 0)
+            if not starting or starting <= 0:
+                continue
+
+            # Check if Alpaca-linked → use real equity
+            acct_id = cfg_dict.get("alpaca_account_id")
+            if acct_id and monitor.broker_pool:
+                broker = monitor.broker_pool.get(acct_id)
+                if broker:
+                    try:
+                        acct_info = broker.get_account()
+                        insert_equity_snapshot(
+                            monitor.db,
+                            config_id=config_id,
+                            timestamp=ts_now,
+                            equity=acct_info.equity,
+                            cash=acct_info.cash,
+                            unrealized_pnl=acct_info.equity - acct_info.cash,
+                            realized_pnl=acct_info.equity - starting,
+                            position_count=len([
+                                w for w in by_config.get(config_id, [])
+                                if w.get("status") == "holding"
+                            ]),
+                            source="alpaca",
+                        )
+                        continue
+                    except Exception:
+                        log.debug("Alpaca equity fetch failed for %s, using sim", config_id)
+
+            # Sim calculation (same logic as _compute_sim in app.py)
+            watches = by_config.get(config_id, [])
+            alloc = cfg_dict.get("allocation", "")
+            alloc_params = cfg_dict.get("allocation_params") or {}
+
+            if alloc == "max_positions":
+                max_pos = int(alloc_params.get("max_pos", 10))
+            elif alloc in ("fixed_dollar", "ranking_realloc"):
+                alloc_pct = float(alloc_params.get("alloc_pct", 5))
+                max_pos = max(1, int(100 / alloc_pct))
+            else:
+                max_pos = 20
+
+            pos_size = starting / max_pos
+            realized_dollar = 0.0
+            unrealized_dollar = 0.0
+            holding_count = 0
+
+            for w in watches:
+                status = w.get("status", "")
+                if status in ("exited", "cooling_off", "sealed", "retrospective"):
+                    ex = w.get("exit")
+                    if ex:
+                        rpnl = ex.get("realized_pnl_pct")
+                        if rpnl is not None:
+                            realized_dollar += pos_size * float(rpnl) / 100
+                elif status == "holding":
+                    holding_count += 1
+                    upnl = w.get("unrealized_pnl")
+                    if upnl is not None:
+                        unrealized_dollar += pos_size * float(upnl) / 100
+
+            equity = starting + realized_dollar + unrealized_dollar
+            cash = starting - (holding_count * pos_size) + realized_dollar
+
+            insert_equity_snapshot(
+                monitor.db,
+                config_id=config_id,
+                timestamp=ts_now,
+                equity=round(equity, 2),
+                cash=round(cash, 2),
+                unrealized_pnl=round(unrealized_dollar, 2),
+                realized_pnl=round(realized_dollar, 2),
+                position_count=holding_count,
+                source="live",
+            )
+
+        return now
+    except Exception:
+        log.exception("Equity snapshot failed")
+        return last_time
+
+
 def live_monitoring_loop(
     monitor: LiveExitMonitor,
     interval_s: int = 60,
@@ -862,6 +1033,7 @@ def live_monitoring_loop(
     last_summary_save = time.monotonic()
     last_ensure_stops_date: str | None = None
     last_reconcile_time = 0.0  # force immediate reconcile on first cycle
+    last_equity_snapshot_time = 0.0  # force immediate snapshot on first cycle
     while True:
         try:
             # Only run during market hours (or within 30 min after close
@@ -876,6 +1048,10 @@ def live_monitoring_loop(
                 # Periodic reconciliation (every RECONCILE_INTERVAL seconds)
                 last_reconcile_time = _periodic_reconcile(
                     monitor, last_reconcile_time)
+
+                # Periodic equity snapshots
+                last_equity_snapshot_time = _snapshot_equity(
+                    monitor, last_equity_snapshot_time)
 
             # Periodic clean summary export (convenience, not safety).
             # Bar data is already persisted via JSONL append on each flush.
