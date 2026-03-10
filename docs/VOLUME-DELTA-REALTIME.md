@@ -353,10 +353,44 @@ time window.
 
 ---
 
+## Known Issue: Schwab Stream Drops During Market Hours (2026-03-09)
+
+During the VDD comparison analysis (see [VDD-COMPARISON.md](VDD-COMPARISON.md)), we
+discovered that the Schwab LEVELONE_EQUITIES WebSocket **disconnects during regular
+trading hours** and is not automatically reconnected. The shadow collector's data is
+almost entirely from extended hours (after 4 PM ET).
+
+**Evidence (NVDA, 2026-03-09):**
+- Total shadow bars: 241
+- Trading hours (09:30-16:00): **10 bars** (scattered fragments)
+- Extended hours (16:00+): **231 bars** (continuous)
+- Pattern is consistent across all ~147 tracked symbols
+
+**Root cause:** `schwab_client.py` `start_stream()` creates a `schwabdev.Stream`
+and calls `start()` once. There is no reconnection logic — if the WebSocket drops
+mid-day, streaming silently stops until the next explicit `start_stream()` call.
+The schwabdev library may handle some reconnection internally, but it's clearly
+not sufficient for all-day reliability.
+
+**Impact:**
+- Shadow collector captures almost no trading-hour data — useless for VDD comparison
+- Any live feature depending on Schwab streaming (real-time quotes, volume delta)
+  is unreliable during market hours
+
+**Fix needed:** Add reconnection/heartbeat logic to `schwab_client.py`:
+- Monitor for stream disconnections (no updates received for N seconds)
+- Auto-reconnect and re-subscribe to all active symbols
+- Log reconnection events for debugging
+- Consider schwabdev's built-in reconnect capabilities (if any)
+
+---
+
 ## Open Items
 
-- [ ] Hook collector into orchestrator watch lifecycle (start on watch creation, save on seal)
+- [x] Hook collector into orchestrator watch lifecycle (start on watch creation, save on seal)
+- [ ] **Fix Schwab stream reliability** — reconnection logic (see above). This is the
+      blocker for all streaming-dependent features.
 - [ ] Add `/api/shadow/status` endpoint to dashboard (show collector state)
-- [ ] Build comparison analysis tool: load saved shadow data + cached OHLCV bars, compute VDD signals from both, measure timing differences
+- [x] Build comparison analysis tool — `scripts/vdd_comparison.py` (done, blocked on data)
 - [ ] Determine if Schwab QoS 0 (500ms) is worth requesting vs default QoS 2 (1000ms)
 - [ ] Test with 20 concurrent symbols to verify stream stability at max capacity

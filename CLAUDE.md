@@ -2,11 +2,16 @@
 
 ## Project Documentation
 
-Design docs live in `docs/` (three files, split by purpose):
+Docs live in `docs/`, organized by topic. Two legacy overview docs plus topic-specific docs:
 
-- **`docs/ARCHITECTURE.md`** — Stable reference: system architecture, components, data models, project structure. Read to understand how things work.
-- **`docs/ROADMAP.md`** — Living plan: implementation status table, phase progress, parked ideas. **Update this after completing each step.**
-- **`docs/DECISIONS.md`** — Rationale log: design decisions, open questions, deferred ideas, reference papers.
+- **`docs/ARCHITECTURE.md`** — High-level system map: components, data flow, project structure. May lag behind topic docs.
+- **Topic docs** (the real living documentation):
+  - `docs/LIVE-TRADING.md` — Live trading plan and implementation
+  - `docs/ALPACA-TRADING.md` — Alpaca order execution, multi-account, fills
+  - `docs/VOLUME-DELTA-REALTIME.md` — Shadow collector, Schwab streaming, tick-level VDD
+  - `docs/VDD-COMPARISON.md` — Bar-based vs tick-level VDD comparison experiment
+  - `docs/BACKTEST-*.md` — Backtest architecture, strategies, metrics
+  - `docs/ALLOCATION-STRATEGIES.md` — Portfolio allocation methods
 
 Reference papers are in `docs/refs/`. Archived older docs in `docs/archive/`.
 

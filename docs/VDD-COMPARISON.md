@@ -215,15 +215,90 @@ shadow tick data. Mitigations:
 
 ## Open Questions
 
-- [ ] Does the shadow collector's minute bar OHLCV match the bar data source (yfinance/Schwab REST)?
-      If not, we need to use OHLCV from one source consistently and only swap the volume classification.
-- [ ] Are there edge cases where shadow data starts mid-day (symbol added after market open)?
-      If so, the first partial day may have fewer bars than the bar-based source.
+- [x] Does the shadow collector's minute bar OHLCV match the bar data source?
+      → Moot for now — coverage too sparse. When coverage improves, verify timestamps align.
+- [x] Are there edge cases where shadow data starts mid-day?
+      → Yes, this is the **primary problem**. See Phase 1 results below.
 - [ ] For Phase 2: replay acquisition logic the same way the existing backtest does
       (using recorded snapshot scores and the same ranking/allocation pipeline).
 
 ---
 
-## Results
+## Phase 1 Results (2026-03-09)
 
-*To be filled in after running the analysis.*
+### Data Quality Problem
+
+**The shadow collector data is far too sparse for a meaningful comparison.**
+
+The portfolio ran from 2026-03-05 (Thursday) through 2026-03-09 (Monday), spanning
+3 trading days (Fri 03/06, Mon 03/09; Sat/Sun have no market data). Shadow data
+coverage in the signal-relevant window (entry - lookback through exit) averaged only
+**4.1%** across all 33 VDD-exited positions. Zero positions met the 50% coverage
+threshold for trustworthy results.
+
+**Root causes:**
+
+1. **Portfolio started late on 03/05** — shadow collector began streaming that
+   afternoon, capturing only 2 bars for AMPX, zero for most symbols.
+2. **03/06 (Friday) had partial coverage** — streaming started mid-day for many
+   symbols (3-37 bars out of ~390 possible per full trading day).
+3. **03/07 and 03/08 are weekend** — daily JSON files exist but contain stale copies
+   of 03/06 data (save_daily ran but no new streaming data arrived).
+4. **03/09 (Monday) had the best coverage** — ~190 bars for actively-traded symbols,
+   but streaming started at ~11:08 ET (missing first 1.5 hours after market open).
+
+**JSONL bar log files** (`bars/` subdirectory) only exist for dates with actual
+streaming: typically `2026-03-06.jsonl` and `2026-03-09.jsonl`. The daily JSON
+summaries for 03/07 and 03/08 are duplicates of 03/06 data.
+
+### Raw Results
+
+Script: `scripts/vdd_comparison.py`
+
+Of 33 VDD-exited positions (all with <50% coverage):
+- **26 (84%)**: Same bar — tick-level matched bar-based (because ~96% of bars had
+  no shadow data and fell back to bar-based classification)
+- **3 (10%)**: Tick fired later (HOOD +4112min, ALV +112min, WLY +15min) — likely
+  artifacts of sparse data shifting a few bars' classification
+- **2 (6%)**: Tick fired earlier (LLY -4039min, MA -1min) — same artifact concern
+- **2**: Neither method signaled (KKR, BMY)
+
+Average P&L difference: **-0.03%** (not meaningful given data quality).
+
+### Conclusion
+
+**This comparison is inconclusive.** The shadow data coverage is too low to
+distinguish real signal differences from noise introduced by sparse tick data.
+
+### Second Run: `lc_d58c66d24787` (2026-03-09, same-day exits)
+
+Tested with a newer portfolio started the same day (03/09). 9 VDD-exited positions,
+all entered and exited on 03/09. Results were identical: **3% average relevant
+coverage**, all 7 comparable positions showed same-bar signals.
+
+### Root Cause: Schwab Stream Drops During Market Hours
+
+Investigation revealed the shadow collector's data is almost entirely from
+**extended hours** (after 4 PM ET). For NVDA on 03/09:
+- Total bars: 241
+- Trading hours (09:30-16:00): **10 bars** (scattered: 12:08-12:13, 13:24-13:25, 15:57-15:58)
+- Extended hours (16:00+): **231 bars** (continuous)
+
+This pattern is consistent across all symbols. The Schwab WebSocket stream appears
+to disconnect during market hours and is not automatically reconnected. The
+`schwab_client.py` `start_stream()` method has no reconnection logic — if the
+WebSocket drops, streaming stops until the next explicit `start_stream()` call.
+
+### Path Forward
+
+**Before this comparison can be meaningful, two things must happen:**
+
+1. **Fix Schwab stream reliability** — add reconnection/heartbeat logic to
+   `schwab_client.py` so the WebSocket stays connected through market hours.
+   Without this, the shadow collector will never have continuous trading-hour data.
+
+2. **Wait for full-coverage data** — once streaming is reliable, run the portfolio
+   for at least a full trading week. Then re-run `scripts/vdd_comparison.py` on
+   positions with >50% relevant coverage.
+
+The comparison script and infrastructure are ready. The blocker is stream reliability.
