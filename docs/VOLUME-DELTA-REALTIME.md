@@ -3,14 +3,15 @@
 > Hub document for real-time volume delta computation, shadow mode collector,
 > and the transition from backtest bar-based approximation to tick-level signals.
 >
-> Last updated: 2026-03-05
+> Last updated: 2026-03-10
 
 ---
 
 ## Table of Contents
 
 1. [Problem Statement](#problem-statement)
-2. [Data Source Comparison](#data-source-comparison)
+2. [Current Status: What's Wired Up Today](#current-status-whats-wired-up-today)
+3. [Data Source Comparison](#data-source-comparison)
 3. [Live Test Results](#live-test-results)
 4. [Shadow Mode Collector](#shadow-mode-collector)
 5. [Bar-Based vs Tick-Level: 10-Symbol Study](#bar-based-vs-tick-level-10-symbol-study)
@@ -32,6 +33,35 @@ different signal timing.
 **Key question:** If we switch from bar-based to tick-level volume delta for the
 Volume Delta Divergence (VDD) exit strategy, how much do the signals differ?
 Can we trust the backtest's tuned parameters (lookback=80) in a tick-level environment?
+
+---
+
+## Current Status: What's Wired Up Today
+
+**Both backtesting and live trading use the same bar-based VDD computation.**
+
+The live exit monitor (`live_monitor.py`) calls `evaluate_exit()` from `backtest.py`,
+which uses `_compute_volume_delta()` — the inter-bar tick rule on 1-minute OHLCV bars.
+Each bar's entire volume is classified as uptick or downtick based on a single binary
+decision (`Close > prev Close`). This is identical to what backtesting uses.
+
+The tick-level alternative (`VolumeDeltaCollector.check_vdd_signal()` in
+`volume_delta_shadow.py`) exists and classifies volume at ~55 updates/minute per symbol
+from Schwab's LEVELONE_EQUITIES stream. **It is not connected to exit decisions.** It
+runs as a shadow collector for comparison purposes only.
+
+| Aspect | Backtesting | Live Exit Monitor | Shadow Collector |
+|--------|------------|-------------------|------------------|
+| **Entry point** | `_run_volume_delta_divergence()` | `evaluate_exit()` (same backtest code) | `check_vdd_signal()` |
+| **Volume delta** | Inter-bar tick rule (binary) | Inter-bar tick rule (binary) | Tick-level (~55/min) |
+| **VDD formula** | `close >= rolling_max AND cum_delta < lagged_delta` | Same | Same |
+| **Used for exits?** | Yes (backtest) | Yes (live) | No (shadow only) |
+| **Code path** | `backtest.py` → `_compute_volume_delta()` | `backtest.py` → `_compute_volume_delta()` | `volume_delta_shadow.py` → `TickAccumulator` |
+
+**Bottom line:** Backtest and live produce identical VDD signals given the same bar data.
+The tick-level method uses the same formula but classifies volume differently, which can
+cause ~40% of signals to fire at different times (see
+[VDD-COMPARISON.md](VDD-COMPARISON.md) for the empirical analysis).
 
 ---
 

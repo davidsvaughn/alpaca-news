@@ -4,7 +4,9 @@
 > for the Volume Delta Divergence (VDD) exit strategy, using real portfolio data
 > from live config `lc_ab8aa7f25745`.
 >
-> See also: [VOLUME-DELTA-REALTIME.md](VOLUME-DELTA-REALTIME.md) for shadow collector architecture.
+> See also: [VOLUME-DELTA-REALTIME.md](VOLUME-DELTA-REALTIME.md) for shadow collector architecture
+> and the [Current Status](VOLUME-DELTA-REALTIME.md#current-status-whats-wired-up-today) section
+> for what's actually wired up today (spoiler: both backtest and live use the same bar-based VDD).
 >
 > Started: 2026-03-09
 
@@ -13,8 +15,11 @@
 ## Motivation
 
 Portfolio `lc_ab8aa7f25745` has been running since 2026-03-05 using VDD exits with
-`lookback=80` and the **bar-based** inter-bar tick rule. The shadow collector has been
-simultaneously gathering **tick-level** volume delta data for all portfolio symbols.
+`lookback=80` and the **bar-based** inter-bar tick rule. The live exit monitor calls
+`evaluate_exit()` from `backtest.py` — the exact same code path as backtesting (see
+[Current Status](VOLUME-DELTA-REALTIME.md#current-status-whats-wired-up-today)).
+The shadow collector has been simultaneously gathering **tick-level** volume delta
+data for all portfolio symbols.
 
 We want to know: if we had used tick-level volume delta instead of bar-based, how would
 the exit signals have differed? Is there a systematic pattern (earlier? later? random)?
