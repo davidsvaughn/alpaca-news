@@ -10,6 +10,7 @@ Docs live in `docs/`, organized by topic. Two legacy overview docs plus topic-sp
   - `docs/ALPACA-TRADING.md` — Alpaca order execution, multi-account, fills
   - `docs/VOLUME-DELTA-REALTIME.md` — Shadow collector, Schwab streaming, tick-level VDD
   - `docs/VDD-COMPARISON.md` — Bar-based vs tick-level VDD comparison experiment
+  - `docs/TICK-COLLECTOR.md` — Tick collector service: raw trade data, TimescaleDB, roadmap
   - `docs/BACKTEST-*.md` — Backtest architecture, strategies, metrics
   - `docs/ALLOCATION-STRATEGIES.md` — Portfolio allocation methods
 
