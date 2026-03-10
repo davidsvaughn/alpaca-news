@@ -1108,5 +1108,5 @@ def _near_close() -> bool:
     if now.weekday() > 4:
         return False
     minutes = now.hour * 60 + now.minute
-    close_min = (EXTENDED_CLOSE_HOUR * 60) if ALPACA_EXTENDED_HOURS() else (16 * 60)
+    close_min = (EXTENDED_CLOSE_HOUR * 60) if ALPACA_EXTENDED_HOURS else (16 * 60)
     return close_min <= minutes < close_min + 30

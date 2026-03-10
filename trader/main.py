@@ -19,6 +19,11 @@ import threading
 import time
 from pathlib import Path
 
+# Load .env BEFORE any trader imports so module-level os.getenv() calls
+# (e.g. ALPACA_EXTENDED_HOURS in market_hours.py) see the correct values.
+from dotenv import load_dotenv
+load_dotenv()
+
 import uvicorn
 
 from trader.config import load_settings
@@ -128,7 +133,7 @@ def main() -> None:
     if settings.online_auto_market_hours:
         online.start_auto_market_hours()
         from trader.market.market_hours import ALPACA_EXTENDED_HOURS
-        hours_label = "4:00-20:00" if ALPACA_EXTENDED_HOURS() else "9:30-16:00"
+        hours_label = "4:00-20:00" if ALPACA_EXTENDED_HOURS else "9:30-16:00"
         print(f"ONLINE: auto market hours enabled (ON during {hours_label} ET)")
     if not online.enabled:
         print("OFFLINE: no new jobs will be launched")

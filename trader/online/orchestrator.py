@@ -175,7 +175,7 @@ def _is_market_open() -> bool:
         return False
 
     t = now_et.hour * 60 + now_et.minute
-    if ALPACA_EXTENDED_HOURS():
+    if ALPACA_EXTENDED_HOURS:
         return 240 <= t < 1200  # 4:00 AM - 8:00 PM ET
     return 570 <= t < 960  # 9:30 AM - 4:00 PM ET
 
