@@ -17,8 +17,10 @@ from .portfolio import PortfolioSync
 
 log = logging.getLogger(__name__)
 
-# L1 fields: original set + Tier 2 fields (9, 16, 35, 41)
-L1_FIELDS = "0,1,2,3,4,5,8,9,10,11,12,16,17,18,33,35,41,42"
+# L1 fields: only what we use
+# 1=BidPrice, 2=AskPrice, 3=LastPrice, 8=TotalVolume,
+# 9=LastSize, 11=TradeTime, 35=TradeTimeLong, 41=LastMICID
+L1_FIELDS = "1,2,3,8,9,35,41"
 
 
 class TickCollector:
@@ -98,6 +100,8 @@ class TickCollector:
             if not symbol:
                 continue
 
+            bid_price = content.get("1")  # Bid Price
+            ask_price = content.get("2")  # Ask Price
             last_price = content.get("3")  # Last Price
             total_volume = content.get("8")  # Total Volume
             last_size = content.get("9")  # Last Size
@@ -130,7 +134,11 @@ class TickCollector:
             else:
                 trade_time = received_at
 
-            direction = self.classifier.classify(symbol, float(last_price))
+            direction = self.classifier.classify(
+                symbol, float(last_price),
+                bid=float(bid_price) if bid_price is not None else None,
+                ask=float(ask_price) if ask_price is not None else None,
+            )
 
             trade = Trade(
                 time=trade_time,

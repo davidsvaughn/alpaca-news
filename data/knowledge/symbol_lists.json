@@ -1201,7 +1201,16 @@
     "CMCSA",
     "LEMIF",
     "VSBGF",
-    "EVO"
+    "EVO",
+    "ROKU",
+    "STGW",
+    "INOD",
+    "BTAI",
+    "TWO",
+    "XPO",
+    "AMAT",
+    "ZVRA",
+    "SLM"
   ],
   "crypto": [],
   "rejected": [
@@ -1343,5 +1352,5 @@
     "ADANIENT",
     "LEMSE"
   ],
-  "last_updated": "2026-03-10T18:27:08.263367+00:00"
+  "last_updated": "2026-03-10T18:46:39.465101+00:00"
 }

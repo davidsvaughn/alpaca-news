@@ -1,6 +1,6 @@
 <!-- Macro: stats row -->
 {% macro stats_row(stats) %}
-<div class="row mb-2 g-2">
+<div class="row mb-0 g-2">
   {% for label, value, cls in [
     ('Open', stats.holding_count, ''),
     ('Cooling', stats.cooling_count, ''),
@@ -132,18 +132,22 @@
 {% for p in portfolios %}
 <div class="card mb-3" style="border-left: 4px solid {% if p.config.active %}#198754{% else %}#6c757d{% endif %};">
   <div class="card-body py-3 px-3">
+  <!-- Two-column layout: info left, chart right -->
+  <div class="d-flex align-items-stretch">
+  <div class="flex-shrink-0 me-3" style="min-width:360px;">
+
   <!-- Header: config ID + deactivate/delete -->
   <div class="d-flex align-items-center mb-1">
     <h5 class="mb-0 me-2">{{ p.config.config_id }}</h5>
     {% if p.config.active %}
-    <button class="btn btn-sm btn-outline-danger py-0 px-1 ms-auto"
+    <button class="btn btn-sm btn-outline-danger py-0 px-1"
             hx-post="/api/live/config/{{ p.config.config_id }}/deactivate"
             hx-swap="none"
             hx-confirm="Deactivate '{{ p.config.config_id }}'?"
             onclick="setTimeout(() => location.reload(), 500)"
             style="font-size: 0.7rem;">Deactivate</button>
     {% else %}
-    <button class="btn btn-sm btn-outline-danger py-0 px-1 ms-auto"
+    <button class="btn btn-sm btn-outline-danger py-0 px-1"
             hx-delete="/api/live/config/{{ p.config.config_id }}"
             hx-swap="none"
             hx-confirm="Delete '{{ p.config.config_id }}'? This cannot be undone."
@@ -185,10 +189,9 @@
   </div>
   {% endif %}
 
-  <!-- Config ID + collapsible details -->
-  <div class="small text-muted mb-1">
-    <code>{{ p.config.config_id }}</code>
-    {% if p.config.created_at %} | started {{ p.config.created_at[:16] }}{% endif %}
+  <!-- Filters + started date -->
+  <div class="small text-muted mb-0">
+    {% if p.config.created_at %}started <span class="_local-time" data-utc="{{ p.config.created_at }}">{{ p.config.created_at[:16] }}</span>{% endif %}
     {% set f = p.config.filters %}
     {% set af = [] %}
     {% if f.conf_min %}{% set _ = af.append('Conf>=' + f.conf_min|string + '%') %}{% endif %}
@@ -203,11 +206,25 @@
     {% if f.price_10_min %}{% set _ = af.append('P@x>=$' + f.price_10_min|string) %}{% endif %}
     {% if f.symbol %}{% set _ = af.append(f.symbol) %}{% endif %}
     {% if af %} | {{ af | join(' | ') }}{% endif %}
-    {% if p.config.exit_strategy is defined %}
-    | <a data-bs-toggle="collapse" href="#cfg-detail-{{ loop.index }}" role="button"
-         class="text-decoration-none" style="font-size:.7rem">details &#9662;</a>
-    {% endif %}
   </div>
+  {% if p.config.exit_strategy is defined %}
+  <div class="mb-1">
+    <a data-bs-toggle="collapse" href="#cfg-detail-{{ loop.index }}" role="button"
+       class="text-decoration-none small text-muted" style="font-size:.7rem">details &#9662;</a>
+  </div>
+  {% endif %}
+
+  {{ stats_row(p.stats) }}
+
+  </div><!-- end left column -->
+
+  <!-- Right column: equity chart fills available space (absolute canvas prevents grow loop) -->
+  <div class="flex-grow-1" style="position:relative; min-height:120px;">
+    <canvas id="equity-chart-{{ loop.index }}" data-config-id="{{ p.config.config_id }}"
+            data-sim-ending="{{ p.sim.sim_ending if p.sim and p.sim.sim_ending else '' }}"
+            style="position:absolute; top:0; left:0; width:100%; height:100%;"></canvas>
+  </div>
+  </div><!-- end two-column layout -->
 
   <!-- Collapsible config details -->
   {% if p.config.exit_strategy is defined %}
@@ -258,17 +275,6 @@
     </div>
   </div>
   {% endif %}
-
-  <!-- Stats + equity chart side by side -->
-  <div class="d-flex align-items-start gap-3">
-    <div class="flex-shrink-0">
-      {{ stats_row(p.stats) }}
-    </div>
-    <div class="flex-grow-1" style="position:relative; height:120px; min-width:250px; max-width:500px;">
-      <canvas id="equity-chart-{{ loop.index }}" data-config-id="{{ p.config.config_id }}"
-              data-sim-ending="{{ p.sim.sim_ending if p.sim and p.sim.sim_ending else '' }}"></canvas>
-    </div>
-  </div>
 
   {% if p.holding or p.cooling or p.closed %}
   <a href="#" class="text-decoration-none small text-muted _toggle-link" data-target="positions-{{ loop.index }}" style="font-size:.75rem">
@@ -346,6 +352,19 @@
 
 <script>
 (function() {
+  // Convert UTC timestamps to local human-readable format
+  document.querySelectorAll('._local-time').forEach(function(el) {
+    var utc = el.dataset.utc;
+    if (!utc) return;
+    // Handle ISO format with or without timezone offset
+    var s = utc.replace(' ', 'T');
+    if (!/[Z+-]\d/.test(s.slice(-6))) s += 'Z';
+    var d = new Date(s);
+    if (isNaN(d)) return;
+    el.textContent = d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })
+      + ' ' + d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+  });
+
   // Destroy previous chart instances to avoid Chart.js duplication on HTMX re-swap
   var _eqCharts = window._equityCharts || {};
   Object.values(_eqCharts).forEach(function(c) { try { c.destroy(); } catch(e) {} });
