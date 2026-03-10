@@ -28,8 +28,14 @@ EXTENDED_OPEN_MIN = 0
 EXTENDED_CLOSE_HOUR = 20
 EXTENDED_CLOSE_MIN = 0
 
-# Env var to enable extended-hours trading
-ALPACA_EXTENDED_HOURS = os.getenv("ALPACA_EXTENDED_HOURS", "false").lower() in ("true", "1", "yes")
+def ALPACA_EXTENDED_HOURS() -> bool:  # noqa: N802 — uppercase to match old constant name
+    """Check if extended-hours trading is enabled.
+
+    This is a function (not a constant) because dotenv may not have loaded
+    when this module is first imported. All call sites already use this
+    inside function bodies, so the late evaluation is transparent.
+    """
+    return os.getenv("ALPACA_EXTENDED_HOURS", "false").lower() in ("true", "1", "yes")
 
 
 def is_market_open(dt: datetime | None = None) -> bool:
@@ -79,7 +85,7 @@ def is_trading_session_open(dt: datetime | None = None) -> bool:
     If ALPACA_EXTENDED_HOURS is enabled, returns True during 4:00 AM - 8:00 PM ET.
     Otherwise, returns True only during regular hours (9:30 AM - 4:00 PM ET).
     """
-    if ALPACA_EXTENDED_HOURS:
+    if ALPACA_EXTENDED_HOURS():
         return is_extended_hours(dt)
     return is_market_open(dt)
 

@@ -305,7 +305,7 @@ class AlpacaBroker:
         """
         from trader.market.market_hours import in_extended_only, ALPACA_EXTENDED_HOURS
 
-        use_extended = ALPACA_EXTENDED_HOURS and in_extended_only()
+        use_extended = ALPACA_EXTENDED_HOURS() and in_extended_only()
 
         if use_extended:
             return self._buy_extended(symbol, notional=notional, qty=qty)
@@ -471,7 +471,7 @@ class AlpacaBroker:
         """
         from trader.market.market_hours import in_extended_only, ALPACA_EXTENDED_HOURS
 
-        use_extended = ALPACA_EXTENDED_HOURS and in_extended_only()
+        use_extended = ALPACA_EXTENDED_HOURS() and in_extended_only()
 
         if use_extended:
             return self._close_position_extended(symbol)

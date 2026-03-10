@@ -1326,7 +1326,10 @@
     "BCTX",
     "SUMAU",
     "ALDX",
-    "JOYY"
+    "JOYY",
+    "SSII",
+    "BL",
+    "AOSL"
   ],
   "crypto": [],
   "rejected": [
@@ -1475,7 +1478,8 @@
     "SPR",
     "3900.HK",
     "MPW",
-    "MRD"
+    "MRD",
+    "YY"
   ],
-  "last_updated": "2026-03-10T23:01:59.484467+00:00"
+  "last_updated": "2026-03-10T23:21:43.276946+00:00"
 }
