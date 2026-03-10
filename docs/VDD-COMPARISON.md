@@ -79,6 +79,43 @@ sub-minute signal analysis, potentially catching VDD signals up to 59 seconds ea
 than 1-minute bar resolution allows. Not needed for the current comparison, but worth
 considering for a future iteration.
 
+### Future: Trade-Size Filtering (Institutional Flow)
+
+An interesting enhancement would be to filter trades by size before computing volume
+delta — e.g., only count trades > 1,000 shares — to isolate what "big money" is doing
+and filter out retail noise. This requires **per-trade data** with individual trade sizes.
+
+**Current limitation**: Schwab's `LEVELONE_EQUITIES` stream (what we use now) provides
+`last_price` + `total_volume` (cumulative for the day) at ~1-second intervals. The
+shadow collector infers incremental volume by differencing consecutive `total_volume`
+readings, but that increment is the **aggregate of all trades** in the ~1-second window.
+If 50 trades happened (some 100-share retail, some 10,000-share institutional), they're
+lumped into one number. No way to filter by trade size.
+
+**Solution: Schwab TIMESALE_EQUITY**
+
+Schwab's streaming API supports a `TIMESALE_EQUITY` service that provides **individual
+trade prints** — each message is one trade with its price and size. This is exactly
+what's needed for size-filtered volume delta. Key facts:
+
+- Available free with a Schwab brokerage account (which we have)
+- Uses the **same WebSocket connection** we already have open for `LEVELONE_EQUITIES`
+- Provides per-trade: price, size, timestamp, exchange
+- **However**: the `schwabdev` Python library does NOT expose a `timesale_equity()`
+  method. It only wraps `level_one_equities()`, `chart_equity()`, and a few others.
+
+**Options to access TIMESALE_EQUITY**:
+1. **Send raw subscription message** on the existing schwabdev WebSocket — bypass the
+   library's method wrappers and send the TIMESALE subscription JSON directly. The
+   underlying WebSocket is the same; schwabdev just hasn't wrapped this service.
+2. **Fork/extend schwabdev** — add a `timesale_equity()` method mirroring the pattern
+   of existing service methods.
+3. **Alpaca paid SIP feed** — per-trade data from all exchanges, but requires a paid
+   data subscription.
+
+Not needed for the current bar-vs-tick comparison, but would unlock a more
+sophisticated volume delta signal in the future.
+
 ## Lookback Translation
 
 **No translation needed.** Both methods produce 1-minute bars, so `lookback=80` means
