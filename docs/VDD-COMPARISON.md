@@ -36,6 +36,49 @@ The VDD signal fires when **both** conditions are true:
 1. Price makes a new high over the previous `lookback` bars
 2. Cumulative volume delta is **lower** than it was `lookback` bars ago
 
+## What the Shadow Collector Actually Captures
+
+Schwab streams ~1 price+volume update per second per symbol (raw ticks). The shadow
+collector does two things with each tick:
+
+1. **Accumulates running totals** — every tick updates cumulative uptick/downtick
+   counters in real-time (in memory)
+2. **Snapshots into 1-minute bars** — at each minute boundary, it captures the
+   minute's OHLCV + uptick/downtick split and writes it to disk (JSONL)
+
+**Only the 1-minute bar snapshots are persisted.** The ~60 individual ticks within
+each minute are consumed in real-time and then discarded. This means:
+
+- **Real-time** (live collector in memory): VDD can be checked at any moment — if
+  price makes a new high at 10:00:23 and cumulative delta is declining, it detects
+  that immediately, not at 10:01:00.
+- **From saved data** (retrospective analysis like this comparison): we can only
+  evaluate VDD at 1-minute bar boundaries, because that's what's on disk.
+
+### Why 1-Minute Bars Are Sufficient for This Comparison
+
+The advantage of tick-level data is **not** about checking more frequently (both
+methods check every minute in this comparison). It's about **more accurate volume
+classification within each bar**:
+
+- Bar-based: "Close went up → ALL 50,000 shares this minute were buying pressure"
+- Tick-level: "30,000 on upticks, 20,000 on downticks → net delta = +10,000"
+
+The tick-level minute bar captures intra-bar reversals that the binary bar-based
+method misses entirely. That more accurate split flows into cumulative delta, which
+flows into VDD signals — so the signal can fire on a different bar even at the same
+1-minute resolution.
+
+### Future: Sub-Minute VDD from Saved Data
+
+If we want to evaluate VDD at finer granularity from saved data (e.g., every second
+instead of every minute), we would need to modify the shadow collector to persist
+finer-grained snapshots — either raw tick data or sub-minute bars (e.g., 5-second
+or 15-second intervals). This would increase storage but enable retrospective
+sub-minute signal analysis, potentially catching VDD signals up to 59 seconds earlier
+than 1-minute bar resolution allows. Not needed for the current comparison, but worth
+considering for a future iteration.
+
 ## Lookback Translation
 
 **No translation needed.** Both methods produce 1-minute bars, so `lookback=80` means
@@ -139,8 +182,8 @@ shadow tick data. Mitigations:
       If not, we need to use OHLCV from one source consistently and only swap the volume classification.
 - [ ] Are there edge cases where shadow data starts mid-day (symbol added after market open)?
       If so, the first partial day may have fewer bars than the bar-based source.
-- [ ] For Phase 2: how do we replay the acquisition pipeline? Do we need the original
-      snapshot scores, or can we use the recorded confidence/momentum rankings?
+- [ ] For Phase 2: replay acquisition logic the same way the existing backtest does
+      (using recorded snapshot scores and the same ranking/allocation pipeline).
 
 ---
 
