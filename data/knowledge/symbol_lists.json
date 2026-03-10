@@ -1305,7 +1305,25 @@
     "UP",
     "LFMD",
     "VACH",
-    "PANL"
+    "PANL",
+    "URG",
+    "NEWT",
+    "SSSS",
+    "EVR",
+    "PLG",
+    "VERI",
+    "CLIR",
+    "PCOR",
+    "SHPH",
+    "BLNE",
+    "IROQ",
+    "FGBI",
+    "ORGN",
+    "XWIN",
+    "SSM",
+    "RCKT",
+    "MMEX",
+    "BCTX"
   ],
   "crypto": [],
   "rejected": [
@@ -1450,7 +1468,11 @@
     "AC",
     "NINE",
     "VOW3.DE",
-    "HMM.A"
+    "HMM.A",
+    "SPR",
+    "3900.HK",
+    "MPW",
+    "MRD"
   ],
-  "last_updated": "2026-03-10T21:39:48.889677+00:00"
+  "last_updated": "2026-03-10T22:26:13.458009+00:00"
 }

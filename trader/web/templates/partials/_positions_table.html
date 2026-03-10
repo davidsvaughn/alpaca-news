@@ -5,7 +5,6 @@
     ('Open', stats.holding_count, ''),
     ('Cooling', stats.cooling_count, ''),
     ('Closed', stats.closed_count, ''),
-    ('Win Rate', stats.win_rate|string + '%', ''),
     ('Realized', ('%+.2f'|format(stats.total_realized_pnl)) + '%', 'pnl-positive' if stats.total_realized_pnl >= 0 else 'pnl-negative'),
     ('W/L', stats.wins|string + '/' + stats.losses|string, ''),
   ] %}
@@ -22,16 +21,18 @@
 {% endmacro %}
 
 <!-- Macro: holdings table -->
-{% macro holdings_table(watches) %}
+{% macro holdings_table(watches, config_id='') %}
 {% if watches %}
 <div class="table-responsive">
-  <table class="table table-sm table-hover align-middle mb-1">
+  <table class="table table-sm table-hover align-middle mb-1 _holdings-table" data-config-id="{{ config_id }}">
     <thead class="table-light"><tr>
+      {% if config_id %}<th style="width:30px"><input type="checkbox" class="_select-all" title="Select all"></th>{% endif %}
       <th>Symbol</th><th>Dir</th><th>Qty</th><th>Entry</th><th>Current</th><th>P&L</th><th>Conf</th><th>Strategy</th><th>Entered</th><th></th>
     </tr></thead>
     <tbody>
     {% for w in watches %}
     <tr>
+      {% if config_id %}<td><input type="checkbox" class="_select-pos" value="{{ w.symbol }}"></td>{% endif %}
       <td><strong>{{ w.symbol }}</strong></td>
       <td>{% if w.entry.direction == 'bullish' %}<span class="text-success">&#9650;</span>{% else %}<span class="text-danger">&#9660;</span>{% endif %}</td>
       <td>{% if w.qty is defined and w.qty %}{{ "%.2f"|format(w.qty) }}{% else %}<span class="text-muted">&mdash;</span>{% endif %}</td>
@@ -130,7 +131,7 @@
 
 <!-- Render portfolios -->
 {% for p in portfolios %}
-<div class="card mb-3" style="border-left: 4px solid {% if p.config.active %}#198754{% else %}#6c757d{% endif %};">
+<div class="card mb-3 _portfolio-card" data-portfolio-id="{{ p.config.config_id }}" style="border-left: 4px solid {% if p.config.active %}#198754{% else %}#6c757d{% endif %};">
   <div class="card-body py-3 px-3">
   <!-- Two-column layout: info left, chart right -->
   <div class="d-flex align-items-stretch flex-wrap">
@@ -138,6 +139,7 @@
 
   <!-- Header: config ID + deactivate/delete -->
   <div class="d-flex align-items-center mb-1">
+    <span class="_drag-handle" title="Drag to reorder" style="cursor:grab; margin-right:6px; color:#aaa; font-size:1rem; user-select:none;">&#9776;</span>
     <h5 class="mb-0 me-2">{{ p.config.config_id }}</h5>
     {% if p.config.active %}
     <button class="btn btn-sm btn-outline-danger py-0 px-1"
@@ -155,21 +157,11 @@
             style="font-size: 0.7rem;">Delete</button>
     {% endif %}
   </div>
-  <!-- Metadata: status badges + strategy + stop + allocation + capital -->
-  <div class="d-flex align-items-center flex-wrap mb-1" style="font-size:.8rem">
-    {% if p.config.active %}<span class="badge bg-success me-2" style="font-size:.65rem">active</span>
-    {% else %}<span class="badge bg-secondary me-2" style="font-size:.65rem">inactive</span>{% endif %}
-    {% if p.config.alpaca_account_id %}<span class="badge bg-warning text-dark me-2" style="font-size:.65rem">Alpaca: {{ p.config.alpaca_account_id }}</span>{% endif %}
-    <span class="small text-muted me-2">{{ p.config.exit_strategy }}</span>
-    <span class="small text-muted me-2">Stop: {{ p.config.guard_stop_pct }}%</span>
-    <span class="small text-muted me-2">{{ p.config.allocation }}</span>
-    <span class="small text-muted me-2">${{ "{:,.0f}".format(p.config.starting_capital) }}</span>
-  </div>
+  {% if p.config.alpaca_account_id %}<div class="mb-1"><span class="badge bg-warning text-dark" style="font-size:.65rem">Alpaca: {{ p.config.alpaca_account_id }}</span></div>{% endif %}
 
   <!-- Sim value display -->
   {% if p.sim and p.sim.sim_trades %}
-  <div class="mb-1" style="font-size:.85rem">
-    <span class="text-muted">Sim:</span>
+  <div class="mb-0" style="font-size:.85rem">
     <span class="fw-bold">${{ "{:,.0f}".format(p.sim.sim_starting) }}</span>
     <span class="text-muted">&rarr;</span>
     <span class="fw-bold {% if p.sim.sim_return_pct >= 0 %}pnl-positive{% else %}pnl-negative{% endif %}">
@@ -179,38 +171,44 @@
       ({{ "%+.1f"|format(p.sim.sim_return_pct) }}%)
     </span>
     <span class="text-muted">({{ p.sim.sim_trades }} trades)</span>
-    {% if p.sim.sim_daily_pct is not none and p.sim.sim_span_days is not none %}
-    <span class="ms-2 text-muted">Daily:</span>
+  </div>
+  {% if p.sim.sim_daily_pct is not none and p.sim.sim_span_days is not none %}
+  <div class="mb-1" style="font-size:.85rem">
+    <span class="text-muted">Daily:</span>
     <span class="fw-bold {% if p.sim.sim_daily_pct >= 0 %}pnl-positive{% else %}pnl-negative{% endif %}">
       {{ "%+.3f"|format(p.sim.sim_daily_pct) }}%/day
     </span>
     <span class="text-muted">({{ p.sim.sim_span_days }}d span)</span>
-    {% endif %}
   </div>
   {% endif %}
+  {% endif %}
 
-  <!-- Filters + started date -->
+  <!-- Started date -->
+  {% set f = p.config.filters %}
+  {% set af = [] %}
+  {% if f.conf_min %}{% set _ = af.append('Conf>=' + f.conf_min|string + '%') %}{% endif %}
+  {% if f.price_min %}{% set _ = af.append('Price>=$' + f.price_min|string) %}{% endif %}
+  {% if f.price_max %}{% set _ = af.append('Price<=$' + f.price_max|string) %}{% endif %}
+  {% if f.avg_vol_min %}{% set _ = af.append('Vol>=' + f.avg_vol_min|string + 'M') %}{% endif %}
+  {% if f.avg_vol_max %}{% set _ = af.append('Vol<=' + f.avg_vol_max|string + 'M') %}{% endif %}
+  {% if f.mkt_cap_min %}{% set _ = af.append('Cap>=' + f.mkt_cap_min|string + 'B') %}{% endif %}
+  {% if f.mkt_cap_max %}{% set _ = af.append('Cap<=' + f.mkt_cap_max|string + 'B') %}{% endif %}
+  {% if f.pe_min %}{% set _ = af.append('PE>=' + f.pe_min|string) %}{% endif %}
+  {% if f.pe_max %}{% set _ = af.append('PE<=' + f.pe_max|string) %}{% endif %}
+  {% if f.price_10_min %}{% set _ = af.append('P@x>=$' + f.price_10_min|string) %}{% endif %}
+  {% if f.symbol %}{% set _ = af.append(f.symbol) %}{% endif %}
   <div class="small text-muted mb-0">
     {% if p.config.created_at %}started <span class="_local-time" data-utc="{{ p.config.created_at }}">{{ p.config.created_at[:16] }}</span>{% endif %}
-    {% set f = p.config.filters %}
-    {% set af = [] %}
-    {% if f.conf_min %}{% set _ = af.append('Conf>=' + f.conf_min|string + '%') %}{% endif %}
-    {% if f.price_min %}{% set _ = af.append('Price>=$' + f.price_min|string) %}{% endif %}
-    {% if f.price_max %}{% set _ = af.append('Price<=$' + f.price_max|string) %}{% endif %}
-    {% if f.avg_vol_min %}{% set _ = af.append('Vol>=' + f.avg_vol_min|string + 'M') %}{% endif %}
-    {% if f.avg_vol_max %}{% set _ = af.append('Vol<=' + f.avg_vol_max|string + 'M') %}{% endif %}
-    {% if f.mkt_cap_min %}{% set _ = af.append('Cap>=' + f.mkt_cap_min|string + 'B') %}{% endif %}
-    {% if f.mkt_cap_max %}{% set _ = af.append('Cap<=' + f.mkt_cap_max|string + 'B') %}{% endif %}
-    {% if f.pe_min %}{% set _ = af.append('PE>=' + f.pe_min|string) %}{% endif %}
-    {% if f.pe_max %}{% set _ = af.append('PE<=' + f.pe_max|string) %}{% endif %}
-    {% if f.price_10_min %}{% set _ = af.append('P@x>=$' + f.price_10_min|string) %}{% endif %}
-    {% if f.symbol %}{% set _ = af.append(f.symbol) %}{% endif %}
-    {% if af %} | {{ af | join(' | ') }}{% endif %}
+  </div>
+  {% if af %}
+  <div class="small text-muted mb-0">{{ af | join(' | ') }}</div>
+  {% endif %}
+  <div class="small text-muted mb-0">
+    {{ p.config.exit_strategy }} | Stop: {{ p.config.guard_stop_pct }}% | {{ p.config.allocation }}
   </div>
   {% if p.config.exit_strategy is defined %}
   <div class="mb-1">
-    <a data-bs-toggle="collapse" href="#cfg-detail-{{ loop.index }}" role="button"
-       class="text-decoration-none small text-muted" style="font-size:.7rem">details &#9662;</a>
+    <a href="#" class="text-decoration-none small text-muted _toggle-link" data-target="cfg-detail-{{ p.config.config_id }}" style="font-size:.7rem">details &#9662;</a>
   </div>
   {% endif %}
 
@@ -220,7 +218,7 @@
 
   <!-- Right column: equity chart fills available space -->
   <div class="flex-grow-1" style="position:relative; min-height:150px; min-width:200px;">
-    <div id="equity-chart-{{ loop.index }}" data-config-id="{{ p.config.config_id }}"
+    <div id="equity-chart-{{ p.config.config_id }}" data-config-id="{{ p.config.config_id }}"
          data-sim-ending="{{ p.sim.sim_ending if p.sim and p.sim.sim_ending else '' }}"
          style="position:absolute; top:0; left:0; width:100%; height:100%;"></div>
   </div>
@@ -228,7 +226,7 @@
 
   <!-- Collapsible config details -->
   {% if p.config.exit_strategy is defined %}
-  <div class="collapse small text-muted mb-2" id="cfg-detail-{{ loop.index }}">
+  <div class="small text-muted mb-2 _toggle-section" id="cfg-detail-{{ p.config.config_id }}" style="display:none">
     <div class="card card-body py-2 px-3 bg-light border-0" style="font-size:.75rem">
       <div class="row g-3">
         <div class="col-auto">
@@ -277,30 +275,40 @@
   {% endif %}
 
   {% if p.holding or p.cooling or p.closed %}
-  <a href="#" class="text-decoration-none small text-muted _toggle-link" data-target="positions-{{ loop.index }}" style="font-size:.75rem">
+  <a href="#" class="text-decoration-none small text-muted _toggle-link" data-target="positions-{{ p.config.config_id }}" style="font-size:.75rem">
     positions &#9662;
   </a>
-  <div id="positions-{{ loop.index }}" class="_toggle-section" style="display:none">
+  <div id="positions-{{ p.config.config_id }}" class="_toggle-section" style="display:none">
 
     {% if p.holding %}
-    <h6 class="text-muted small mb-1 mt-2">Open</h6>
-    {{ holdings_table(p.holding) }}
+    <div class="d-flex align-items-center mt-2 mb-1">
+      <h6 class="text-muted small mb-0 me-2">Open</h6>
+      {% if p.config.alpaca_account_id %}
+      <button class="btn btn-sm btn-outline-primary py-0 px-2 me-1 _sync-btn"
+              data-config-id="{{ p.config.config_id }}"
+              style="font-size:.7rem">Sync</button>
+      <button class="btn btn-sm btn-outline-danger py-0 px-2 _liquidate-btn"
+              data-config-id="{{ p.config.config_id }}"
+              style="font-size:.7rem" disabled>Liquidate 0 selected</button>
+      {% endif %}
+    </div>
+    {{ holdings_table(p.holding, p.config.config_id if p.config.alpaca_account_id else '') }}
     {% endif %}
 
     {% if p.cooling %}
-    <a href="#" class="text-decoration-none small text-muted _toggle-link" data-target="cooling-{{ loop.index }}" style="font-size:.75rem">
+    <a href="#" class="text-decoration-none small text-muted _toggle-link" data-target="cooling-{{ p.config.config_id }}" style="font-size:.75rem">
       Recently Exited ({{ p.stats.cooling_count }}) &#9662;
     </a>
-    <div id="cooling-{{ loop.index }}" class="_toggle-section" style="display:none">
+    <div id="cooling-{{ p.config.config_id }}" class="_toggle-section" style="display:none">
       {{ cooling_table(p.cooling) }}
     </div>
     {% endif %}
 
     {% if p.closed %}
-    <a href="#" class="text-decoration-none small text-muted _toggle-link" data-target="closed-{{ loop.index }}" style="font-size:.75rem">
+    <a href="#" class="text-decoration-none small text-muted _toggle-link" data-target="closed-{{ p.config.config_id }}" style="font-size:.75rem">
       Closed ({{ p.stats.closed_count }}) &#9662;
     </a>
-    <div id="closed-{{ loop.index }}" class="_toggle-section" style="display:none">
+    <div id="closed-{{ p.config.config_id }}" class="_toggle-section" style="display:none">
       {{ closed_table(p.closed, p.stats.closed_count) }}
     </div>
     {% endif %}
@@ -430,6 +438,12 @@
         var h = chartDiv.offsetHeight;
         if (w < 10 || h < 10) return;
 
+        function _fmtLocalTime(ts) {
+          var d = new Date(ts * 1000);
+          return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
+            + ' ' + d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+        }
+
         var chart = LightweightCharts.createChart(chartDiv, {
           autoSize: true,
           layout: {
@@ -449,9 +463,13 @@
             borderVisible: false,
             timeVisible: true,
             secondsVisible: false,
+            tickMarkFormatter: function(t) { return _fmtLocalTime(t); },
+          },
+          localization: {
+            timeFormatter: function(t) { return _fmtLocalTime(t); },
           },
           crosshair: {
-            horzLine: { visible: false, labelVisible: false },
+            horzLine: { visible: true, labelVisible: true },
             vertLine: { labelVisible: true },
           },
           handleScroll: false,
@@ -487,6 +505,118 @@
         try { c.timeScale().fitContent(); } catch(e) {}
       });
     }, 100);
+  });
+
+  // --- Checkbox selection + Sync + Liquidate ---
+
+  // Select-all checkbox
+  document.querySelectorAll('._select-all').forEach(function(el) {
+    el.addEventListener('change', function() {
+      var table = el.closest('table');
+      table.querySelectorAll('._select-pos').forEach(function(cb) {
+        cb.checked = el.checked;
+      });
+      _updateLiquidateBtn(table);
+    });
+  });
+
+  // Individual checkbox
+  document.querySelectorAll('._select-pos').forEach(function(el) {
+    el.addEventListener('change', function() {
+      var table = el.closest('table');
+      _updateLiquidateBtn(table);
+      // Update select-all state
+      var all = table.querySelectorAll('._select-pos');
+      var checked = table.querySelectorAll('._select-pos:checked');
+      var selectAll = table.querySelector('._select-all');
+      if (selectAll) selectAll.checked = (all.length === checked.length);
+    });
+  });
+
+  function _updateLiquidateBtn(table) {
+    var configId = table.dataset.configId;
+    if (!configId) return;
+    var checked = table.querySelectorAll('._select-pos:checked');
+    var btn = document.querySelector('._liquidate-btn[data-config-id="' + configId + '"]');
+    if (btn) {
+      btn.disabled = (checked.length === 0);
+      btn.textContent = 'Liquidate ' + checked.length + ' selected';
+    }
+  }
+
+  // Sync button
+  document.querySelectorAll('._sync-btn').forEach(function(btn) {
+    btn.addEventListener('click', function() {
+      var configId = btn.dataset.configId;
+      btn.disabled = true;
+      btn.textContent = 'Syncing...';
+      fetch('/api/portfolio/' + configId + '/sync', { method: 'POST' })
+        .then(function(r) { return r.json(); })
+        .then(function(data) {
+          btn.textContent = 'Synced!';
+          setTimeout(function() {
+            btn.textContent = 'Sync';
+            btn.disabled = false;
+            // Refresh positions table
+            var container = document.getElementById('positions-content');
+            if (container && window.htmx) {
+              htmx.ajax('GET', '/api/positions', { target: container });
+            } else {
+              location.reload();
+            }
+          }, 800);
+        })
+        .catch(function(err) {
+          console.error('Sync failed:', err);
+          btn.textContent = 'Sync failed';
+          btn.disabled = false;
+        });
+    });
+  });
+
+  // Liquidate button
+  document.querySelectorAll('._liquidate-btn').forEach(function(btn) {
+    btn.addEventListener('click', function() {
+      var configId = btn.dataset.configId;
+      var table = document.querySelector('._holdings-table[data-config-id="' + configId + '"]');
+      if (!table) return;
+      var checked = table.querySelectorAll('._select-pos:checked');
+      var symbols = [];
+      checked.forEach(function(cb) { symbols.push(cb.value); });
+      if (symbols.length === 0) return;
+
+      if (!confirm('Sell ' + symbols.length + ' position(s) on Alpaca?\n\n' + symbols.join(', ') + '\n\nThis will submit sell orders immediately.')) return;
+
+      btn.disabled = true;
+      btn.textContent = 'Selling...';
+      fetch('/api/portfolio/' + configId + '/liquidate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ symbols: symbols }),
+      })
+        .then(function(r) { return r.json(); })
+        .then(function(data) {
+          var errors = (data.results || []).filter(function(r) { return r.status === 'error'; });
+          if (errors.length > 0) {
+            alert('Some sells failed:\n' + errors.map(function(e) { return e.symbol + ': ' + e.error; }).join('\n'));
+          }
+          btn.textContent = 'Done!';
+          setTimeout(function() {
+            var container = document.getElementById('positions-content');
+            if (container && window.htmx) {
+              htmx.ajax('GET', '/api/positions', { target: container });
+            } else {
+              location.reload();
+            }
+          }, 800);
+        })
+        .catch(function(err) {
+          console.error('Liquidate failed:', err);
+          alert('Liquidate request failed: ' + err);
+          btn.disabled = false;
+          btn.textContent = 'Liquidate';
+        });
+    });
   });
 })();
 </script>

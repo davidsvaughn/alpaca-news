@@ -66,5 +66,92 @@
     container.addEventListener('htmx:afterSwap', restoreState);
   }
 })();
+
+// Portfolio drag-to-reorder — persists order in localStorage, survives HTMX swaps.
+(function() {
+  var ORDER_KEY = 'portfolio_order';
+  var container = document.getElementById('positions-content');
+  if (!container) return;
+
+  function getOrder() { return JSON.parse(localStorage.getItem(ORDER_KEY) || '[]'); }
+  function saveOrder(arr) { localStorage.setItem(ORDER_KEY, JSON.stringify(arr)); }
+
+  // Apply saved order by rearranging DOM cards
+  function applyOrder() {
+    var order = getOrder();
+    if (!order.length) return;
+    var cards = Array.from(container.querySelectorAll('._portfolio-card'));
+    if (cards.length < 2) return;
+    // Build a map of config_id → card element
+    var byId = {};
+    cards.forEach(function(c) { byId[c.dataset.portfolioId] = c; });
+    // Insert in saved order, keeping cards before any non-card content (e.g. Legacy Watches)
+    var parent = cards[0].parentNode;
+    var firstNonCard = parent.querySelector(':scope > :not(._portfolio-card)');
+    order.forEach(function(id) {
+      if (byId[id]) parent.insertBefore(byId[id], firstNonCard);
+    });
+  }
+
+  // Read current DOM order and save it
+  function persistCurrentOrder() {
+    var cards = container.querySelectorAll('._portfolio-card');
+    var ids = [];
+    cards.forEach(function(c) { ids.push(c.dataset.portfolioId); });
+    saveOrder(ids);
+  }
+
+  // Drag-and-drop via event delegation (works after HTMX swaps)
+  var _dragCard = null;
+
+  container.addEventListener('mousedown', function(e) {
+    var handle = e.target.closest('._drag-handle');
+    if (!handle) return;
+    var card = handle.closest('._portfolio-card');
+    if (!card) return;
+    card.draggable = true;
+    _dragCard = card;
+  });
+
+  container.addEventListener('dragstart', function(e) {
+    if (!_dragCard) { e.preventDefault(); return; }
+    e.dataTransfer.effectAllowed = 'move';
+    _dragCard.style.opacity = '0.5';
+  });
+
+  container.addEventListener('dragover', function(e) {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+    var target = e.target.closest('._portfolio-card');
+    if (!target || target === _dragCard) return;
+    var cards = Array.from(container.querySelectorAll('._portfolio-card'));
+    var dragIdx = cards.indexOf(_dragCard);
+    var targetIdx = cards.indexOf(target);
+    if (dragIdx < 0 || targetIdx < 0) return;
+    if (dragIdx < targetIdx) {
+      target.parentNode.insertBefore(_dragCard, target.nextSibling);
+    } else {
+      target.parentNode.insertBefore(_dragCard, target);
+    }
+  });
+
+  container.addEventListener('dragend', function(e) {
+    if (_dragCard) {
+      _dragCard.style.opacity = '';
+      _dragCard.draggable = false;
+      _dragCard = null;
+      persistCurrentOrder();
+    }
+  });
+
+  container.addEventListener('drop', function(e) {
+    e.preventDefault();
+  });
+
+  // Re-apply saved order after each HTMX swap
+  container.addEventListener('htmx:afterSwap', function() {
+    applyOrder();
+  });
+})();
 </script>
 {% endblock %}

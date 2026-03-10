@@ -1697,6 +1697,160 @@ def create_app(
             "snapshots": snapshots,
         }
 
+    @app.post("/api/portfolio/{config_id}/sync")
+    async def api_portfolio_sync(config_id: str):
+        """Manually trigger Alpaca reconciliation for a portfolio."""
+        from trader.db.database import get_live_config
+        from trader.market.alpaca_reconcile import reconcile, ensure_stops
+        from trader.models.live_config import LiveConfig
+
+        cfg_dict = get_live_config(db, config_id)
+        if not cfg_dict:
+            return JSONResponse({"error": "config not found"}, status_code=404)
+
+        alpaca_id = cfg_dict.get("alpaca_account_id")
+        if not alpaca_id:
+            return JSONResponse({"error": "no Alpaca account linked"}, status_code=400)
+
+        try:
+            from trader.market.alpaca_broker import AlpacaAccountRegistry, AlpacaBroker
+            registry = AlpacaAccountRegistry()
+            creds = registry.get(alpaca_id)
+            if not creds:
+                return JSONResponse({"error": f"Alpaca account {alpaca_id} not found"}, status_code=404)
+            broker = AlpacaBroker(
+                api_key=creds.api_key, secret_key=creds.secret_key,
+                paper=creds.paper, account_id=alpaca_id, name=creds.name,
+            )
+        except Exception as e:
+            return JSONResponse({"error": f"broker init failed: {e}"}, status_code=500)
+
+        cfg = LiveConfig.from_dict(cfg_dict)
+        result = reconcile(
+            broker=broker, db=db,
+            live_config_id=config_id,
+            live_config=cfg,
+        )
+        stops = ensure_stops(
+            broker=broker, db=db,
+            live_config_id=config_id,
+            guard_stop_pct=cfg.guard_stop_pct,
+        )
+        return {
+            "status": "synced",
+            "reconcile": {k: v for k, v in result.items()},
+            "stops": {k: v for k, v in stops.items()},
+        }
+
+    @app.post("/api/portfolio/{config_id}/liquidate")
+    async def api_portfolio_liquidate(config_id: str, request: Request):
+        """Sell selected positions on Alpaca and update watches.
+
+        Body: {"symbols": ["AAPL", "MSFT", ...]}
+        """
+        from trader.db.database import get_active_watches, get_live_config
+        from trader.models.live_config import LiveConfig
+
+        body = await request.json()
+        symbols = body.get("symbols", [])
+        if not symbols:
+            return JSONResponse({"error": "no symbols provided"}, status_code=400)
+
+        cfg_dict = get_live_config(db, config_id)
+        if not cfg_dict:
+            return JSONResponse({"error": "config not found"}, status_code=404)
+
+        alpaca_id = cfg_dict.get("alpaca_account_id")
+        if not alpaca_id:
+            return JSONResponse({"error": "no Alpaca account linked"}, status_code=400)
+
+        try:
+            from trader.market.alpaca_broker import AlpacaAccountRegistry, AlpacaBroker
+            registry = AlpacaAccountRegistry()
+            creds = registry.get(alpaca_id)
+            if not creds:
+                return JSONResponse({"error": f"Alpaca account {alpaca_id} not found"}, status_code=404)
+            broker = AlpacaBroker(
+                api_key=creds.api_key, secret_key=creds.secret_key,
+                paper=creds.paper, account_id=alpaca_id, name=creds.name,
+            )
+        except Exception as e:
+            return JSONResponse({"error": f"broker init failed: {e}"}, status_code=500)
+
+        # Build watch lookup for this config
+        all_watches = get_active_watches(db)
+        watch_by_symbol: dict[str, dict] = {}
+        for w in all_watches:
+            if (w.get("status") == "holding"
+                    and w.get("live_config_id") == config_id
+                    and w.get("alpaca_buy_order_id")):
+                watch_by_symbol[w["symbol"]] = w
+
+        results = []
+        for symbol in symbols:
+            symbol = symbol.upper()
+            entry: dict[str, Any] = {"symbol": symbol}
+            try:
+                # Submit sell on Alpaca — don't touch the watch yet.
+                # The background reconciler will exit/update it once the
+                # sell fills (Alpaca is source of truth).
+                sell_result = broker.close_position(symbol)
+                if sell_result is None:
+                    entry["status"] = "no_position"
+                else:
+                    entry["status"] = "sell_submitted"
+                    entry["order_id"] = sell_result.order_id
+            except Exception as e:
+                entry["status"] = "error"
+                entry["error"] = str(e)
+
+            results.append(entry)
+
+        # Background: poll sell orders until all terminal, then reconcile
+        pending_order_ids = [
+            r["order_id"] for r in results
+            if r.get("status") == "sell_submitted" and r.get("order_id")
+        ]
+        if pending_order_ids:
+            import threading
+
+            def _poll_and_reconcile() -> None:
+                import time as _time
+                _TERMINAL = {"filled", "canceled", "expired", "rejected", "suspended"}
+                _POLL_S = 2.0
+                _TIMEOUT_S = 300.0  # 5 min max
+                deadline = _time.monotonic() + _TIMEOUT_S
+
+                while _time.monotonic() < deadline:
+                    all_done = True
+                    for oid in pending_order_ids:
+                        r = broker.get_order(oid)
+                        if r and r.status.lower() not in _TERMINAL:
+                            all_done = False
+                            break
+                    if all_done:
+                        break
+                    _time.sleep(_POLL_S)
+
+                # All orders terminal (or timed out) — reconcile
+                try:
+                    from trader.market.alpaca_reconcile import reconcile, ensure_stops
+                    cfg = LiveConfig.from_dict(cfg_dict)
+                    reconcile(broker=broker, db=db,
+                              live_config_id=config_id, live_config=cfg)
+                    ensure_stops(broker=broker, db=db,
+                                 live_config_id=config_id,
+                                 guard_stop_pct=cfg.guard_stop_pct)
+                    log.info("LIQUIDATE: post-sell reconcile complete for %s", config_id)
+                except Exception:
+                    log.exception("LIQUIDATE: post-sell reconcile failed for %s", config_id)
+
+            t = threading.Thread(target=_poll_and_reconcile, daemon=True,
+                                 name=f"liquidate-reconcile-{config_id[:8]}")
+            t.start()
+
+        return {"results": results}
+
     @app.post("/api/portfolio/{config_id}/equity-backfill")
     async def api_equity_backfill(config_id: str):
         """Backfill equity snapshots for a single portfolio from watch history."""

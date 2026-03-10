@@ -277,14 +277,17 @@ All events are published to the event bus as `alpaca_trade_update` for UI refres
 
 ## Reconciliation
 
-Runs on startup for each linked account. Alpaca is always the source of truth. See `trader/market/alpaca_reconcile.py`.
+Runs on startup for each linked account. **Alpaca is always the source of truth** — the portfolio adjusts to Alpaca, never the reverse. See `trader/market/alpaca_reconcile.py`.
 
 | Scenario | Action |
 |----------|--------|
-| Alpaca has position + we have matching watch | OK (update entry price if mismatched) |
+| Alpaca has position + we have matching watch | Sync entry price AND qty from Alpaca |
 | We have watch + Alpaca has no position | **Verify** (see safety rules below) |
 | Alpaca has position + we have no watch | Adopt orphan (create watch from config) |
 | Entry price differs by > $0.01 | Update watch entry to match Alpaca's `avg_entry_price` |
+| Qty differs by > 0.001 | Update watch qty to match Alpaca's actual qty |
+
+**Qty sync** (added 2026-03-10): When shares are sold externally (e.g., via Alpaca dashboard, manual liquidation, or partial fills), the reconciler updates the watch's qty to match Alpaca's actual position size. This prevents the dashboard from showing stale quantities.
 
 ### Safety rules for "watch exists, no Alpaca position" (Rule 3)
 
@@ -304,15 +307,18 @@ Before every buy, `LivePortfolioManager` calls `broker.get_position(symbol)`. If
 
 Reconciliation runs:
 - **On startup** (full reconcile + ensure stops)
-- **Every 15 minutes** during market hours (configurable via `RECONCILE_INTERVAL` env var in seconds, default `900`)
+- **Every 15 minutes** during trading hours (configurable via `RECONCILE_INTERVAL` env var in seconds, default `900`)
+- **On demand** via the Sync button or after liquidation (see [Manual Portfolio Management](#manual-portfolio-management))
 
-Periodic reconciliation catches drift that happens after startup: orphan positions from timed-out orders, stops that fired mid-session, or any other desynchronization. If issues are found, stops are also re-checked.
+Periodic reconciliation catches drift that happens after startup: orphan positions from timed-out orders, stops that fired mid-session, external sells, or any other desynchronization. If issues are found, stops are also re-checked.
 
 ### When would reconciliation act?
 - Stop order filled while process was down → position sold, sell fill found → force-exit with actual price
 - Manual close on Alpaca dashboard → position gone, sell fill found → force-exit
 - Process crash during exit → position may or may not be gone, verified either way
 - Orphan from timed-out buy → adopted on next periodic reconcile
+- External partial sell → qty updated to match Alpaca's actual position
+- Liquidation via dashboard → watches exited with real fill prices
 
 ---
 
@@ -329,6 +335,80 @@ Periodic reconciliation catches drift that happens after startup: orphan positio
 
 - **On create**: `POST /api/live/config` checks all active configs. If the requested `alpaca_account_id` is already linked, returns 409.
 - **UI**: The "Go Live" dialog fetches `/api/alpaca/status`, which returns each account's `linked` flag. Already-linked accounts are excluded from the selection list.
+
+---
+
+## Manual Portfolio Management
+
+The positions page provides manual controls for Alpaca-linked portfolios: **Sync** and **Liquidate**. These appear in the Open positions section when the portfolio has an Alpaca account linked.
+
+### Sync Button
+
+**`POST /api/portfolio/{config_id}/sync`**
+
+Triggers immediate reconciliation + ensure-stops for a single portfolio. Same logic as the periodic reconciler, but on-demand.
+
+Use cases:
+- After selling shares externally (Alpaca dashboard, CLI, etc.)
+- After a manual buy on Alpaca to adopt the position
+- To verify portfolio state matches Alpaca at any time
+- After a liquidation to confirm fill results
+
+### Liquidate Selected
+
+**`POST /api/portfolio/{config_id}/liquidate`** with `{"symbols": ["AAPL", "MSFT"]}`
+
+Sells selected positions on Alpaca. Each holding row has a checkbox; the "Liquidate N selected" button submits sell orders for all checked symbols.
+
+#### How it works
+
+```
+1. User selects positions via checkboxes
+2. Clicks "Liquidate N selected" → confirmation dialog
+3. For each symbol:
+   - broker.close_position(symbol)
+   - Regular hours: market order (fills instantly)
+   - Extended hours: limit sell, whole shares only, cancels existing stops first
+4. Watches are NOT touched — left as "holding"
+5. Background thread polls sell order IDs every 2s (up to 5 min)
+6. Once all orders are terminal (filled/canceled/expired/rejected):
+   - reconcile() runs → exits watches with real fill prices
+   - ensure_stops() runs → re-places stops on any fractional remainders
+7. UI refreshes via HTMX
+```
+
+#### Design: watches stay untouched until reconcile
+
+The liquidate endpoint does **not** force-exit watches immediately. Instead, it only submits sell orders and lets the post-sell reconciliation handle the watch lifecycle. This ensures:
+
+- **No premature exits**: Watches only exit when Alpaca confirms the position is gone
+- **No re-adoption dance**: No risk of reconcile seeing a "sold" watch and re-adopting the still-pending position
+- **Real fill prices**: Exit price comes from Alpaca's actual fill, not an estimate
+- **Self-healing**: If a sell order fails or is cancelled, the watch stays "holding" and the position can be retried
+
+#### Extended hours behavior
+
+During extended hours (pre/post-market):
+1. `close_position()` routes to `_close_position_extended()`
+2. Existing stops are **cancelled** (they hold shares, blocking the sell)
+3. A limit sell is submitted for **whole shares only** (fractional qty stays)
+4. If the order fills, reconcile exits the watch and re-places a stop on any fractional remainder
+5. If the order doesn't fill (price moved, low liquidity), it stays pending on Alpaca
+6. Retrying liquidation on the same symbol is safe: `_close_position_extended()` cancels the old order before submitting a new one at the updated price
+
+#### Unfilled order lifecycle
+
+If a sell order doesn't fill during extended hours:
+- The order remains active on Alpaca until end of session (8 PM ET) when DAY orders expire
+- The background polling thread gives up after 5 minutes but does **not** cancel the order
+- The periodic reconciler (every 15 min) eventually picks it up
+- If the order expires: reconcile sees Alpaca still has the position → watch stays "holding" → user can retry
+- If the order fills later: next reconcile exits the watch with the real fill price
+
+#### Files
+
+- `trader/web/app.py` — `/api/portfolio/{config_id}/sync`, `/api/portfolio/{config_id}/liquidate`
+- `trader/web/templates/partials/_positions_table.html` — Checkboxes, Sync/Liquidate buttons, JS handlers
 
 ---
 
