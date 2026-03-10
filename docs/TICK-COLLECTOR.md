@@ -422,15 +422,20 @@ SCHWAB_APP_KEY=...
 SCHWAB_APP_SECRET=...
 ```
 
-### Start
+### Start / Stop / Restart
 
 ```bash
-# Using default symbols from tick_collector/symbols.txt
+# Start (only one instance allowed — duplicate launches exit immediately)
 uv run python -m tick_collector
 
-# Or override symbols via env var
-TICK_SYMBOLS=AAPL,NVDA,TSLA uv run python -m tick_collector
+# Stop
+pkill -f "tick_collector"
+
+# Restart
+pkill -f "tick_collector"; sleep 1; uv run python -m tick_collector
 ```
+
+A file lock (`logs/.tick_collector.lock`) prevents duplicate instances. If a second instance is launched while one is already running, it prints an error and exits immediately.
 
 ### Configuration (env vars)
 
@@ -441,6 +446,8 @@ TICK_SYMBOLS=AAPL,NVDA,TSLA uv run python -m tick_collector
 | `SCHWAB_APP_SECRET` | (required) | Schwab API secret |
 | `TICK_SYMBOLS` | (from `symbols.txt`) | Comma-separated symbol override |
 | `TICK_FLUSH_INTERVAL` | `2.0` | Seconds between buffer flushes |
+| `TICK_PORTFOLIO_SYNC_INTERVAL` | `60` | Seconds between portfolio sync polls |
+| `TICK_PORTFOLIO_COOLOFF` | `60` | Minutes to keep streaming after position exits |
 
 ### Test (no Schwab connection needed)
 

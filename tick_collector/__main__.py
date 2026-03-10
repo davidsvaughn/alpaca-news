@@ -1,8 +1,11 @@
 """Entry point: python -m tick_collector"""
 
 import asyncio
+import fcntl
 import logging
+import os
 import sys
+from pathlib import Path
 
 from dotenv import load_dotenv
 
@@ -11,6 +14,24 @@ from .config import CollectorConfig
 from .portfolio import PortfolioSync
 
 load_dotenv()
+
+# Singleton guard: only one tick collector instance allowed
+_LOCK_FILE = Path(__file__).parent.parent / "logs" / ".tick_collector.lock"
+
+
+def _acquire_lock() -> None:
+    """Ensure only one tick collector instance runs at a time."""
+    _LOCK_FILE.parent.mkdir(parents=True, exist_ok=True)
+    # Keep the file object alive for the process lifetime
+    global _lock_fd
+    _lock_fd = open(_LOCK_FILE, "w")
+    try:
+        fcntl.flock(_lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        _lock_fd.write(str(os.getpid()))
+        _lock_fd.flush()
+    except OSError:
+        print("ERROR: Another tick collector instance is already running. Exiting.")
+        sys.exit(1)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -23,6 +44,7 @@ logging.getLogger("asyncpg").setLevel(logging.WARNING)
 
 
 def main() -> None:
+    _acquire_lock()
     config = CollectorConfig.from_env()
 
     # Preview portfolio symbols

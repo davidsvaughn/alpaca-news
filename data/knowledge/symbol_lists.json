@@ -1118,7 +1118,9 @@
     "VSEE",
     "RAIL",
     "WWD",
-    "LEGN"
+    "LEGN",
+    "QCOM",
+    "FLNT"
   ],
   "crypto": [],
   "rejected": [
@@ -1251,5 +1253,5 @@
     "LUPIN",
     "MANKIND"
   ],
-  "last_updated": "2026-03-10T14:08:33.224242+00:00"
+  "last_updated": "2026-03-10T14:18:12.918722+00:00"
 }

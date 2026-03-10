@@ -80,6 +80,34 @@ uv run python scripts/schwab_reauth.py
 
 Or use the **Reauthorize Schwab** button on the Config page in the dashboard. The token status (OK / expiring soon / expired) is shown there as well.
 
+### Tick Collector (Schwab streaming → TimescaleDB)
+
+Separate process that streams real-time trade data for portfolio symbols. See [docs/TICK-COLLECTOR.md](docs/TICK-COLLECTOR.md) for full details.
+
+```bash
+# Start (singleton — duplicate launches exit immediately)
+uv run python -m tick_collector
+
+# Stop
+pkill -f "tick_collector"
+
+# Restart
+pkill -f "tick_collector"; sleep 1; uv run python -m tick_collector
+```
+
+Requires TimescaleDB running (`docker compose up -d`) and Schwab credentials in `.env`.
+
+### Error logging
+
+The trader app writes warnings and errors to a rotating log file. **Check this first when diagnosing issues:**
+
+```bash
+cat logs/trader.log        # view recent errors
+tail -f logs/trader.log    # tail live
+```
+
+Configured via env vars: `LOG_FILE` (default: `logs/trader.log`), `LOG_LEVEL` (default: `WARNING`), `LOG_KEEP_DAYS` (default: `14`). Rotates daily at midnight. See `trader/logging_config.py`.
+
 ### Mock mode (no API keys needed)
 
 ```bash
@@ -104,9 +132,10 @@ Set in `.env` (at least one LLM key required for real mode):
 | Doc | Purpose |
 |-----|---------|
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | System architecture, components, data models, project structure |
-| [docs/ROADMAP.md](docs/ROADMAP.md) | Implementation status and plan |
-| [docs/DECISIONS.md](docs/DECISIONS.md) | Design rationale, open questions, deferred ideas |
-| [trader/README.md](trader/README.md) | Detailed trader module docs (explorer phases, backfill, knobs) |
+| [docs/LIVE-TRADING.md](docs/LIVE-TRADING.md) | Live trading plan and implementation |
+| [docs/ALPACA-TRADING.md](docs/ALPACA-TRADING.md) | Alpaca order execution, multi-account, fills |
+| [docs/TICK-COLLECTOR.md](docs/TICK-COLLECTOR.md) | Tick collector service, TimescaleDB, roadmap |
+| [docs/BACKTEST-STRATEGIES.md](docs/BACKTEST-STRATEGIES.md) | Backtest architecture, strategies, metrics |
 
 ## Dependency groups
 
