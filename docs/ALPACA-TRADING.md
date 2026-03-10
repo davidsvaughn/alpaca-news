@@ -394,9 +394,52 @@ GTC stop orders remain active on Alpaca's servers across restarts. Reconciliatio
 
 If two portfolios (on different accounts) both buy the same symbol, they have separate Alpaca positions on separate accounts. No conflict.
 
-### 6. Extended hours
+### 6. Extended hours trading
 
-Alpaca stop orders (GTC) execute during extended hours. Our monitor only runs during regular hours + 30 min. Stop fills during extended hours are caught by the trade stream.
+**Env var**: `ALPACA_EXTENDED_HOURS=true` (default: false)
+
+When enabled, the system trades during pre-market (4:00 AM ET) through after-hours (8:00 PM ET) on weekdays — not just 9:30-16:00.
+
+#### How it works
+
+| Aspect | Regular hours (9:30-16:00) | Extended hours (4:00-9:30, 16:00-20:00) |
+|--------|---------------------------|----------------------------------------|
+| **Buy orders** | Market order (notional or qty) | Limit order, whole shares only, `extended_hours=True` |
+| **Sell orders** | Market order via `close_position()` | Limit order, whole shares only, `extended_hours=True` |
+| **Time in force** | DAY | DAY |
+| **Fractional shares** | Supported | NOT supported (rounded down to whole shares) |
+| **Stop orders** | GTC or DAY | Stops submitted normally but only fire during market hours |
+
+#### Key behaviors and lessons learned
+
+1. **Limit orders only** — Alpaca rejects market orders outside regular hours. The broker auto-detects extended hours via `in_extended_only()` and routes to limit order methods.
+
+2. **Whole shares only** — Fractional qty is not supported during extended hours. Buys convert notional to whole shares via latest price. Sells round down, leaving any fractional remainder to be sold during regular hours.
+
+3. **Aggressive limit pricing** — Limit orders fill at the best available price, so the limit is just a ceiling/floor:
+   - Buy: limit = latest price × 1.02 (2% above, accommodates stale data API prices)
+   - Sell: limit = position's current_price × 0.995 (0.5% below)
+   - Position's `current_price` is used for sells (more accurate than Alpaca data API's `get_stock_latest_trade()` which can be very stale during extended hours)
+
+4. **Stop orders hold shares** — Before selling during extended hours, all open orders for the symbol (stops, etc.) are auto-cancelled. Open orders reserve ("hold") shares, causing Alpaca to reject sell orders with "insufficient qty available."
+
+5. **Order status** — Extended-hours orders go to `pending_new` first (vs `accepted` during regular hours) but fill quickly if liquidity exists.
+
+6. **Lower liquidity** — Extended hours have wider spreads and thinner order books. Fill may take longer or not happen at all before DAY expiration.
+
+#### System gates affected
+
+When `ALPACA_EXTENDED_HOURS=true`:
+- `ONLINE_AUTO_MARKET_HOURS` auto-enables from 4:00 AM to 8:00 PM ET (not just 9:30-16:00)
+- Live exit monitor runs during extended hours
+- Reconciliation and ensure-stops run during extended hours
+- `_near_close()` uses 8:00 PM as session close (30-min grace period until 8:30 PM)
+- Orchestrator's `_is_market_open()` returns true during extended hours
+
+#### Files
+
+- `trader/market/market_hours.py` — `is_extended_hours()`, `is_trading_session_open()`, `in_extended_only()`, `ALPACA_EXTENDED_HOURS`
+- `trader/market/alpaca_broker.py` — `_buy_extended()`, `_close_position_extended()`, `_cancel_open_orders()`
 
 ### 7. Account equity drift
 

@@ -63,12 +63,12 @@ class OnlineMode:
         log.info("Online auto-market-hours enabled")
 
     def _auto_loop(self) -> None:
-        from trader.market.market_hours import is_market_open
+        from trader.market.market_hours import is_trading_session_open
 
         while True:
             try:
-                market_open = is_market_open()
-                auto_value = market_open  # Online when market open
+                market_open = is_trading_session_open()
+                auto_value = market_open  # Online when trading session open
                 with self._lock:
                     if self._manual_override:
                         # Clear override once auto state matches what user set

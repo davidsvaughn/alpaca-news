@@ -34,7 +34,7 @@ from trader.db.database import (
     insert_watch,
     update_watch,
 )
-from trader.market.market_hours import ET, add_market_hours, is_market_open
+from trader.market.market_hours import ET, add_market_hours, is_market_open, is_trading_session_open
 from trader.models.live_config import LiveConfig
 from trader.models.watch import WatchBuilder
 
@@ -839,7 +839,7 @@ def _ensure_stops_if_needed(monitor: LiveExitMonitor, last_date: str | None) -> 
     if today == last_date:
         return last_date  # already done today
 
-    if not is_market_open():
+    if not is_trading_session_open():
         return last_date
 
     try:
@@ -877,7 +877,7 @@ def _periodic_reconcile(monitor: LiveExitMonitor, last_time: float) -> float:
     if now - last_time < _RECONCILE_INTERVAL_S:
         return last_time
 
-    if not monitor.broker_pool or not is_market_open():
+    if not monitor.broker_pool or not is_trading_session_open():
         return last_time
 
     try:
@@ -1054,9 +1054,9 @@ def live_monitoring_loop(
     last_equity_snapshot_time = 0.0  # force immediate snapshot on first cycle
     while True:
         try:
-            # Only run during market hours (or within 30 min after close
-            # to catch final exit signals)
-            if is_market_open() or _near_close():
+            # Only run during trading session (regular or extended hours)
+            # or within 30 min after close to catch final exit signals
+            if is_trading_session_open() or _near_close():
                 monitor.run_cycle()
 
                 # Ensure all positions have active stops (once per day at open)
@@ -1089,10 +1089,15 @@ def live_monitoring_loop(
 
 
 def _near_close() -> bool:
-    """True if within 30 minutes after market close (catch stragglers)."""
+    """True if within 30 minutes after session close (catch stragglers).
+
+    Uses extended close (8:00 PM) when ALPACA_EXTENDED_HOURS is enabled,
+    otherwise regular close (4:00 PM).
+    """
+    from trader.market.market_hours import ALPACA_EXTENDED_HOURS, EXTENDED_CLOSE_HOUR
     now = datetime.now(tz=ET)
     if now.weekday() > 4:
         return False
     minutes = now.hour * 60 + now.minute
-    close_min = 16 * 60
+    close_min = (EXTENDED_CLOSE_HOUR * 60) if ALPACA_EXTENDED_HOURS else (16 * 60)
     return close_min <= minutes < close_min + 30

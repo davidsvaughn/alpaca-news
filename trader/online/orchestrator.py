@@ -148,8 +148,13 @@ _trading_day_cache: dict[str, bool] = {}
 
 
 def _is_market_open() -> bool:
-    """Check if US equity market is in regular hours (handles holidays via Schwab)."""
+    """Check if trading session is active (handles holidays via Schwab).
+
+    Respects ALPACA_EXTENDED_HOURS: if enabled, returns True during
+    4:00 AM - 8:00 PM ET (not just 9:30-16:00).
+    """
     from zoneinfo import ZoneInfo
+    from trader.market.market_hours import ALPACA_EXTENDED_HOURS
 
     now_et = datetime.now(tz=ZoneInfo("America/New_York"))
     today_str = now_et.strftime("%Y-%m-%d")
@@ -169,9 +174,10 @@ def _is_market_open() -> bool:
     if not _trading_day_cache[today_str]:
         return False
 
-    # Regular hours: 9:30 AM – 4:00 PM ET
     t = now_et.hour * 60 + now_et.minute
-    return 570 <= t < 960  # 9*60+30=570, 16*60=960
+    if ALPACA_EXTENDED_HOURS:
+        return 240 <= t < 1200  # 4:00 AM - 8:00 PM ET
+    return 570 <= t < 960  # 9:30 AM - 4:00 PM ET
 
 
 def _make_quality_callback(

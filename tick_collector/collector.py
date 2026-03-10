@@ -17,10 +17,9 @@ from .portfolio import PortfolioSync
 
 log = logging.getLogger(__name__)
 
-# L1 fields: only what we use
-# 1=BidPrice, 2=AskPrice, 3=LastPrice, 8=TotalVolume,
-# 9=LastSize, 11=TradeTime, 35=TradeTimeLong, 41=LastMICID
-L1_FIELDS = "1,2,3,8,9,35,41"
+# L1 fields (original working set — do not remove fields without testing)
+# Used by _parse_l1: 1=Bid, 2=Ask, 3=Last, 8=TotalVol, 9=LastSize, 35=TradeTime(ms), 41=MIC
+L1_FIELDS = "0,1,2,3,4,5,8,9,10,11,12,16,17,18,33,35,41,42"
 
 
 class TickCollector:
@@ -194,8 +193,8 @@ class TickCollector:
 
     async def _health_check_loop(self) -> None:
         """Monitor stream health and force-restart if dead."""
-        check_interval = 30  # seconds between checks
-        dead_threshold = 90  # seconds with no messages before restart
+        check_interval = 10  # seconds between checks
+        dead_threshold = 30  # seconds with no messages before restart
         max_restarts = 10  # give up after this many consecutive restarts
 
         consecutive_restarts = 0

@@ -2,15 +2,15 @@
 
 On startup (and optionally periodically), ensure the internal watch state
 matches the actual Alpaca account positions. Alpaca is always the source
-of truth.
+of truth — the portfolio adjusts to Alpaca, never the reverse.
 
 Rules:
-  1. Alpaca has a position, we have a matching "holding" watch → OK
+  1. Alpaca has a position, we have a matching "holding" watch → sync
+     entry price AND qty from Alpaca (both must match)
   2. Alpaca has a position, we have NO matching watch → adopt (create watch
      from config) or force-close on Alpaca (if close_orphans=True)
   3. We have a "holding" watch, Alpaca has NO position → VERIFY before
      force-exiting (double-check with per-symbol lookup + check sell history)
-  4. Entry price mismatch → update watch to match Alpaca's avg_entry_price
 
 SAFETY: Rule 3 never force-exits on a single bulk lookup miss. It requires:
   - Per-symbol get_position() also returns None (confirms not a transient miss)
@@ -62,6 +62,7 @@ def reconcile(
         "alpaca_orphan_closed": [],
         "alpaca_orphan_adopted": [],
         "entry_price_updated": [],
+        "qty_updated": [],
     }
 
     # Get Alpaca positions
@@ -90,6 +91,8 @@ def reconcile(
         pos = alpaca_positions[symbol]
         watch = watch_by_symbol[symbol]
         entry_price = watch["entry"]["price"]
+        needs_update = False
+        builder = None
 
         # Check entry price match
         if abs(pos.avg_entry_price - entry_price) > 0.01:
@@ -105,8 +108,7 @@ def reconcile(
                 horizon=old_entry.horizon,
                 thesis=old_entry.thesis,
             )
-            updated = builder.to_watch()
-            update_watch(db, watch["watch_id"], updated.to_dict())
+            needs_update = True
             summary["entry_price_updated"].append({
                 "symbol": symbol,
                 "old_price": entry_price,
@@ -117,6 +119,29 @@ def reconcile(
             _log_tx(db, account_id, "reconcile_price_updated", symbol,
                     detail={"old_price": entry_price, "new_price": pos.avg_entry_price,
                             "watch_id": watch["watch_id"]})
+
+        # Check qty match (Alpaca is source of truth)
+        watch_qty = watch.get("qty")
+        alpaca_qty = float(pos.qty)
+        if watch_qty is not None and abs(alpaca_qty - watch_qty) > 0.001:
+            if builder is None:
+                builder = WatchBuilder.from_dict(watch)
+            builder.qty = alpaca_qty
+            needs_update = True
+            summary["qty_updated"].append({
+                "symbol": symbol,
+                "old_qty": watch_qty,
+                "new_qty": alpaca_qty,
+            })
+            log.info("RECONCILE: %s qty updated %.4f → %.4f",
+                     symbol, watch_qty, alpaca_qty)
+            _log_tx(db, account_id, "reconcile_qty_updated", symbol,
+                    detail={"old_qty": watch_qty, "new_qty": alpaca_qty,
+                            "watch_id": watch["watch_id"]})
+
+        if needs_update:
+            updated = builder.to_watch()
+            update_watch(db, watch["watch_id"], updated.to_dict())
         else:
             summary["ok"].append(symbol)
             _log_tx(db, account_id, "reconcile_ok", symbol,
@@ -251,6 +276,7 @@ def reconcile(
         + len(summary["alpaca_orphan_closed"])
         + len(summary["alpaca_orphan_adopted"])
         + len(summary["entry_price_updated"])
+        + len(summary["qty_updated"])
     )
     n_phantom = len(summary["watch_phantom_miss"])
     if total_actions > 0 or n_phantom > 0:
@@ -258,7 +284,8 @@ def reconcile(
                f"{len(summary['watch_force_exited'])} force-exited, "
                f"{len(summary['alpaca_orphan_closed'])} orphans closed, "
                f"{len(summary['alpaca_orphan_adopted'])} adopted, "
-               f"{len(summary['entry_price_updated'])} prices updated")
+               f"{len(summary['entry_price_updated'])} prices updated, "
+               f"{len(summary['qty_updated'])} qty updated")
         if n_phantom:
             msg += f", {n_phantom} PHANTOM MISSES (investigate!)"
         log.info(msg)
@@ -348,24 +375,41 @@ def ensure_stops(
         # Submit stop order
         try:
             result = broker.set_stop(symbol, qty=qty, stop_price=stop_price)
-            builder = WatchBuilder.from_dict(watch)
-            builder.alpaca_stop_order_id = result.order_id
-            builder.alpaca_stop_price = stop_price
-            updated = builder.to_watch()
-            update_watch(db, watch_id, updated.to_dict())
-
-            summary["submitted"].append({"symbol": symbol, "stop_price": stop_price,
-                                         "qty": qty, "order_id": result.order_id})
-            log.info("ENSURE-STOPS: %s qty=%.4f stop=%.2f order=%s",
-                     symbol, qty, stop_price, result.order_id)
-            _log_tx(db, account_id, "stop_ensure", symbol,
-                    order_id=result.order_id, detail={"qty": qty, "stop_price": stop_price,
-                                                      "watch_id": watch_id})
         except Exception as e:
-            summary["errors"].append({"symbol": symbol, "error": str(e)})
-            log.exception("ENSURE-STOPS FAILED: %s — POSITION UNPROTECTED!", symbol)
-            _log_tx(db, account_id, "stop_ensure_failed", symbol,
-                    detail={"error": str(e), "watch_id": watch_id})
+            # Retry with available qty if other orders are holding shares
+            available = _parse_available_qty(str(e))
+            if available is not None and available > 0:
+                log.warning("ENSURE-STOPS: %s insufficient qty (%.4f requested, %.4f available) — retrying with available",
+                            symbol, qty, available)
+                try:
+                    result = broker.set_stop(symbol, qty=available, stop_price=stop_price)
+                    qty = available  # update for logging below
+                except Exception as e2:
+                    summary["errors"].append({"symbol": symbol, "error": str(e2)})
+                    log.exception("ENSURE-STOPS FAILED: %s — POSITION UNPROTECTED!", symbol)
+                    _log_tx(db, account_id, "stop_ensure_failed", symbol,
+                            detail={"error": str(e2), "watch_id": watch_id})
+                    continue
+            else:
+                summary["errors"].append({"symbol": symbol, "error": str(e)})
+                log.exception("ENSURE-STOPS FAILED: %s — POSITION UNPROTECTED!", symbol)
+                _log_tx(db, account_id, "stop_ensure_failed", symbol,
+                        detail={"error": str(e), "watch_id": watch_id})
+                continue
+
+        builder = WatchBuilder.from_dict(watch)
+        builder.alpaca_stop_order_id = result.order_id
+        builder.alpaca_stop_price = stop_price
+        updated = builder.to_watch()
+        update_watch(db, watch_id, updated.to_dict())
+
+        summary["submitted"].append({"symbol": symbol, "stop_price": stop_price,
+                                     "qty": qty, "order_id": result.order_id})
+        log.info("ENSURE-STOPS: %s qty=%.4f stop=%.2f order=%s",
+                 symbol, qty, stop_price, result.order_id)
+        _log_tx(db, account_id, "stop_ensure", symbol,
+                order_id=result.order_id, detail={"qty": qty, "stop_price": stop_price,
+                                                  "watch_id": watch_id})
 
     n_submitted = len(summary["submitted"])
     n_open = len(summary["already_open"])

@@ -293,12 +293,32 @@ class AlpacaBroker:
         notional: float | None = None,
         qty: float | None = None,
     ) -> OrderResult:
-        """Submit a market buy order.
+        """Submit a buy order.
+
+        During extended hours (when ALPACA_EXTENDED_HOURS is enabled and
+        outside regular 9:30-16:00), submits a limit order with
+        extended_hours=True at a slightly aggressive price.
 
         If notional is provided but the asset is not fractionable (or
         ALPACA_STOP_MODE=whole_shares), converts to whole-share qty so
         that stop orders can use GTC time-in-force.
         """
+        from trader.market.market_hours import in_extended_only, ALPACA_EXTENDED_HOURS
+
+        use_extended = ALPACA_EXTENDED_HOURS and in_extended_only()
+
+        if use_extended:
+            return self._buy_extended(symbol, notional=notional, qty=qty)
+        return self._buy_market(symbol, notional=notional, qty=qty)
+
+    def _buy_market(
+        self,
+        symbol: str,
+        *,
+        notional: float | None = None,
+        qty: float | None = None,
+    ) -> OrderResult:
+        """Submit a market buy order (regular hours)."""
         from alpaca.trading.requests import MarketOrderRequest
         from alpaca.trading.enums import OrderSide, TimeInForce
 
@@ -314,8 +334,6 @@ class AlpacaBroker:
         )
 
         if need_whole_shares:
-            # Convert notional to whole shares (for non-fractionable assets
-            # or when whole_shares mode is active for GTC stop compatibility)
             price = self._get_latest_price(symbol)
             if price and price > 0:
                 whole_qty = int(notional / price)
@@ -327,7 +345,6 @@ class AlpacaBroker:
                          symbol, notional, whole_qty, price)
                 kwargs["qty"] = whole_qty
             else:
-                # Can't get price — try notional anyway, let Alpaca reject if needed
                 kwargs["notional"] = round(notional, 2)
         elif notional is not None:
             kwargs["notional"] = round(notional, 2)
@@ -343,6 +360,61 @@ class AlpacaBroker:
         self._log_tx("buy_submit", symbol.upper(), order_id=result.order_id, status=result.status,
                      detail={"notional": notional, "qty": qty, "kwargs_qty": kwargs.get("qty"),
                              "kwargs_notional": kwargs.get("notional"), "fractionable": "qty" not in kwargs or qty is not None})
+        return result
+
+    def _buy_extended(
+        self,
+        symbol: str,
+        *,
+        notional: float | None = None,
+        qty: float | None = None,
+        slippage_pct: float = 0.02,
+    ) -> OrderResult:
+        """Submit a limit buy order for extended hours.
+
+        Extended hours require: limit orders only, time_in_force=DAY,
+        extended_hours=True, and whole-share qty (no fractional/notional).
+        """
+        from alpaca.trading.requests import LimitOrderRequest
+        from alpaca.trading.enums import OrderSide, TimeInForce
+
+        price = self._get_latest_price(symbol)
+        if not price or price <= 0:
+            raise ValueError(f"{symbol}: cannot get price for extended-hours limit order")
+
+        # Aggressive limit price (slightly above current for buy)
+        limit_price = round(price * (1 + slippage_pct), 2)
+
+        # Extended hours: must use whole-share qty (no notional/fractional)
+        if qty is not None:
+            buy_qty = int(qty) if qty == int(qty) else int(qty)
+        elif notional is not None:
+            buy_qty = int(notional / price)
+        else:
+            raise ValueError("Must provide either notional or qty")
+
+        if buy_qty < 1:
+            raise ValueError(
+                f"{symbol}: notional ${notional:.2f} < 1 share @ ${price:.2f} (extended hours)"
+            )
+
+        order = self._client.submit_order(
+            order_data=LimitOrderRequest(
+                symbol=symbol.upper(),
+                qty=buy_qty,
+                side=OrderSide.BUY,
+                time_in_force=TimeInForce.DAY,
+                limit_price=limit_price,
+                extended_hours=True,
+            )
+        )
+        result = self._to_result(order)
+        log.info("BUY EXTENDED order submitted: %s %s qty=%d limit=%.2f -> %s",
+                 symbol, order.id, buy_qty, limit_price, result.status)
+        self._log_tx("buy_submit_extended", symbol.upper(), order_id=result.order_id,
+                     status=result.status,
+                     detail={"qty": buy_qty, "limit_price": limit_price,
+                             "notional": notional, "slippage_pct": slippage_pct})
         return result
 
     def _get_latest_price(self, symbol: str) -> float | None:
@@ -392,7 +464,21 @@ class AlpacaBroker:
         return result
 
     def close_position(self, symbol: str) -> OrderResult | None:
-        """Close an entire position (market sell). Returns None if no position."""
+        """Close an entire position. Returns None if no position.
+
+        During extended hours, submits a limit sell order (market orders
+        are not accepted outside regular hours).
+        """
+        from trader.market.market_hours import in_extended_only, ALPACA_EXTENDED_HOURS
+
+        use_extended = ALPACA_EXTENDED_HOURS and in_extended_only()
+
+        if use_extended:
+            return self._close_position_extended(symbol)
+        return self._close_position_market(symbol)
+
+    def _close_position_market(self, symbol: str) -> OrderResult | None:
+        """Close position with a market order (regular hours)."""
         try:
             order = self._client.close_position(symbol.upper())
             result = self._to_result(order)
@@ -408,6 +494,86 @@ class AlpacaBroker:
             self._log_tx("sell_failed", symbol.upper(), status="error",
                          detail={"error": str(e)})
             raise
+
+    def _cancel_open_orders(self, symbol: str) -> int:
+        """Cancel all open orders for a symbol. Returns count of cancelled orders."""
+        open_orders = self.get_open_orders(symbol)
+        cancelled = 0
+        for o in open_orders:
+            if self.cancel_order(o.order_id):
+                cancelled += 1
+        if cancelled:
+            log.info("Cancelled %d open orders for %s before extended-hours sell", cancelled, symbol)
+            import time; time.sleep(0.5)  # brief pause for cancellations to settle
+        return cancelled
+
+    def _close_position_extended(
+        self,
+        symbol: str,
+        slippage_pct: float = 0.005,
+    ) -> OrderResult | None:
+        """Close position with a limit sell order for extended hours.
+
+        Auto-cancels any open orders (stops, etc.) that hold shares,
+        then submits a limit sell. Uses position's current_price for
+        the limit (more accurate than data API's latest trade during
+        extended hours).
+        """
+        from alpaca.trading.requests import LimitOrderRequest
+        from alpaca.trading.enums import OrderSide, TimeInForce
+
+        pos = self.get_position(symbol)
+        if pos is None:
+            log.warning("No position to close for %s (extended hours)", symbol)
+            self._log_tx("sell_failed", symbol.upper(), status="no_position",
+                         detail={"extended_hours": True})
+            return None
+
+        # Cancel any open orders (stops hold shares, blocking the sell)
+        self._cancel_open_orders(symbol)
+
+        # Use position's current_price (more accurate than data API during extended hours)
+        price = pos.current_price
+        if not price or price <= 0:
+            price = self._get_latest_price(symbol)
+        if not price or price <= 0:
+            raise ValueError(f"{symbol}: cannot get price for extended-hours limit sell")
+
+        # Aggressive limit price (slightly below current for sell)
+        limit_price = round(price * (1 - slippage_pct), 2)
+
+        # Extended hours: fractional qty not supported — round down to whole shares
+        sell_qty = int(pos.qty)
+
+        if sell_qty < 1:
+            log.warning("CLOSE EXTENDED %s: qty < 1 share (%.4f), cannot sell in extended hours",
+                        symbol, pos.qty)
+            self._log_tx("sell_failed", symbol.upper(), status="fractional_only",
+                         detail={"qty": pos.qty, "extended_hours": True})
+            return None
+
+        if sell_qty < pos.qty:
+            log.info("CLOSE EXTENDED %s: selling %d of %.4f shares (fractional remainder stays)",
+                     symbol, sell_qty, pos.qty)
+
+        order = self._client.submit_order(
+            order_data=LimitOrderRequest(
+                symbol=symbol.upper(),
+                qty=sell_qty,
+                side=OrderSide.SELL,
+                time_in_force=TimeInForce.DAY,
+                limit_price=limit_price,
+                extended_hours=True,
+            )
+        )
+        result = self._to_result(order)
+        log.info("CLOSE EXTENDED position: %s -> order %s qty=%s limit=%.2f (price=%.2f)",
+                 symbol, order.id, sell_qty, limit_price, price)
+        self._log_tx("sell_submit_extended", symbol.upper(), order_id=result.order_id,
+                     status=result.status,
+                     detail={"qty": sell_qty, "limit_price": limit_price,
+                             "price_source": "position", "slippage_pct": slippage_pct})
+        return result
 
     def cancel_order(self, order_id: str) -> bool:
         """Cancel an open order. Returns True if cancelled."""

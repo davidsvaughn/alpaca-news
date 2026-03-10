@@ -127,7 +127,9 @@ def main() -> None:
     online = OnlineMode(enabled=not args.offline and settings.online)
     if settings.online_auto_market_hours:
         online.start_auto_market_hours()
-        print("ONLINE: auto market hours enabled (ON during 9:30-16:00 ET)")
+        from trader.market.market_hours import ALPACA_EXTENDED_HOURS
+        hours_label = "4:00-20:00" if ALPACA_EXTENDED_HOURS else "9:30-16:00"
+        print(f"ONLINE: auto market hours enabled (ON during {hours_label} ET)")
     if not online.enabled:
         print("OFFLINE: no new jobs will be launched")
     db = open_sqlite(settings.sqlite_path)

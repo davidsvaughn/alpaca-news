@@ -133,8 +133,8 @@
 <div class="card mb-3" style="border-left: 4px solid {% if p.config.active %}#198754{% else %}#6c757d{% endif %};">
   <div class="card-body py-3 px-3">
   <!-- Two-column layout: info left, chart right -->
-  <div class="d-flex align-items-stretch">
-  <div class="flex-shrink-0 me-3" style="min-width:360px;">
+  <div class="d-flex align-items-stretch flex-wrap">
+  <div class="flex-shrink-1 me-3" style="min-width:280px; flex-basis:360px;">
 
   <!-- Header: config ID + deactivate/delete -->
   <div class="d-flex align-items-center mb-1">
@@ -218,11 +218,11 @@
 
   </div><!-- end left column -->
 
-  <!-- Right column: equity chart fills available space (absolute canvas prevents grow loop) -->
-  <div class="flex-grow-1" style="position:relative; min-height:120px;">
-    <canvas id="equity-chart-{{ loop.index }}" data-config-id="{{ p.config.config_id }}"
-            data-sim-ending="{{ p.sim.sim_ending if p.sim and p.sim.sim_ending else '' }}"
-            style="position:absolute; top:0; left:0; width:100%; height:100%;"></canvas>
+  <!-- Right column: equity chart fills available space -->
+  <div class="flex-grow-1" style="position:relative; min-height:150px; min-width:200px;">
+    <div id="equity-chart-{{ loop.index }}" data-config-id="{{ p.config.config_id }}"
+         data-sim-ending="{{ p.sim.sim_ending if p.sim and p.sim.sim_ending else '' }}"
+         style="position:absolute; top:0; left:0; width:100%; height:100%;"></div>
   </div>
   </div><!-- end two-column layout -->
 
@@ -365,13 +365,13 @@
       + ' ' + d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
   });
 
-  // Destroy previous chart instances to avoid Chart.js duplication on HTMX re-swap
+  // Destroy previous Lightweight Charts instances on HTMX re-swap
   var _eqCharts = window._equityCharts || {};
-  Object.values(_eqCharts).forEach(function(c) { try { c.destroy(); } catch(e) {} });
+  Object.values(_eqCharts).forEach(function(c) { try { c.remove(); } catch(e) {} });
   window._equityCharts = {};
 
-  document.querySelectorAll('canvas[id^="equity-chart-"]').forEach(function(canvas) {
-    var configId = canvas.dataset.configId;
+  document.querySelectorAll('div[id^="equity-chart-"]').forEach(function(container) {
+    var configId = container.dataset.configId;
     if (!configId) return;
 
     fetch('/api/portfolio/' + configId + '/equity-history')
@@ -379,99 +379,114 @@
       .then(function(data) {
         var snaps = data.snapshots || [];
         if (snaps.length < 2) {
-          canvas.style.display = 'none';
+          container.style.display = 'none';
           return;
         }
 
-        var labels = snaps.map(function(s) {
-          var d = new Date(s.timestamp);
-          return (d.getMonth()+1) + '/' + d.getDate() + ' ' +
-                 d.getHours().toString().padStart(2,'0') + ':' +
-                 d.getMinutes().toString().padStart(2,'0');
+        // Build data — Lightweight Charts requires unique ascending times
+        var chartData = [];
+        var lastT = 0;
+        snaps.forEach(function(s) {
+          var t = Math.floor(new Date(s.timestamp).getTime() / 1000);
+          if (t <= lastT) t = lastT + 1;
+          lastT = t;
+          chartData.push({ time: t, value: s.equity });
         });
-        var values = snaps.map(function(s) { return s.equity; });
-        var starting = data.starting_capital || values[0];
+        var starting = data.starting_capital || chartData[0].value;
 
-        // Use live sim value (includes unrealized P&L) if available
-        var simEnding = parseFloat(canvas.dataset.simEnding);
+        // Append live sim value if available
+        var simEnding = parseFloat(container.dataset.simEnding);
         if (simEnding && simEnding > 0) {
-          // Append current sim value as the latest data point
-          var now = new Date();
-          labels.push((now.getMonth()+1) + '/' + now.getDate() + ' ' +
-                       now.getHours().toString().padStart(2,'0') + ':' +
-                       now.getMinutes().toString().padStart(2,'0'));
-          values.push(simEnding);
+          var nowTs = Math.floor(Date.now() / 1000);
+          if (nowTs <= lastT) nowTs = lastT + 1;
+          chartData.push({ time: nowTs, value: simEnding });
         }
 
-        var latest = values[values.length - 1];
+        var latest = chartData[chartData.length - 1].value;
         var pnlPct = ((latest - starting) / starting * 100).toFixed(2);
         var isPositive = latest >= starting;
-
-        var ctx = canvas.getContext('2d');
         var lineColor = isPositive ? '#198754' : '#dc3545';
-        var fillColor = isPositive ? 'rgba(25,135,84,0.08)' : 'rgba(220,53,69,0.08)';
+        var topColor = isPositive ? 'rgba(25,135,84,0.3)' : 'rgba(220,53,69,0.3)';
+        var bottomColor = isPositive ? 'rgba(25,135,84,0.02)' : 'rgba(220,53,69,0.02)';
 
-        var chart = new Chart(ctx, {
-          type: 'line',
-          data: {
-            labels: labels,
-            datasets: [{
-              label: 'Portfolio Value',
-              data: values,
-              borderColor: lineColor,
-              backgroundColor: fillColor,
-              fill: true,
-              tension: 0.3,
-              pointRadius: 0,
-              pointHitRadius: 8,
-              borderWidth: 2,
-            }]
+        // Title element above chart
+        var titleDiv = document.createElement('div');
+        titleDiv.style.cssText = 'text-align:center; font-size:11px; color:' + lineColor + '; padding:0 0 2px 0;';
+        titleDiv.textContent = '$' + starting.toLocaleString() + '  \u2192  $' + latest.toLocaleString(undefined, {minimumFractionDigits:2, maximumFractionDigits:2}) + '  (' + (pnlPct >= 0 ? '+' : '') + pnlPct + '%)';
+        container.appendChild(titleDiv);
+
+        // Chart container (fills remaining height)
+        var chartDiv = document.createElement('div');
+        chartDiv.style.cssText = 'position:absolute; left:0; right:0; top:' + titleDiv.offsetHeight + 'px; bottom:0;';
+        container.appendChild(chartDiv);
+
+        // Hide TradingView branding watermark
+        chartDiv.style.overflow = 'hidden';
+        var style = document.createElement('style');
+        style.textContent = 'div[id^="equity-chart-"] a[href*="tradingview"] { display: none !important; }';
+        if (!document.querySelector('style[data-eq-brand]')) { style.setAttribute('data-eq-brand','1'); document.head.appendChild(style); }
+
+        var w = chartDiv.offsetWidth;
+        var h = chartDiv.offsetHeight;
+        if (w < 10 || h < 10) return;
+
+        var chart = LightweightCharts.createChart(chartDiv, {
+          autoSize: true,
+          layout: {
+            background: { type: 'solid', color: 'transparent' },
+            textColor: '#999',
+            fontSize: 9,
           },
-          options: {
-            responsive: true,
-            maintainAspectRatio: false,
-            plugins: {
-              legend: { display: false },
-              title: {
-                display: true,
-                text: '$' + starting.toLocaleString() + '  \u2192  $' + latest.toLocaleString(undefined, {minimumFractionDigits:2, maximumFractionDigits:2}) + '  (' + (pnlPct >= 0 ? '+' : '') + pnlPct + '%)',
-                font: { size: 12 },
-                color: lineColor,
-                padding: { bottom: 4 },
-              },
-              tooltip: {
-                callbacks: {
-                  label: function(ctx) {
-                    return '$' + ctx.parsed.y.toLocaleString(undefined, {minimumFractionDigits:2, maximumFractionDigits:2});
-                  }
-                }
-              }
-            },
-            scales: {
-              x: {
-                display: true,
-                ticks: { maxTicksLimit: 8, font: { size: 10 }, color: '#999' },
-                grid: { display: false },
-              },
-              y: {
-                display: true,
-                ticks: {
-                  font: { size: 10 },
-                  color: '#999',
-                  callback: function(v) { return '$' + v.toLocaleString(); }
-                },
-                grid: { color: 'rgba(0,0,0,0.05)' },
-              }
-            },
-            interaction: { mode: 'nearest', axis: 'x', intersect: false },
-          }
+          grid: {
+            vertLines: { visible: false },
+            horzLines: { color: 'rgba(0,0,0,0.05)' },
+          },
+          rightPriceScale: {
+            borderVisible: false,
+            scaleMargins: { top: 0.05, bottom: 0.05 },
+          },
+          timeScale: {
+            borderVisible: false,
+            timeVisible: true,
+            secondsVisible: false,
+          },
+          crosshair: {
+            horzLine: { visible: false, labelVisible: false },
+            vertLine: { labelVisible: true },
+          },
+          handleScroll: false,
+          handleScale: false,
         });
+
+        var series = chart.addSeries(LightweightCharts.AreaSeries, {
+          lineColor: lineColor,
+          lineWidth: 2,
+          topColor: topColor,
+          bottomColor: bottomColor,
+          crosshairMarkerVisible: true,
+          crosshairMarkerRadius: 3,
+          priceFormat: { type: 'custom', formatter: function(p) { return '$' + p.toLocaleString(undefined, {minimumFractionDigits:0, maximumFractionDigits:0}); } },
+        });
+
+        series.setData(chartData);
+        chart.timeScale().fitContent();
         window._equityCharts[configId] = chart;
       })
       .catch(function(err) {
         console.warn('Equity chart load failed for ' + configId, err);
-        canvas.style.display = 'none';
+        container.style.display = 'none';
       });
+  });
+
+  // Refit charts on window resize (autoSize handles dimensions, but fitContent needs a nudge)
+  var _resizeTimer;
+  window.addEventListener('resize', function() {
+    clearTimeout(_resizeTimer);
+    _resizeTimer = setTimeout(function() {
+      Object.values(window._equityCharts || {}).forEach(function(c) {
+        try { c.timeScale().fitContent(); } catch(e) {}
+      });
+    }, 100);
   });
 })();
 </script>
