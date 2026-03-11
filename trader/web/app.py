@@ -2592,7 +2592,7 @@ def _settings_groups(s: Settings) -> list[tuple[str, list[tuple[str, Any]]]]:
     """Group Settings fields by category for display."""
     # Map field names to groups (order matters for display)
     groups_map: list[tuple[str, list[str]]] = [
-        ("Modes", ["learning_mode", "trading_mode", "debug", "online"]),
+        ("Modes", ["debug", "online"]),
         (
             "Paths",
             [

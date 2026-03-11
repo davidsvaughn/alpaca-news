@@ -77,8 +77,6 @@ def _env_str(name: str, default: str | None = None) -> str | None:
 @dataclass(frozen=True)
 class Settings:
     # Modes
-    learning_mode: bool
-    trading_mode: Literal["paper", "live"]
     debug: bool
     online: bool
     online_auto_market_hours: bool
@@ -218,11 +216,6 @@ def load_settings(*, dotenv_path: str | None = None, override: bool = False) -> 
     """
 
     load_dotenv(dotenv_path=dotenv_path, override=override)
-
-    learning_mode = _env_bool("LEARNING_MODE", False)
-    trading_mode = (os.getenv("TRADING_MODE") or "paper").strip().lower()
-    if trading_mode not in ("paper", "live"):
-        raise ValueError("TRADING_MODE must be 'paper' or 'live'")
 
     debug = _env_bool("DEBUG", False)
     online = _env_bool("ONLINE", False)
@@ -366,8 +359,6 @@ def load_settings(*, dotenv_path: str | None = None, override: bool = False) -> 
     reflection_model = _env_str("REFLECTION_MODEL", "gemini-3-flash-preview") or "gemini-3-flash-preview"
 
     return Settings(
-        learning_mode=learning_mode,
-        trading_mode=trading_mode,  # type: ignore[arg-type]
         debug=debug,
         online=online,
         online_auto_market_hours=online_auto_market_hours,
