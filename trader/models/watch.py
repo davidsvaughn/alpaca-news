@@ -72,6 +72,10 @@ class Watch:
     # Position sizing
     qty: float | None = None  # shares held (from Alpaca fill or calculated)
 
+    # P&L extremes during holding period (updated each monitor cycle)
+    peak_pnl_pct: float | None = None   # highest unrealized P&L % while held
+    trough_pnl_pct: float | None = None  # lowest unrealized P&L % while held
+
     # Alpaca order tracking (Phase 4+)
     alpaca_buy_order_id: str | None = None
     alpaca_stop_order_id: str | None = None
@@ -136,6 +140,9 @@ class WatchBuilder:
         self.cooling_off_until: str | None = None
         # Position sizing
         self.qty: float | None = None
+        # P&L extremes
+        self.peak_pnl_pct: float | None = None
+        self.trough_pnl_pct: float | None = None
         # Alpaca order tracking
         self.alpaca_buy_order_id: str | None = None
         self.alpaca_stop_order_id: str | None = None
@@ -216,6 +223,9 @@ class WatchBuilder:
         builder.cooling_off_until = d.get("cooling_off_until")
         # Position sizing
         builder.qty = d.get("qty")
+        # P&L extremes
+        builder.peak_pnl_pct = d.get("peak_pnl_pct")
+        builder.trough_pnl_pct = d.get("trough_pnl_pct")
         # Alpaca order tracking
         builder.alpaca_buy_order_id = d.get("alpaca_buy_order_id")
         builder.alpaca_stop_order_id = d.get("alpaca_stop_order_id")
@@ -304,6 +314,9 @@ class WatchBuilder:
             cooling_off_until=self.cooling_off_until,
             # Position sizing
             qty=self.qty,
+            # P&L extremes
+            peak_pnl_pct=self.peak_pnl_pct,
+            trough_pnl_pct=self.trough_pnl_pct,
             # Alpaca order tracking
             alpaca_buy_order_id=self.alpaca_buy_order_id,
             alpaca_stop_order_id=self.alpaca_stop_order_id,

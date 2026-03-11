@@ -18,12 +18,19 @@ Docs live in `docs/`, organized by topic. Two legacy overview docs plus topic-sp
 
 Reference papers are in `docs/refs/`. Archived older docs in `docs/archive/`.
 
-## Error Log
+- **`docs/skills/`** — **Agent knowledge base**: operational guides for debugging, Alpaca operations, and codebase navigation. **Read [docs/skills/README.md](docs/skills/README.md) first** when investigating issues or working in unfamiliar areas.
 
-**When debugging issues, ALWAYS check `logs/trader.log` first.** This rotating log file captures all WARNING+ messages from the trader app (errors, tracebacks, failed orders, timeouts, etc.). It persists across restarts and is the primary diagnostic tool.
+## Debugging Issues
+
+**When debugging, read `docs/skills/DIAGNOSTICS.md` first** — it lists all data sources ranked by usefulness and explains common diagnostic workflows.
+
+Key data sources (in priority order):
+1. **`alpaca_transactions` table** — Complete order ledger (buys, sells, fills, failures, reconciliation). Query via SQL. See `docs/skills/DIAGNOSTICS.md`.
+2. **`logs/trader.log`** — WARNING+ only (errors, tracebacks, timeouts). **Does NOT show successful operations** (those log at INFO level). Do not conclude "everything failed" from this log alone.
+3. **Console output** — INFO+ but not persisted across restarts.
 
 ```bash
-cat logs/trader.log        # view recent errors
+cat logs/trader.log        # view recent errors (WARNING+ only!)
 tail -f logs/trader.log    # tail live
 ```
 

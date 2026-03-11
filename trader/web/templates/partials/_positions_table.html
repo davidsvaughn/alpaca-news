@@ -29,7 +29,7 @@
   <table class="table table-sm table-hover align-middle mb-1 _holdings-table _sortable" data-config-id="{{ config_id }}" data-sort-key="{{ table_key }}">
     <thead class="table-light"><tr>
       {% if config_id %}<th style="width:30px"><input type="checkbox" class="_select-all" title="Select all"></th>{% endif %}
-      <th data-sort="text">Symbol</th><th data-sort="num">Entry</th><th data-sort="num">Current</th><th data-sort="num">Qty</th><th data-sort="num">Value</th><th data-sort="num">P&L</th><th data-sort="num">Conf</th><th data-sort="text">Strategy</th><th data-sort="text">Entered</th><th></th>
+      <th data-sort="text">Symbol</th><th data-sort="num">Entry</th><th data-sort="num">Current</th><th data-sort="num">Qty</th><th data-sort="num">Value</th><th data-sort="num">P&L</th><th data-sort="num">Hi</th><th data-sort="num">Lo</th><th data-sort="num">Conf</th><th data-sort="text">Strategy</th><th data-sort="time">Entered</th><th></th>
     </tr></thead>
     <tbody>
     {% for w in watches %}
@@ -66,6 +66,10 @@
           <span class="text-muted">&mdash;</span>
         {% endif %}
       </td>
+      {% set hi = w.peak_pnl_pct if w.peak_pnl_pct is defined else none %}
+      {% set lo = w.trough_pnl_pct if w.trough_pnl_pct is defined else none %}
+      <td>{% if hi is not none %}<span class="{% if hi >= 0 %}pnl-positive{% else %}pnl-negative{% endif %}">{{ "%+.2f"|format(hi) }}%</span>{% else %}<span class="text-muted">&mdash;</span>{% endif %}</td>
+      <td>{% if lo is not none %}<span class="{% if lo >= 0 %}pnl-positive{% else %}pnl-negative{% endif %}">{{ "%+.2f"|format(lo) }}%</span>{% else %}<span class="text-muted">&mdash;</span>{% endif %}</td>
       <td>{{ "%.0f"|format(w.entry.confidence * 100) }}%</td>
       <td class="small text-muted">{{ _strategy_short.get(w.exit_strategy, w.exit_strategy) or 'legacy' }}</td>
       <td class="small text-muted"><span class="_local-time" data-utc="{{ w.created_at }}">{{ w.created_at[:16] }}</span></td>
@@ -86,7 +90,7 @@
 <div class="table-responsive">
   <table class="table table-sm table-hover align-middle mb-1 _sortable" data-sort-key="{{ table_key }}">
     <thead class="table-light"><tr>
-      <th data-sort="text">Symbol</th><th data-sort="num">Entry</th><th data-sort="num">Exit</th><th data-sort="num">Qty</th><th data-sort="num">Value</th><th data-sort="num">P&L</th><th data-sort="text">Exited</th><th></th>
+      <th data-sort="text">Symbol</th><th data-sort="num">Entry</th><th data-sort="num">Exit</th><th data-sort="num">Qty</th><th data-sort="num">Value</th><th data-sort="num">P&L</th><th data-sort="num">Hi</th><th data-sort="num">Lo</th><th data-sort="num">Hours (tot|mkt)</th><th data-sort="time">Exited</th><th></th>
     </tr></thead>
     <tbody>
     {% for w in watches %}
@@ -110,6 +114,23 @@
         {% endif %}
       </td>
       <td>{% if w.exit %}<span class="{% if w.exit.realized_pnl_pct >= 0 %}pnl-positive{% else %}pnl-negative{% endif %}">{{ "%+.2f"|format(w.exit.realized_pnl_pct) }}%</span>{% else %}&mdash;{% endif %}</td>
+      {% set hi = w.peak_pnl_pct if w.peak_pnl_pct is defined else none %}
+      {% set lo = w.trough_pnl_pct if w.trough_pnl_pct is defined else none %}
+      <td>{% if hi is not none %}<span class="{% if hi >= 0 %}pnl-positive{% else %}pnl-negative{% endif %}">{{ "%+.2f"|format(hi) }}%</span>{% else %}<span class="text-muted">&mdash;</span>{% endif %}</td>
+      <td>{% if lo is not none %}<span class="{% if lo >= 0 %}pnl-positive{% else %}pnl-negative{% endif %}">{{ "%+.2f"|format(lo) }}%</span>{% else %}<span class="text-muted">&mdash;</span>{% endif %}</td>
+      <td class="small text-muted" data-sort-value="{% if w.hold_total_hours is defined and w.hold_total_hours is not none %}{{ w.hold_total_hours }}{% endif %}">
+        {% if w.hold_total_hours_text is defined and w.hold_total_hours_text and w.hold_market_hours_text is defined and w.hold_market_hours_text %}
+          <span style="display:inline-grid; grid-template-columns: 6ch 1ch 6ch; column-gap:.35ch; justify-items:start; font-variant-numeric: tabular-nums; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;">
+            <span style="text-align:left;">{{ w.hold_total_hours_text }}</span>
+            <span style="text-align:center;">|</span>
+            <span style="text-align:left;">{{ w.hold_market_hours_text }}</span>
+          </span>
+        {% elif w.hold_total_hours_text is defined and w.hold_total_hours_text %}
+          {{ w.hold_total_hours_text }}
+        {% else %}
+          &mdash;
+        {% endif %}
+      </td>
       <td class="small text-muted">{% if w.exit and w.exit.time %}<span class="_local-time" data-utc="{{ w.exit.time }}">{{ w.exit.time[:16] }}</span>{% endif %}</td>
       <td><a href="/watches/{{ w.watch_id }}" class="btn btn-sm btn-outline-secondary py-0" style="font-size:.75rem">Detail</a></td>
     </tr>
@@ -128,7 +149,7 @@
 <div class="table-responsive">
   <table class="table table-sm table-hover align-middle mb-1 _sortable" data-sort-key="{{ table_key }}">
     <thead class="table-light"><tr>
-      <th data-sort="text">Symbol</th><th data-sort="num">Entry</th><th data-sort="num">Exit</th><th data-sort="num">P&L</th><th data-sort="text">Reason</th><th data-sort="text">Entered</th><th data-sort="text">Sealed</th><th></th>
+      <th data-sort="text">Symbol</th><th data-sort="num">Entry</th><th data-sort="num">Exit</th><th data-sort="num">P&L</th><th data-sort="text">Reason</th><th data-sort="time">Entered</th><th data-sort="time">Sealed</th><th></th>
     </tr></thead>
     <tbody>
     {% for w in watches %}
@@ -352,7 +373,7 @@
       Recently Exited ({{ p.stats.cooling_count }}) &#9662;
     </a>
     <div id="cooling-{{ p.config.config_id }}" class="_toggle-section" style="display:none">
-      {{ cooling_table(p.cooling, 'cooling-' + p.config.config_id) }}
+      {{ cooling_table(p.cooling, 'cooling-v2-' + p.config.config_id) }}
     </div>
     {% endif %}
 
@@ -391,7 +412,7 @@
       Recently Exited ({{ legacy.stats.cooling_count }}) &#9662;
     </a>
     <div id="cooling-legacy" class="_toggle-section" style="display:none">
-      {{ cooling_table(legacy.cooling, 'cooling-legacy') }}
+      {{ cooling_table(legacy.cooling, 'cooling-v2-legacy') }}
     </div>
     {% endif %}
     {% if legacy.closed %}
@@ -448,6 +469,34 @@
 
     setHeaderSortVisuals(th, asc);
 
+    function parseUtcMs(raw) {
+      if (!raw) return null;
+      var s = String(raw).trim().replace(' ', 'T');
+      if (!/(Z|[+-]\d{2}:?\d{2})$/.test(s)) s += 'Z';
+      var t = Date.parse(s);
+      return Number.isNaN(t) ? null : t;
+    }
+
+    function getNumericSortValue(cell, text) {
+      if (cell && cell.dataset && cell.dataset.sortValue) {
+        var sv = parseFloat(cell.dataset.sortValue);
+        if (!Number.isNaN(sv)) return sv;
+      }
+      var n = parseFloat((text || '').replace(/[$,%+,]/g, ''));
+      return Number.isNaN(n) ? -Infinity : n;
+    }
+
+    function getTimeSortValue(cell, text) {
+      if (cell && cell.dataset && cell.dataset.sortValue) {
+        var sv = parseFloat(cell.dataset.sortValue);
+        if (!Number.isNaN(sv)) return sv;
+      }
+      var tEl = cell ? cell.querySelector('._local-time') : null;
+      var utc = (tEl && tEl.dataset) ? tEl.dataset.utc : '';
+      var ts = parseUtcMs(utc) || parseUtcMs(text);
+      return ts === null ? -Infinity : ts;
+    }
+
     rows.sort(function(a, b) {
       var aCell = a.children[idx];
       var bCell = b.children[idx];
@@ -455,11 +504,16 @@
       var aText = (aCell.textContent || '').trim();
       var bText = (bCell.textContent || '').trim();
       if (sortType === 'num') {
-        var aNum = parseFloat(aText.replace(/[$,%+,]/g, '')) || 0;
-        var bNum = parseFloat(bText.replace(/[$,%+,]/g, '')) || 0;
+        var aNum = getNumericSortValue(aCell, aText);
+        var bNum = getNumericSortValue(bCell, bText);
         if (aText === '—' || aText === '') aNum = -Infinity;
         if (bText === '—' || bText === '') bNum = -Infinity;
         return asc ? aNum - bNum : bNum - aNum;
+      }
+      if (sortType === 'time') {
+        var aTime = getTimeSortValue(aCell, aText);
+        var bTime = getTimeSortValue(bCell, bText);
+        return asc ? aTime - bTime : bTime - aTime;
       }
       return asc ? aText.localeCompare(bText) : bText.localeCompare(aText);
     });
@@ -516,10 +570,19 @@
     }) + ' ET';
   });
 
+  // Guard against HTMX double-execution of inline scripts.
+  // HTMX can run swapped <script> tags twice; debounce so only the last execution proceeds.
+  window._equityChartGen = (window._equityChartGen || 0) + 1;
+  var _myGen = window._equityChartGen;
+
   // Destroy previous Lightweight Charts instances on HTMX re-swap
   var _eqCharts = window._equityCharts || {};
   Object.values(_eqCharts).forEach(function(c) { try { c.remove(); } catch(e) {} });
   window._equityCharts = {};
+
+  // Debounce: delay fetch slightly so if script runs twice, only the last one fires
+  setTimeout(function() {
+  if (window._equityChartGen !== _myGen) return;
 
   document.querySelectorAll('div[id^="equity-chart-"]').forEach(function(container) {
     var configId = container.dataset.configId;
@@ -528,6 +591,8 @@
     fetch('/api/portfolio/' + configId + '/equity-history')
       .then(function(r) { return r.json(); })
       .then(function(data) {
+        // Skip if a newer script execution has started (HTMX double-exec guard)
+        if (window._equityChartGen !== _myGen) return;
         var snaps = data.snapshots || [];
         if (snaps.length < 2) {
           container.style.display = 'none';
@@ -638,6 +703,7 @@
         container.style.display = 'none';
       });
   });
+  }, 50);  // end setTimeout debounce
 
   // Refit charts on window resize (autoSize handles dimensions, but fitContent needs a nudge)
   var _resizeTimer;

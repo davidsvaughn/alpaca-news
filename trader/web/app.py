@@ -1349,6 +1349,79 @@ def create_app(
                 pass  # prices stay empty — template handles gracefully
 
         # Inject current price + unrealized P&L + backfill qty into holding watches
+        def _parse_iso_dt(value: Any) -> datetime | None:
+            if not value:
+                return None
+            s = str(value).strip().replace(" ", "T")
+            if s.endswith("Z"):
+                s = s[:-1] + "+00:00"
+            try:
+                dt = datetime.fromisoformat(s)
+            except ValueError:
+                return None
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            return dt
+
+        def _format_duration_hours(minutes: int | None) -> tuple[float | None, str | None]:
+            if minutes is None or minutes < 0:
+                return None, None
+            hours = round(minutes / 60.0, 2)
+            txt = f"{hours:.2f}".rstrip("0")
+            if txt.endswith("."):
+                txt += "0"
+            return hours, txt
+
+        def _market_minutes_between(start: datetime, end: datetime) -> int:
+            if end <= start:
+                return 0
+            from trader.market.market_hours import (
+                ET,
+                MARKET_CLOSE_HOUR,
+                MARKET_CLOSE_MIN,
+                MARKET_OPEN_HOUR,
+                MARKET_OPEN_MIN,
+            )
+
+            s = start.astimezone(ET)
+            e = end.astimezone(ET)
+            day = s.date()
+            end_day = e.date()
+            total = 0
+
+            while day <= end_day:
+                if day.weekday() <= 4:
+                    open_dt = datetime(
+                        day.year, day.month, day.day,
+                        MARKET_OPEN_HOUR, MARKET_OPEN_MIN, 0, 0,
+                        tzinfo=ET,
+                    )
+                    close_dt = datetime(
+                        day.year, day.month, day.day,
+                        MARKET_CLOSE_HOUR, MARKET_CLOSE_MIN, 0, 0,
+                        tzinfo=ET,
+                    )
+                    seg_start = max(s, open_dt)
+                    seg_end = min(e, close_dt)
+                    if seg_end > seg_start:
+                        total += int((seg_end - seg_start).total_seconds() // 60)
+                day += timedelta(days=1)
+
+            return max(total, 0)
+
+        def _hold_minutes(w: dict) -> tuple[int | None, int | None]:
+            entry = w.get("entry") or {}
+            exit_data = w.get("exit") or {}
+            entry_time = entry.get("time") or w.get("created_at")
+            exit_time = exit_data.get("time")
+            dt_entry = _parse_iso_dt(entry_time)
+            dt_exit = _parse_iso_dt(exit_time)
+            if not dt_entry or not dt_exit:
+                return None, None
+            wall_minutes = max(int((dt_exit - dt_entry).total_seconds() // 60), 0)
+            market_minutes = _market_minutes_between(dt_entry, dt_exit)
+            return wall_minutes, market_minutes
+
         def _backfill_qty(w: dict, cfg: dict | None = None) -> dict:
             entry_price = w.get("entry", {}).get("price", 0)
             # Backfill qty for older watches that don't have it
@@ -1357,6 +1430,20 @@ def create_app(
                 alloc_pct = float((cfg.get("allocation_params") or {}).get("alloc_pct", 5))
                 if starting and alloc_pct:
                     w["qty"] = (starting * alloc_pct / 100.0) / entry_price
+            return w
+
+        def _enrich_exited(w: dict, cfg: dict | None = None) -> dict:
+            _backfill_qty(w, cfg)
+            wall_mins, market_mins = _hold_minutes(w)
+            w["hold_minutes"] = wall_mins
+            w["hold_market_minutes"] = market_mins
+
+            wall_hours, wall_text = _format_duration_hours(wall_mins)
+            market_hours, market_text = _format_duration_hours(market_mins)
+            w["hold_total_hours"] = wall_hours
+            w["hold_market_hours"] = market_hours
+            w["hold_total_hours_text"] = wall_text
+            w["hold_market_hours_text"] = market_text
             return w
 
         def _enrich_holding(w: dict, cfg: dict | None = None) -> dict:
@@ -1374,9 +1461,11 @@ def create_app(
 
         for p in portfolios:
             p["holding"] = [_enrich_holding(w, p.get("config")) for w in p["holding"]]
-            p["cooling"] = [_backfill_qty(w, p.get("config")) for w in p["cooling"]]
-            p["closed"] = [_backfill_qty(w, p.get("config")) for w in p["closed"]]
+            p["cooling"] = [_enrich_exited(w, p.get("config")) for w in p["cooling"]]
+            p["closed"] = [_enrich_exited(w, p.get("config")) for w in p["closed"]]
         legacy_data["holding"] = [_enrich_holding(w) for w in legacy_data["holding"]]
+        legacy_data["cooling"] = [_enrich_exited(w) for w in legacy_data["cooling"]]
+        legacy_data["closed"] = [_enrich_exited(w) for w in legacy_data["closed"]]
 
         # Compute portfolio dollar value for each portfolio
         def _compute_sim(p: dict, *, alpaca_equity: float | None = None) -> dict[str, Any]:

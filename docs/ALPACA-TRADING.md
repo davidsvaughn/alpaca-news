@@ -393,9 +393,17 @@ During extended hours (pre/post-market):
 1. `close_position()` routes to `_close_position_extended()`
 2. Existing stops are **cancelled** (they hold shares, blocking the sell)
 3. A limit sell is submitted for **whole shares only** (fractional qty stays)
-4. If the order fills, reconcile exits the watch and re-places a stop on any fractional remainder
+4. If the order fills, the watch is exited. Any fractional remainder (< 1 share) stays on Alpaca.
 5. If the order doesn't fill (price moved, low liquidity), it stays pending on Alpaca
 6. Retrying liquidation on the same symbol is safe: `_close_position_extended()` cancels the old order before submitting a new one at the updated price
+
+#### Fractional remainder cleanup
+
+After an extended-hours sell, a sub-1-share fractional remainder may be left on Alpaca (e.g., sold 5 of 5.77 shares → 0.77 stays). These are automatically liquidated by the **periodic reconciler** once regular market hours resume:
+
+- **Rule 1 match** (Alpaca position + watch): reconcile closes the position on Alpaca, exits the watch with `reason=fractional_remainder_liquidated`
+- **Rule 2 orphan** (Alpaca position, no watch — e.g., watch was already exited): reconcile closes the position on Alpaca without adopting
+- During extended hours, fractional remainders are **skipped** (can't sell fractional shares outside regular hours)
 
 #### Unfilled order lifecycle
 

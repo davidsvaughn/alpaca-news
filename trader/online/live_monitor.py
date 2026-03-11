@@ -258,6 +258,15 @@ class LiveExitMonitor:
         builder = WatchBuilder.from_dict(watch_dict)
         builder.last_checkin_at = datetime.now(tz=timezone.utc).isoformat()
 
+        # Track peak/trough P&L during holding period
+        current_price = float(bars.iloc[-1]["Close"])
+        if entry_price and entry_price > 0:
+            current_pnl = ((current_price - entry_price) / entry_price) * 100.0
+            if builder.peak_pnl_pct is None or current_pnl > builder.peak_pnl_pct:
+                builder.peak_pnl_pct = round(current_pnl, 4)
+            if builder.trough_pnl_pct is None or current_pnl < builder.trough_pnl_pct:
+                builder.trough_pnl_pct = round(current_pnl, 4)
+
         if result.should_exit:
             exit_price = result.exit_price or float(bars.iloc[-1]["Close"])
 

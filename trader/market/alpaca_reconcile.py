@@ -119,6 +119,43 @@ def reconcile(
     for symbol in alpaca_symbols & watch_symbols:
         pos = alpaca_positions[symbol]
         watch = watch_by_symbol[symbol]
+
+        # Fractional remainder cleanup: < 1 share with a watch → liquidate and exit watch
+        if float(pos.qty) < 1.0:
+            from trader.market.market_hours import in_extended_only, ALPACA_EXTENDED_HOURS
+            in_extended = ALPACA_EXTENDED_HOURS and in_extended_only()
+            if not in_extended:
+                try:
+                    # Cancel stops first — they hold shares and block the sell
+                    broker._cancel_open_orders(symbol)
+                    broker.close_position(symbol)
+                    builder = WatchBuilder.from_dict(watch)
+                    exit_price = pos.current_price or pos.avg_entry_price
+                    builder.record_exit(
+                        price=exit_price,
+                        reason="fractional_remainder_liquidated",
+                    )
+                    updated = builder.to_watch()
+                    update_watch(db, watch["watch_id"], updated.to_dict())
+                    summary.setdefault("fractional_liquidated", []).append(symbol)
+                    log.info("RECONCILE: %s liquidated fractional remainder (qty=%.4f) "
+                             "and exited watch %s",
+                             symbol, float(pos.qty), watch["watch_id"])
+                    print(f"RECONCILE: {symbol} liquidated fractional remainder "
+                          f"(qty={float(pos.qty):.4f}) — watch exited")
+                    _log_tx(db, account_id, "reconcile_fractional_liquidated", symbol,
+                            detail={"qty": float(pos.qty), "watch_id": watch["watch_id"],
+                                    "exit_price": exit_price})
+                except Exception:
+                    log.exception("RECONCILE: failed to liquidate fractional %s", symbol)
+                    _log_tx(db, account_id, "reconcile_fractional_failed", symbol,
+                            detail={"qty": float(pos.qty), "watch_id": watch["watch_id"]})
+                continue
+            else:
+                log.info("RECONCILE: %s fractional remainder (qty=%.4f) — skipping "
+                         "until regular hours", symbol, float(pos.qty))
+                # Fall through to normal sync
+
         entry_price = watch["entry"]["price"]
         needs_update = False
         builder = None
@@ -245,8 +282,37 @@ def reconcile(
 
     # Rule 2: Alpaca has a position but we have no watch
     # Default: adopt (create watch from config). Fallback: close on Alpaca.
+    # Special case: fractional remainders (< 1 share) from extended-hours sells
+    # are liquidated during regular hours instead of being adopted.
     for symbol in alpaca_symbols - watch_symbols:
         pos = alpaca_positions[symbol]
+
+        # Fractional remainder cleanup: < 1 share orphan → liquidate during regular hours
+        if float(pos.qty) < 1.0:
+            from trader.market.market_hours import in_extended_only, ALPACA_EXTENDED_HOURS
+            in_extended = ALPACA_EXTENDED_HOURS and in_extended_only()
+            if not in_extended:
+                try:
+                    # Cancel stops first — they hold shares and block the sell
+                    broker._cancel_open_orders(symbol)
+                    broker.close_position(symbol)
+                    summary.setdefault("fractional_liquidated", []).append(symbol)
+                    log.info("RECONCILE: %s liquidated fractional remainder (qty=%.4f)",
+                             symbol, float(pos.qty))
+                    print(f"RECONCILE: {symbol} liquidated fractional remainder "
+                          f"(qty={float(pos.qty):.4f})")
+                    _log_tx(db, account_id, "reconcile_fractional_liquidated", symbol,
+                            detail={"qty": float(pos.qty),
+                                    "avg_entry_price": pos.avg_entry_price})
+                except Exception:
+                    log.exception("RECONCILE: failed to liquidate fractional %s", symbol)
+                    _log_tx(db, account_id, "reconcile_fractional_failed", symbol,
+                            detail={"qty": float(pos.qty)})
+                continue
+            else:
+                log.info("RECONCILE: %s fractional remainder (qty=%.4f) — skipping "
+                         "until regular hours", symbol, float(pos.qty))
+                continue
 
         if live_config and live_config_id:
             # Adopt: create a watch for this orphan position
@@ -302,12 +368,14 @@ def reconcile(
             _log_tx(db, account_id, "reconcile_orphan_skipped", symbol,
                     detail={"qty": pos.qty, "avg_entry_price": pos.avg_entry_price})
 
+    n_fractional = len(summary.get("fractional_liquidated", []))
     total_actions = (
         len(summary["watch_force_exited"])
         + len(summary["alpaca_orphan_closed"])
         + len(summary["alpaca_orphan_adopted"])
         + len(summary["entry_price_updated"])
         + len(summary["qty_updated"])
+        + n_fractional
     )
     n_phantom = len(summary["watch_phantom_miss"])
     if total_actions > 0 or n_phantom > 0:
@@ -317,6 +385,8 @@ def reconcile(
                f"{len(summary['alpaca_orphan_adopted'])} adopted, "
                f"{len(summary['entry_price_updated'])} prices updated, "
                f"{len(summary['qty_updated'])} qty updated")
+        if n_fractional:
+            msg += f", {n_fractional} fractional remainders liquidated"
         if n_phantom:
             msg += f", {n_phantom} PHANTOM MISSES (investigate!)"
         log.info(msg)

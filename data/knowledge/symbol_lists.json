@@ -1376,7 +1376,15 @@
     "ISRG",
     "TSEM",
     "API",
-    "WTW"
+    "WTW",
+    "KYNB",
+    "NVMI",
+    "GDVTZ",
+    "PRGO",
+    "BIDU",
+    "OSK",
+    "RNWF",
+    "STCUF"
   ],
   "crypto": [],
   "rejected": [
@@ -1544,5 +1552,5 @@
     "ALGR",
     "BSIF"
   ],
-  "last_updated": "2026-03-11T14:19:19.306604+00:00"
+  "last_updated": "2026-03-11T15:30:20.505479+00:00"
 }
