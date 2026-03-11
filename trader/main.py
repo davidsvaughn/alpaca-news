@@ -35,6 +35,7 @@ from trader.knowledge.store import KnowledgeStore
 from trader.online.activity_tracker import Activity, ActivityTracker
 from trader.online.event_bus import EventBus, PipelineEvent
 from trader.online.orchestrator import process_news_file, run_watch_loop
+from trader.online.news_archive import run_news_archive_loop
 from trader.online.price_10min import reconcile_missing_prices
 from trader.online.x_stream_service import XStreamGuards, XStreamService
 from trader.web.app import create_app
@@ -162,8 +163,18 @@ def main() -> None:
     # Launch news websocket subprocesses (controlled by WS_INSIGHT_SENTRY / WS_ALPACA)
     feed_registry = FeedRegistry()
     _feeds_config: list[tuple[str, str, str, bool]] = [
-        ("insight_sentry", "websocket/insight_sentry_news.py", "output/insight_sentry", settings.ws_insight_sentry),
-        ("alpaca", "websocket/alpaca_news.py", "output/alpaca", settings.ws_alpaca),
+        (
+            "insight_sentry",
+            "websocket/insight_sentry_news.py",
+            settings.insight_sentry_news_dir,
+            settings.ws_insight_sentry,
+        ),
+        (
+            "alpaca",
+            "websocket/alpaca_news.py",
+            settings.alpaca_news_dir,
+            settings.ws_alpaca,
+        ),
     ]
     for name, script, watch_dir, enabled in _feeds_config:
         fm = FeedManager(name=name, script=script, watch_dir=watch_dir, enabled=enabled)
@@ -237,6 +248,14 @@ def main() -> None:
             time.sleep(60)
 
     threading.Thread(target=_price_at_maintenance, daemon=True).start()
+
+    # Archive stale incoming news JSON files into daily ZIPs and prune old archives.
+    threading.Thread(
+        target=run_news_archive_loop,
+        kwargs={"settings": settings},
+        daemon=True,
+        name="news-archive",
+    ).start()
 
     # Optional: process last N existing files on startup (background thread)
     if settings.backfill_on_start and not online.enabled:

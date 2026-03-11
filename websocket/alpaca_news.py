@@ -1,12 +1,14 @@
 '''
 Run this file to start a websocket connection to Alpaca's news data stream.
-It will save incoming news articles to the `output/alpaca` directory in JSON format.
+It will save incoming news articles to `data/news/incoming/alpaca` by default.
 
 uv run python -u websocket/alpaca_news.py
 
 Make sure to set your Alpaca API keys in a `.env` file with the following content:
     ALPACA_API_KEY=your_api_key
     ALPACA_SECRET_KEY=your_secret_key
+Optional:
+    ALPACA_NEWS_DIR=data/news/incoming/alpaca
 
 '''
 
@@ -25,7 +27,11 @@ load_dotenv()
 ALPACA_API_KEY = os.getenv("ALPACA_API_KEY")
 ALPACA_SECRET_KEY = os.getenv("ALPACA_SECRET_KEY")
 
-BASE_DIR = pathlib.Path("output/alpaca")
+BASE_DIR = pathlib.Path(
+    os.getenv("ALPACA_NEWS_DIR")
+    or os.getenv("ALPACA_OUTPUT_DIR")
+    or "data/news/incoming/alpaca"
+)
 # create output directory if it doesn't exist
 BASE_DIR.mkdir(parents=True, exist_ok=True)
 

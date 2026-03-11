@@ -725,7 +725,7 @@ They terminate automatically when the trader app exits. To run standalone:
 uv run python -u websocket/insight_sentry_news.py
 uv run python websocket/alpaca_news.py
 ```
-Insight Sentry requires `INSIGHT_SENTRY_API_KEY` in `.env`. Saves to `output/insight_sentry/`. Auto-reconnects on disconnect.
+Insight Sentry requires `INSIGHT_SENTRY_API_KEY` in `.env`. Saves to `data/news/incoming/insight_sentry/`. Auto-reconnects on disconnect.
 
 ---
 

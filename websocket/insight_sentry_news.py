@@ -1,11 +1,13 @@
 '''
 Run this file to start a websocket connection to InsightSentry's news data stream.
-It will save incoming news articles to the `output/insight_sentry` directory in JSON format.
+It will save incoming news articles to `data/news/incoming/insight_sentry` by default.
 
 uv run python -u websocket/insight_sentry_news.py
 
 Make sure to set your InsightSentry API key in a `.env` file with the following content:
     INSIGHT_SENTRY_API_KEY=your_api_key
+Optional:
+    INSIGHT_SENTRY_NEWS_DIR=data/news/incoming/insight_sentry
 
 '''
 
@@ -21,7 +23,9 @@ import websockets
 load_dotenv()
 INSIGHT_SENTRY_API_KEY = os.getenv("INSIGHT_SENTRY_API_KEY")
 
-BASE_DIR = pathlib.Path("output/insight_sentry")
+BASE_DIR = pathlib.Path(
+    os.getenv("INSIGHT_SENTRY_NEWS_DIR") or "data/news/incoming/insight_sentry"
+)
 BASE_DIR.mkdir(parents=True, exist_ok=True)
 
 # -----------------------------------------------------------------------------

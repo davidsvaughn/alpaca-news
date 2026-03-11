@@ -44,7 +44,7 @@ Each news article arrives as a `News` Pydantic model, converted to a dict and sa
 | `updated_at` | str | ISO 8601 timestamp |
 | `images` | list | Article images (if any) |
 
-**Output**: Files saved to `output/alpaca/{timestamp}_{article_id}.json`
+**Output**: Files saved to `data/news/incoming/alpaca/{timestamp}_{article_id}.json`
 **Example filename**: `2026-02-18T12-27-55Z_50682104.json`
 
 ---
@@ -54,7 +54,7 @@ Each news article arrives as a `News` Pydantic model, converted to a dict and sa
 ### Flow
 
 ```
-Alpaca WebSocket → output/alpaca/*.json
+Alpaca WebSocket → data/news/incoming/alpaca/*.json
        ↓
 Watchdog (orchestrator.py) detects new file → enqueues path
        ↓
@@ -197,7 +197,7 @@ We currently only use the WebSocket stream, not the REST API. The REST API provi
 # .env
 ALPACA_API_KEY=<your-key-here>
 ALPACA_SECRET_KEY=<your-secret-here>
-ALPACA_OUTPUT_DIR=output/alpaca  # Where news JSON files are saved
+ALPACA_NEWS_DIR=data/news/incoming/alpaca  # Where news JSON files are saved
 ```
 
 ---

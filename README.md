@@ -79,8 +79,12 @@ News websocket connections are launched automatically as child subprocesses of t
 
 | Env var | Default | Description |
 |---------|---------|-------------|
-| `WS_INSIGHT_SENTRY` | `true` | Insight Sentry news stream → `output/insight_sentry/` |
-| `WS_ALPACA` | `false` | Alpaca news stream → `output/alpaca/` |
+| `WS_INSIGHT_SENTRY` | `true` | Insight Sentry news stream → `data/news/incoming/insight_sentry/` |
+| `WS_ALPACA` | `false` | Alpaca news stream → `data/news/incoming/alpaca/` |
+
+Incoming files are automatically archived to daily ZIPs under `data/news/archive/`:
+- `NEWS_ARCHIVE_HOT_HOURS` (default `24`) keeps loose JSON in the hot folder
+- `NEWS_ARCHIVE_RETENTION_DAYS` (default `90`) prunes old ZIP archives
 
 They terminate automatically when the trader app exits. If they don't (orphaned processes), kill them manually:
 

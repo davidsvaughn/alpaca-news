@@ -12,7 +12,7 @@ for offline labeling + policy learning.
 
 ## What works now
 
-- Watches `output/alpaca/*.json` for new news items (via watchdog + worker queue)
+- Watches `data/news/incoming/*/*.json` for new news items (via watchdog + worker queue)
 - Runs **keyword pre-filter** → **LLM triage** → **two-phase exploration** (Stage 2)
   - **Phase 1**: broad, cheap, shallow evidence gathering → generates competing hypotheses
   - **Phase 2**: selective deepening → confirms/refutes top-K hypotheses with gated follow-ups
@@ -77,7 +77,8 @@ runtime exploration phases.
 
 The runtime path is:
 
-1. `trader/online/orchestrator.py::run_watch_loop()` watches `output/alpaca/*.json`
+1. `trader/online/orchestrator.py::run_watch_loop()` watches the configured
+   `NEWS_WATCH_DIRS` (default: `data/news/incoming/alpaca,data/news/incoming/insight_sentry`)
    (watchdog → queue → worker thread).
 2. The worker calls `trader/online/orchestrator.py::process_news_file(...)`.
 3. Stage 1 triage runs: `trader/online/triage.py::run_triage(...)`.
@@ -183,7 +184,7 @@ Snapshots will be written to:
 ## Backfill (process existing Alpaca files)
 
 **Backfill** means: run the *same online pipeline* (triage → explore → seal Snapshot) over
-**already-existing** `output/alpaca/*.json` files.
+**already-existing** `data/news/incoming/.../*.json` files.
 
 It’s useful for:
 

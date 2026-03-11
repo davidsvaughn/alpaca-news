@@ -85,9 +85,15 @@ class Settings:
 
     # Paths
     news_watch_dirs: list[str]
+    alpaca_news_dir: str
+    insight_sentry_news_dir: str
+    news_archive_dir: str
     data_dir: str
     sqlite_path: str
     snapshots_dir: str
+    news_archive_hot_hours: int
+    news_archive_retention_days: int
+    news_archive_interval_s: int
 
     # Models (stage configs; providers inferred from model prefixes)
     triage_model: str
@@ -219,13 +225,31 @@ def load_settings(*, dotenv_path: str | None = None, override: bool = False) -> 
     online = _env_bool("ONLINE", False)
     online_auto_market_hours = _env_bool("ONLINE_AUTO_MARKET_HOURS", False)
 
-    # NEWS_WATCH_DIRS (comma-separated) takes priority; fall back to legacy ALPACA_OUTPUT_DIR
+    data_dir = _env_str("DATA_DIR", "data") or "data"
+    alpaca_news_dir = _env_str(
+        "ALPACA_NEWS_DIR",
+        _env_str("ALPACA_OUTPUT_DIR", os.path.join(data_dir, "news", "incoming", "alpaca")),
+    ) or os.path.join(data_dir, "news", "incoming", "alpaca")
+    insight_sentry_news_dir = _env_str(
+        "INSIGHT_SENTRY_NEWS_DIR",
+        os.path.join(data_dir, "news", "incoming", "insight_sentry"),
+    ) or os.path.join(data_dir, "news", "incoming", "insight_sentry")
+
+    # NEWS_WATCH_DIRS (comma-separated) can override the watched paths.
+    # If unset, default to the two websocket feed directories above.
     _watch_dirs_raw = _env_str("NEWS_WATCH_DIRS", "") or ""
     if _watch_dirs_raw.strip():
         news_watch_dirs = [d.strip() for d in _watch_dirs_raw.split(",") if d.strip()]
     else:
-        news_watch_dirs = [_env_str("ALPACA_OUTPUT_DIR", "output/alpaca") or "output/alpaca"]
-    data_dir = _env_str("DATA_DIR", "data") or "data"
+        news_watch_dirs = [alpaca_news_dir, insight_sentry_news_dir]
+
+    news_archive_dir = _env_str(
+        "NEWS_ARCHIVE_DIR",
+        os.path.join(data_dir, "news", "archive"),
+    ) or os.path.join(data_dir, "news", "archive")
+    news_archive_hot_hours = _env_int("NEWS_ARCHIVE_HOT_HOURS", 24)
+    news_archive_retention_days = _env_int("NEWS_ARCHIVE_RETENTION_DAYS", 90)
+    news_archive_interval_s = _env_int("NEWS_ARCHIVE_INTERVAL_S", 3600)
     sqlite_path = _env_str("SQLITE_PATH", os.path.join(data_dir, "trader.db")) or os.path.join(
         data_dir, "trader.db"
     )
@@ -339,9 +363,15 @@ def load_settings(*, dotenv_path: str | None = None, override: bool = False) -> 
         online=online,
         online_auto_market_hours=online_auto_market_hours,
         news_watch_dirs=news_watch_dirs,
+        alpaca_news_dir=alpaca_news_dir,
+        insight_sentry_news_dir=insight_sentry_news_dir,
+        news_archive_dir=news_archive_dir,
         data_dir=data_dir,
         sqlite_path=sqlite_path,
         snapshots_dir=snapshots_dir,
+        news_archive_hot_hours=news_archive_hot_hours,
+        news_archive_retention_days=news_archive_retention_days,
+        news_archive_interval_s=news_archive_interval_s,
         triage_model=triage_model,
         research_model=research_model,
         xsearch_model=xsearch_model,

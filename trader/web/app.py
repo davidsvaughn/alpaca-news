@@ -2043,8 +2043,22 @@ def create_app(
             f"<td><strong><code>{new_v}</code></strong></td></tr>"
             for name, old_v, new_v in changes
         )
-        restart_fields = {"mock_llm", "sqlite_path", "data_dir", "backfill_on_start",
-                          "backfill_limit", "x_stream_enabled", "x_stream_mode"}
+        restart_fields = {
+            "mock_llm",
+            "sqlite_path",
+            "data_dir",
+            "backfill_on_start",
+            "backfill_limit",
+            "x_stream_enabled",
+            "x_stream_mode",
+            "alpaca_news_dir",
+            "insight_sentry_news_dir",
+            "news_watch_dirs",
+            "news_archive_dir",
+            "news_archive_hot_hours",
+            "news_archive_retention_days",
+            "news_archive_interval_s",
+        }
         needs_restart = any(name in restart_fields for name, _, _ in changes)
         restart_note = (
             "<div class='alert alert-warning mt-2'>"
@@ -2576,7 +2590,21 @@ def _settings_groups(s: Settings) -> list[tuple[str, list[tuple[str, Any]]]]:
     # Map field names to groups (order matters for display)
     groups_map: list[tuple[str, list[str]]] = [
         ("Modes", ["learning_mode", "trading_mode", "debug", "online"]),
-        ("Paths", ["news_watch_dirs", "data_dir", "sqlite_path", "snapshots_dir"]),
+        (
+            "Paths",
+            [
+                "alpaca_news_dir",
+                "insight_sentry_news_dir",
+                "news_watch_dirs",
+                "news_archive_dir",
+                "news_archive_hot_hours",
+                "news_archive_retention_days",
+                "news_archive_interval_s",
+                "data_dir",
+                "sqlite_path",
+                "snapshots_dir",
+            ],
+        ),
         (
             "Models",
             [
