@@ -131,9 +131,11 @@ class LiveExitMonitor:
                                or exit_params.get("lookback", 80))
             bucket_s = int(live_overrides.get("bucket_s", 30))
             min_trades = int(live_overrides.get("min_trades_per_bucket", 3))
+            volume_mode = live_overrides.get("volume_mode", "proportional")
 
             result = loop.run_until_complete(
-                check_vdd_exit(pool, symbol, lookback_m, bucket_s, min_trades)
+                check_vdd_exit(pool, symbol, lookback_m, bucket_s, min_trades,
+                               volume_mode=volume_mode)
             )
             log.debug("VDD tick check %s: signal=%s", symbol, result)
             return result

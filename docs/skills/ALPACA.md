@@ -81,7 +81,7 @@ On timeout, `buy_and_confirm` cancels the pending order to prevent orphan positi
 - Limit orders only (market orders rejected)
 - Whole shares only (fractional not supported)
 - `time_in_force=DAY`, `extended_hours=True`
-- Stop orders only fire during regular hours
+- Stop orders only fire during regular hours (stops are `type=stop`, not limit — cannot use `extended_hours=True`; `live_monitor` is the only after-hours exit protection)
 
 ### Buy pricing during extended hours
 

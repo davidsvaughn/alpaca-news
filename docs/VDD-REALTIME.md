@@ -4,7 +4,7 @@
 > TimescaleDB `trades` table, with configurable bucket intervals and
 > time-based lookback windows.
 >
-> **Status**: Design complete, not yet implemented.
+> **Status**: Core implementation complete (`tick_collector/vdd.py`). Live monitor integration pending.
 >
 > See also:
 > - [TICK-COLLECTOR.md](TICK-COLLECTOR.md) — Collector service, TimescaleDB schema, L1 field details, timestamps
@@ -19,8 +19,10 @@
 > Key source files:
 > - `trader/market/backtest.py` — `_compute_vdd_signal_indices()` (line ~1304), `_run_volume_delta_divergence()` (line ~1852)
 > - `trader/online/live_monitor.py` — `LiveExitMonitor`, `evaluate_exit()` integration point
+> - `tick_collector/vdd.py` — Query-time VDD computation (3 volume modes, historical time range support)
+> - `tick_collector/classifier.py` — Lee-Ready direction classifier (midpoint comparison + tick rule fallback)
 > - `tick_collector/init.sql` — TimescaleDB `trades` table schema
-> - `tick_collector/collector.py` — L1 parser, direction classifier, volume differencing
+> - `tick_collector/collector.py` — L1 parser, volume differencing
 
 ---
 
@@ -41,9 +43,12 @@ works on **1-minute candle bars** from yfinance/Schwab candle API:
 ### What tick data enables
 
 The [tick collector](TICK-COLLECTOR.md) stores L1 updates in TimescaleDB with
-per-update `direction` (uptick/downtick from price comparison) and `volume_delta`
-(true volume from `total_volume` differencing — see
-[Volume Gap Tracking](TICK-COLLECTOR.md#volume-gap-tracking)). This enables:
+per-update `direction` and `volume_delta` (true volume from `total_volume`
+differencing — see [Volume Gap Tracking](TICK-COLLECTOR.md#volume-gap-tracking)).
+Direction is classified using the **Lee-Ready algorithm** (`tick_collector/classifier.py`):
+trade price is compared to the bid/ask midpoint (above → buyer-initiated, below →
+seller-initiated), with a simple tick rule fallback when price equals midpoint or
+bid/ask is unavailable. This enables:
 
 - **Sub-minute bucketing**: 10s, 30s, or any interval — not locked to 1-minute bars
 - **Intra-bar directional data**: ~20-50 L1 updates per minute, each independently
@@ -69,7 +74,7 @@ bucket intervals and lookback windows without schema changes.
 |-----------|------|---------|-------------|
 | `symbol` | str | `"AAPL"` | Stock symbol |
 | `lookback_m` | float | `80.0` | Time window for divergence detection (minutes). Shared with bar-based VDD — same param, same meaning. |
-| `bucket_s` | int | `30` | Bucket interval for aggregation (10, 30, 60, etc.). Tick-based only. |
+| `bucket_s` | int | `30` | Bucket interval for aggregation (10, 15, 30, 60, etc.). Tick-based only. |
 | `min_trades_per_bucket` | int | `3` | Skip buckets with fewer L1 updates (too noisy) |
 
 The number of bars in the lookback is derived: `lookback_bars = lookback_m * 60 / bucket_s`.
@@ -78,6 +83,14 @@ For 80 minutes with 30-second buckets: 160 bars.
 > **Note**: `lookback_m` is the single lookback parameter for both bar-based and tick-based VDD.
 > Bar-based treats it as bar count (1 bar = 1 minute). Tick-based converts to bucket count.
 > Legacy `{"lookback": 80}` configs still work (treated as minutes).
+
+#### Alternative: Trade-Count Bucketing (Tick Clock)
+
+`get_vdd_bars_by_trades(trades_per_bar=20)` groups a fixed number of L1 updates into
+each bar instead of using fixed time intervals. Every bar has the same statistical
+weight regardless of liquidity — liquid stocks get ~24s bars, thin stocks get ~4min
+bars. This eliminates the sparse-bucket problem where 30s buckets on low-volume
+stocks contain only 1-2 trades. See [VDD-COMPARISON.md § Trade-Count Bucketing](VDD-COMPARISON.md#trade-count-bucketing-tick-clock) for rationale and comparison results.
 
 ### Step 1: Query bucketed bars from TimescaleDB
 
@@ -137,6 +150,17 @@ provides a much more nuanced estimate of the true split.
 **Edge case**: If a bucket has 0 classified volume (all L1 updates had
 `last_size=0`, which shouldn't happen since we skip those), use the bar's
 close-to-close direction as fallback (same as current bar-based approach).
+
+#### Volume Modes
+
+`tick_collector/vdd.py` supports three volume classification modes (the
+`volume_mode` parameter) for comparison testing:
+
+| Mode | Description |
+|------|-------------|
+| `"proportional"` (default) | Distribute total volume using the visible uptick/downtick ratio from Lee-Ready classified trades. Best estimate of true split. |
+| `"visible_only"` | Use only directly classified (visible) trade volume — no extrapolation. Conservative; ignores unclassified volume. |
+| `"bar_binary"` | Mimic the backtest inter-bar tick rule — entire bucket volume assigned up or down based on close-to-close direction. Baseline for comparison. |
 
 ### Step 3: VDD signal detection (Python)
 
@@ -219,10 +243,13 @@ available, with fallback to the bar-based approach when it's not.
 
 **Files to create/modify:**
 
-1. **`tick_collector/vdd.py`** (new) — Core VDD computation:
-   - `async def get_vdd_bars(pool, symbol, lookback_m, bucket_s)` — query + proportional distribution
+1. **`tick_collector/vdd.py`** (implemented) — Core VDD computation:
+   - `async def get_vdd_bars(pool, symbol, lookback_m, bucket_s, volume_mode, *, start_time, end_time)` — query + volume classification
    - `def compute_vdd_signal(bars, lookback_bars)` — signal detection (pandas)
    - `async def check_vdd_exit(pool, symbol, ...)` — public API for live exit monitor
+   - `def find_first_signal(bars, lookback_bars, after_bucket)` — find first signal in a bar set
+   - Three volume modes: `"proportional"` (default), `"visible_only"`, `"bar_binary"`
+   - Historical time range queries via `start_time`/`end_time` parameters (UTC)
 
 2. **`trader/market/backtest.py`** (modify) — Accept `lookback_m` param:
    - Bar-based VDD reads `lookback_m` (falls back to legacy `lookback` key)

@@ -1,9 +1,14 @@
 # Real-Time Volume Delta: Shadow Mode & Data Source Analysis
 
-> Hub document for real-time volume delta computation, shadow mode collector,
-> and the transition from backtest bar-based approximation to tick-level signals.
+> **SUPERSEDED**: The shadow collector described in this document has been replaced
+> by the standalone **`tick_collector/`** service, which provides TimescaleDB storage,
+> Lee-Ready trade classification, per-trade granularity, and continuous aggregates.
+> See **[TICK-COLLECTOR.md](TICK-COLLECTOR.md)** for the current system.
 >
-> Last updated: 2026-03-10
+> This document is retained as historical context for the data source analysis and
+> early shadow-mode experiments.
+>
+> Last updated: 2026-03-11
 
 ---
 
@@ -36,9 +41,13 @@ Can we trust the backtest's tuned parameters (lookback=80) in a tick-level envir
 
 ---
 
-## Current Status: What's Wired Up Today
+## Current Status
 
-**Both backtesting and live trading use the same bar-based VDD computation.**
+**The shadow collector has been superseded by [`tick_collector/`](../tick_collector/) —
+a standalone service with TimescaleDB, Lee-Ready classification, and per-trade
+granularity.** See [TICK-COLLECTOR.md](TICK-COLLECTOR.md) for the current hub document.
+
+**Both backtesting and live trading still use the same bar-based VDD computation.**
 
 The live exit monitor (`live_monitor.py`) calls `evaluate_exit()` from `backtest.py`,
 which uses `_compute_volume_delta()` — the inter-bar tick rule on 1-minute OHLCV bars.
@@ -174,7 +183,10 @@ Inter-bar tick rule vs Close Position Formula on 1-minute bars.
 
 ---
 
-## Shadow Mode Collector
+## Shadow Mode Collector (LEGACY)
+
+> **LEGACY**: This shadow collector has been superseded by the `tick_collector/`
+> service. The description below is retained for historical reference.
 
 ### Architecture
 
@@ -347,7 +359,11 @@ time window.
 
 ---
 
-## Recommendations
+## Recommendations (LEGACY)
+
+> **LEGACY**: These phases were written for the shadow collector approach.
+> The `tick_collector/` service supersedes this roadmap. See
+> [TICK-COLLECTOR.md](TICK-COLLECTOR.md) for current plans.
 
 ### Phase 1 (Now): Shadow Data Collection
 

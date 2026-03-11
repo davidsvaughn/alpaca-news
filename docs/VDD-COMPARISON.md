@@ -1,14 +1,14 @@
 # VDD Comparison: Bar-Based vs Tick-Level Volume Delta
 
 > Comparing the bar-based (inter-bar tick rule) and tick-level volume delta methods
-> for the Volume Delta Divergence (VDD) exit strategy, using real portfolio data
-> from live config `lc_ab8aa7f25745`.
+> for the Volume Delta Divergence (VDD) exit strategy, using real portfolio data.
 >
-> See also: [VOLUME-DELTA-REALTIME.md](VOLUME-DELTA-REALTIME.md) for shadow collector architecture
-> and the [Current Status](VOLUME-DELTA-REALTIME.md#current-status-whats-wired-up-today) section
-> for what's actually wired up today (spoiler: both backtest and live use the same bar-based VDD).
+> **Current comparison tool**: `scripts/vdd_comparison.py` — queries tick data from
+> TimescaleDB (populated by `tick_collector/`) and compares against bar-based OHLCV.
+> See [TICK-COLLECTOR.md](TICK-COLLECTOR.md) for the data collection system and
+> [VDD-REALTIME.md](VDD-REALTIME.md) for the tick-based VDD design.
 >
-> Started: 2026-03-09
+> Started: 2026-03-09 | Updated: 2026-03-12
 
 ---
 
@@ -34,36 +34,48 @@ the exit signals have differed? Is there a systematic pattern (earlier? later? r
 Both methods produce 1-minute bars with uptick/downtick volume splits. The difference
 is **how volume is classified within each bar**:
 
-| Aspect | Bar-Based (inter-bar tick rule) | Tick-Level (shadow collector) |
+| Aspect | Bar-Based (inter-bar tick rule) | Tick-Level (tick_collector → TimescaleDB) |
 |--------|-------------------------------|------------------------------|
-| **Classification** | Entire bar volume → uptick OR downtick | Each tick's volume classified independently |
-| **Rule** | `Close_t > Close_{t-1}` → all uptick | `Price_tick > Price_{prev_tick}` → uptick |
-| **Granularity** | 1 decision per bar (binary) | ~55 decisions per bar per minute |
+| **Classification** | Entire bar volume → uptick OR downtick | Each tick classified via Lee-Ready (bid/ask midpoint) + tick-rule fallback |
+| **Rule** | `Close_t > Close_{t-1}` → all uptick | `Price > midpoint` → uptick (Lee-Ready), else `Price > prev_price` (tick rule) |
+| **Granularity** | 1 decision per bar (binary) | ~20-50 L1 updates per minute per symbol |
 | **Captures intra-bar reversals** | No | Yes |
-| **Source** | OHLCV bars (yfinance/Schwab REST) | Schwab LEVELONE_EQUITIES stream |
+| **Source** | OHLCV bars (Schwab REST / yfinance fallback) | Schwab LEVELONE_EQUITIES stream → TimescaleDB |
+| **Bucket flexibility** | Fixed 1-minute | Configurable: 15s, 30s, 60s via `bucket_s` |
+| **Volume modes** | All-or-nothing (binary) | `proportional`, `visible_only`, `bar_binary` (see `tick_collector/vdd.py`) |
 
 The VDD signal fires when **both** conditions are true:
 1. Price makes a new high over the previous `lookback` bars
 2. Cumulative volume delta is **lower** than it was `lookback` bars ago
 
-## What the Shadow Collector Actually Captures
+## Data Sources
 
-Schwab streams ~1 price+volume update per second per symbol (raw ticks). The shadow
-collector does two things with each tick:
+### Current: tick_collector → TimescaleDB
 
-1. **Accumulates running totals** — every tick updates cumulative uptick/downtick
-   counters in real-time (in memory)
-2. **Snapshots into 1-minute bars** — at each minute boundary, it captures the
-   minute's OHLCV + uptick/downtick split and writes it to disk (JSONL)
+The `tick_collector/` service streams Schwab LEVELONE_EQUITIES data into TimescaleDB.
+**Every L1 update is persisted** as a row in the `trades` table with:
+- Price, size, direction (Lee-Ready classified), volume_delta, total_volume, exchange
+- Two timestamps: `time` (Schwab trade_time) and `received_at` (local clock)
 
-**Only the 1-minute bar snapshots are persisted.** The ~60 individual ticks within
-each minute are consumed in real-time and then discarded. This means:
+A `bars_1m` continuous aggregate pre-computes 1-minute bars with uptick/downtick splits.
+For comparison testing, `tick_collector/vdd.py` can re-bucket at any interval (15s, 30s, 60s)
+using the raw `trades` data.
 
-- **Real-time** (live collector in memory): VDD can be checked at any moment — if
-  price makes a new high at 10:00:23 and cumulative delta is declining, it detects
-  that immediately, not at 10:01:00.
-- **From saved data** (retrospective analysis like this comparison): we can only
-  evaluate VDD at 1-minute bar boundaries, because that's what's on disk.
+### Legacy: Shadow Collector (SUPERSEDED)
+
+> The shadow collector (`trader/market/volume_delta_shadow.py`) was the predecessor.
+> It accumulated uptick/downtick in memory and snapshotted 1-minute bars to JSONL files.
+> Only the 1-minute bar snapshots were persisted — individual ticks were discarded.
+> **Critical limitation**: Schwab WebSocket drops during market hours with no reconnection.
+> Phase 1 analysis (below) used shadow data and was inconclusive due to this data gap.
+
+### Why Raw Tick Storage Is Better
+
+Unlike the shadow collector's 1-minute snapshots:
+- Sub-minute bucketing (15s, 30s) enables earlier detection
+- Lee-Ready classification uses bid/ask midpoint, not just price-vs-price
+- Volume modes (proportional, visible_only) can be compared at query time
+- No data loss — every L1 update is preserved
 
 ### Why 1-Minute Bars Are Sufficient for This Comparison
 
@@ -79,15 +91,19 @@ method misses entirely. That more accurate split flows into cumulative delta, wh
 flows into VDD signals — so the signal can fire on a different bar even at the same
 1-minute resolution.
 
-### Future: Sub-Minute VDD from Saved Data
+### Sub-Minute VDD from Tick Data
 
-If we want to evaluate VDD at finer granularity from saved data (e.g., every second
-instead of every minute), we would need to modify the shadow collector to persist
-finer-grained snapshots — either raw tick data or sub-minute bars (e.g., 5-second
-or 15-second intervals). This would increase storage but enable retrospective
-sub-minute signal analysis, potentially catching VDD signals up to 59 seconds earlier
-than 1-minute bar resolution allows. Not needed for the current comparison, but worth
-considering for a future iteration.
+The `tick_collector` stores **every L1 update** in TimescaleDB's `trades` table.
+At query time, `tick_collector/vdd.py` re-buckets at any interval:
+
+| Bucket | L1 samples/bucket | Signal latency vs 1-min |
+|--------|-------------------|------------------------|
+| 60s    | ~20-50            | Same as bar-based      |
+| 30s    | ~10-25            | Up to ~30s earlier     |
+| 15s    | ~5-12             | Up to ~45s earlier     |
+
+The comparison script (`scripts/vdd_comparison.py`) sweeps all three bucket sizes
+across multiple volume modes and lookback periods.
 
 ### Future: Trade-Size Filtering (Institutional Flow)
 
@@ -134,21 +150,30 @@ sophisticated volume delta signal in the future.
 
 ## Lookback Translation
 
-**No translation needed.** Both methods produce 1-minute bars, so `lookback=80` means
-"80 one-minute bars" (= 80 minutes) in both cases. The only difference is the
-uptick/downtick split within each bar, not the bar boundaries or time scale.
+With sub-minute buckets, `lookback_m` (minutes) replaces `lookback` (bar count):
+- `lookback_m=80` with 60s buckets → 80 bars (same as bar-based)
+- `lookback_m=80` with 30s buckets → 160 bars (same time window, finer resolution)
+- `lookback_m=80` with 15s buckets → 320 bars
+
+The `bucket_s` parameter in `tick_collector/vdd.py` controls this.
 
 ## Data Availability
 
-**Portfolio**: `lc_ab8aa7f25745` (started 2026-03-05)
-- 56 total watches: 20 holding, 36 exited
-- 33 exits by VDD signal, 3 by guard_stop
-- Shadow tick data covers **all 55 portfolio symbols** (100%)
-- Shadow data covers **all exit dates** (100%)
-- Shadow data stored globally by symbol at `~/.cache/alpaca-news/volume_delta_shadow/{SYMBOL}/`
+### tick_collector (current, 2026-03-10+)
 
-Date range of shadow data varies by symbol (depends on when each was first tracked),
-but all symbols have data covering their full holding period in this portfolio.
+**Portfolio**: `lc_d58c66d24787` (started 2026-03-09)
+- 69 total watches: 20 holding, 49 exited (39 signal, 10 guard_stop)
+- Tick data in TimescaleDB for **151 symbols** (all held + cooling-off)
+- **March 11 has excellent coverage**: 7 key symbols at 100% (390/390 bars), many >95%
+- March 10 has a gap (collector restarted mid-day)
+- tick_collector dynamically syncs symbols from the portfolio
+
+### Shadow collector (legacy, pre-2026-03-10)
+
+**Portfolio**: `lc_ab8aa7f25745` (started 2026-03-05)
+- Shadow data stored at `~/.cache/alpaca-news/volume_delta_shadow/{SYMBOL}/`
+- **Coverage was insufficient** — Schwab WebSocket drops during market hours
+- See Phase 1 results below for details
 
 ---
 
@@ -318,3 +343,204 @@ WebSocket drops, streaming stops until the next explicit `start_stream()` call.
    positions with >50% relevant coverage.
 
 The comparison script and infrastructure are ready. The blocker is stream reliability.
+
+---
+
+## Phase 3: tick_collector-Based Comparison (2026-03-11, updated 2026-03-12)
+
+### Infrastructure
+
+The `tick_collector` service replaced the shadow collector for data collection.
+Key improvements:
+- **Every L1 update persisted** in TimescaleDB (not just 1-minute snapshots)
+- **Lee-Ready classification** (bid/ask midpoint) instead of simple tick rule
+- **Sub-minute bucketing** at query time (15s, 30s, 60s)
+- **Three volume modes**: `proportional`, `visible_only`, `bar_binary`
+
+### The Comparison Script
+
+**`scripts/vdd_comparison.py`** — runs three phases:
+
+1. **Phase 1 — Coverage**: For each exited position across all portfolios, checks tick
+   data availability in TimescaleDB. Requires ≥10 trades and ≥30% minute coverage.
+2. **Phase 2 — Side-by-side**: Default config (60s bucket, proportional, lookback=80).
+   Bar-based uses `_get_ohlcv_1m()` from `backtest.py` — the exact same Schwab →
+   yfinance infrastructure with disk cache that live trading and backtesting use.
+   Tick-based queries TimescaleDB via `tick_collector/vdd.py`.
+3. **Phase 3 — Multi-dimensional sweep**: 3 bucket sizes × 3 volume modes × 4 lookback
+   periods = 36 configurations, each tested against all usable positions.
+
+Usage: `uv run python scripts/vdd_comparison.py [live_config_id ...]`
+(defaults to 4 portfolios if no args)
+
+### Data: 4 Portfolios, 206 Positions
+
+Tested across four portfolios to maximize sample:
+- `lc_d58c66d24787`, `lc_72f6df86086e`, `lc_ab8aa7f25745`, `lc_dd6b0b29a8ea`
+- **206 total exited positions** (154 signal, 22 guard_stop, 30 other)
+- **47 usable** (had sufficient tick data), **159 skipped** (no tick data — entered
+  before tick_collector was running, or symbol not in tick_collector's symbol list)
+- Tick data primarily covers March 11, 2026 (tick_collector started March 10 with
+  a mid-day gap; March 11 has solid coverage)
+
+### Phase 2 Results: Default Config (60s bucket, proportional, lookback=80)
+
+**11 positions had both bar-based and tick-based signals.**
+
+| Symbol | Bar Exit (ET) | Tick Exit (ET) | Delta | Bar P&L | Tick P&L | Actual P&L |
+|--------|--------------|----------------|-------|---------|----------|------------|
+| MS     | 03/11 12:41  | 03/11 12:41    | 0m    | -0.85%  | -0.88%   | -0.85%     |
+| MS     | 03/11 12:41  | 03/11 12:41    | 0m    | -0.85%  | -0.88%   | -0.85%     |
+| MOS    | 03/11 13:32  | 03/11 11:03    | -149m | +7.28%  | +7.12%   | +7.28%     |
+| MOS    | 03/11 13:32  | 03/11 11:03    | -149m | +6.56%  | +6.40%   | +6.56%     |
+| ACTG   | 03/11 12:58  | 03/11 12:58    | 0m    | +5.93%  | +5.93%   | +4.45%     |
+| TMC    | 03/11 12:57  | 03/11 13:16    | +19m  | +3.52%  | +3.36%   | +3.52%     |
+| TSLA   | 03/11 15:04  | 03/11 15:04    | 0m    | -0.94%  | -0.94%   | -0.94%     |
+| TSLA   | 03/11 15:04  | 03/11 15:04    | 0m    | +1.41%  | +1.41%   | +1.33%     |
+| GD     | 03/11 13:28  | 03/11 11:37    | -111m | -1.38%  | -1.07%   | -1.37%     |
+| XOM    | 03/10 18:45  | 03/11 09:38    | +893m | -0.56%  | -0.14%   | +1.34%     |
+| UPST   | 03/11 14:43  | 03/11 14:46    | +3m   | +0.45%  | +0.63%   | +0.19%     |
+
+**Summary:**
+- **Bar avg P&L: +1.87%** (median +0.45%)
+- **Tick avg P&L: +1.90%** (median +0.63%)
+- **P&L diff: +0.03%** — essentially identical
+- **Timing**: 5 same (±30s), 3 tick earlier, 3 tick later. **Median delta: 0 min.**
+- **20 positions** where bar signaled but tick did NOT (insufficient tick history
+  for the lookback window — tick_collector hasn't been running long enough)
+
+**Notable cases:**
+- **MOS**: tick fired **149 min earlier** — caught the divergence much sooner, though
+  both ended highly profitable (+7.12% vs +7.28%)
+- **GD**: tick fired **111 min earlier** — earlier exit avoided more loss (-1.07% vs -1.38%)
+- **XOM**: bar fired at 18:45 (after-hours, wouldn't be acted on), tick fired next
+  morning at 09:38. Tick P&L was better (-0.14% vs -0.56%), but both missed the
+  actual +1.34% the position achieved.
+- **MS, ACTG, TSLA**: identical timing — validates that when both methods have data,
+  they agree on the signal bar
+
+### Phase 3 Results: Multi-Dimensional Sweep (36 configurations)
+
+Top 10 configurations ranked by average P&L at tick-based VDD exit:
+
+| Bucket | Mode          | Lookback | Signals | Avg P&L | Med P&L | Std P&L |
+|--------|---------------|----------|---------|---------|---------|---------|
+| 30s    | visible_only  | 40m      | 14/47   | +3.96%  | +3.59%  | 6.47%   |
+| 30s    | visible_only  | 100m     | 4/47    | +3.37%  | +3.55%  | 3.59%   |
+| 30s    | proportional  | 100m     | 4/47    | +3.33%  | +3.29%  | 3.61%   |
+| 15s    | proportional  | 80m      | 4/47    | +3.26%  | +3.92%  | 1.21%   |
+| 30s    | bar_binary    | 60m      | 12/47   | +2.93%  | +0.11%  | 7.18%   |
+| 15s    | bar_binary    | 60m      | 6/47    | +2.90%  | +1.63%  | 2.86%   |
+| 30s    | proportional  | 80m      | 9/47    | +2.76%  | +3.90%  | 2.92%   |
+| 15s    | visible_only  | 60m      | 5/47    | +2.76%  | +1.35%  | 3.39%   |
+| 60s    | visible_only  | 40m      | 15/47   | +2.54%  | -0.14%  | 6.28%   |
+| 30s    | visible_only  | 80m      | 5/47    | +2.46%  | +0.19%  | 3.67%   |
+
+**Bar-based baseline** (lookback=80, inter-bar tick rule): **avg P&L +0.20%**
+
+Bottom 5 (worst performing):
+
+| Bucket | Mode          | Lookback | Signals | Avg P&L |
+|--------|---------------|----------|---------|---------|
+| 15s    | visible_only  | 100m     | 1/47    | -0.88%  |
+| 15s    | proportional  | 100m     | 4/47    | -0.83%  |
+| 30s    | bar_binary    | 80m      | 3/47    | -0.33%  |
+| 30s    | bar_binary    | 100m     | 2/47    | +0.30%  |
+| 15s    | visible_only  | 80m      | 1/47    | +0.46%  |
+
+### Key Observations
+
+**Caveats first**: Sample size is limited (47 usable positions, mostly from one trading
+day). Configs with few signals (1-4) are unreliable. These are early observations, not
+conclusions.
+
+1. **When both methods have data, they largely agree.** 5 of 11 positions with both
+   signals fired on the exact same bar (0 min delta). Median delta was 0 minutes.
+   This validates the tick pipeline implementation.
+
+2. **Tick-based VDD can fire significantly earlier.** MOS (-149m) and GD (-111m) are
+   the standout cases. The tick method detected the volume-delta divergence while the
+   bar-based method was still accumulating evidence. This is the core thesis for
+   tick-based VDD.
+
+3. **Shorter lookbacks outperform longer ones.** The best configs cluster around
+   40-60 minute lookbacks. The default 80-minute lookback is middle-of-the-road.
+   With tick-level volume classification, the signal is cleaner and doesn't need
+   as long a lookback to detect divergence.
+
+4. **`visible_only` slightly edges out `proportional`.** The top config is 30s /
+   visible_only / 40m. Proportional distribution (extrapolating unclassified volume
+   using the uptick/downtick ratio) may add noise — the directly classified trades
+   alone may be a cleaner signal.
+
+5. **`bar_binary` on tick data is viable but volatile.** It performs mid-range on
+   average but has the highest standard deviation — expected since it throws away
+   intra-bar information.
+
+6. **Finer buckets (15s, 30s) find fewer signals but with higher average P&L.**
+   The 15s configs often found only 1-4 signals (insufficient for conclusions) but
+   those signals tended to be high quality. The 30s bucket seems like a sweet spot
+   between signal count and quality.
+
+7. **The big gap is coverage, not methodology.** 20 positions had bar-based signals
+   but no tick-based signal — the tick_collector simply hasn't been running long
+   enough. With more data, the tick method should match or exceed bar-based signal
+   detection rates.
+
+### Limitations
+
+1. **Sample size**: 47 usable positions from one primary trading day (March 11).
+   Many configurations had <5 signals — not enough for statistical significance.
+2. **Survivorship bias in coverage**: Positions with tick data are biased toward
+   recent entries (March 10-11). Earlier entries lack tick data entirely.
+3. **No monitoring-window metadata**: Can't distinguish "system was actively trading"
+   from "system was off" — using market-hours heuristic (9:30-16:00 ET) as proxy.
+4. **Deduplication imperfect**: Same position may appear in multiple portfolios
+   with slightly different entry prices (different accounts). Dedup by
+   (symbol, entry_time) catches most but not all.
+
+### Trade-Count Bucketing (Tick Clock)
+
+All results above use **time-based** bucketing (fixed 15s/30s/60s intervals). This
+creates a problem for thinly-traded stocks: a 30s bucket might contain only 1-2 L1
+updates, making the volume classification meaningless. The `min_trades_per_bucket`
+filter removes these, but that creates gaps in the time series and stretches the
+effective lookback window.
+
+**Trade-count bucketing** solves this by grouping a fixed number of L1 updates into
+each bar. Every bar has the same statistical weight regardless of liquidity:
+
+| Stock liquidity | L1 rate  | trades_per_bar=20 | Effective bar width |
+|----------------|----------|-------------------|---------------------|
+| High (TSLA)    | ~50/min  | 20 trades         | ~24s                |
+| Medium (GD)    | ~15/min  | 20 trades          | ~80s                |
+| Low (PELI)     | ~3/min   | 20 trades          | ~7min               |
+
+This is "tick clock" or "volume clock" bucketing — a standard technique in market
+microstructure (see López de Prado, *Advances in Financial Machine Learning*). The
+argument: information arrives per-trade, not per-second. Time-based bars oversample
+quiet periods and undersample active ones.
+
+**Implementation**: `get_vdd_bars_by_trades()` in `tick_collector/vdd.py`. Fetches raw
+trades, assigns each to a bar group via `row_number // trades_per_bar`, then aggregates
+OHLCV + uptick/downtick per group. Returns the same DataFrame format as time-based
+`get_vdd_bars()`, so downstream signal detection is unchanged.
+
+**Lookback with trade-count bars**: The lookback window is still specified in minutes
+(`lookback_m`), but must be converted to a bar count based on the actual bar rate for
+each symbol. For the comparison script, we can compute `lookback_bars` from the data:
+`lookback_bars = int(lookback_m * 60 / median_bar_duration_s)`.
+
+**Not yet tested** — added to the comparison script's TODO. Suggested sweep:
+`trades_per_bar` in [10, 20, 30, 50] across the same volume modes and lookback periods.
+
+### Next Steps
+
+1. **Accumulate more data**: Run tick_collector for 1+ weeks to get meaningful sample
+   (target: 100+ positions with >80% tick coverage each)
+2. **Add monitoring-window metadata** to watches (when live_monitor was actively checking)
+3. **Re-run comparison** with larger sample — current observations may shift
+4. **Test trade-count bucketing**: Sweep `trades_per_bar` in [10, 20, 30, 50] —
+   see TODO in `scripts/vdd_comparison.py`
+5. **Test recommended config**: Deploy 30s / visible_only / 40m alongside current
+   bar-based VDD in shadow mode (compute but don't act) to validate on live data

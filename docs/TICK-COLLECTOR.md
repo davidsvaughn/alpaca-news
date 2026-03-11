@@ -9,7 +9,7 @@
 > Started: 2026-03-10
 >
 > See also:
-> - [VOLUME-DELTA-REALTIME.md](VOLUME-DELTA-REALTIME.md) — Shadow collector architecture (predecessor)
+> - [VOLUME-DELTA-REALTIME.md](VOLUME-DELTA-REALTIME.md) — Shadow collector architecture (superseded by tick_collector)
 > - [VDD-COMPARISON.md](VDD-COMPARISON.md) — Bar-based vs tick-level comparison (blocked on data)
 > - [SchwabStreamerAPI_LEVELONE.md](refs/SchwabStreamerAPI_LEVELONE.md) — L1 field reference
 > - [docker-compose.yml](../docker-compose.yml) — TimescaleDB container
@@ -26,13 +26,14 @@
 5. [Data Sources](#data-sources)
 6. [Storage: TimescaleDB](#storage-timescaledb)
 7. [Volume Gap Tracking](#volume-gap-tracking)
-8. [Collector ↔ Trader Communication](#collector--trader-communication)
-9. [Running the Collector](#running-the-collector)
-10. [Deployment](#deployment)
-11. [Roadmap](#roadmap)
-12. [Decisions Log](#decisions-log)
-13. [Open Questions](#open-questions)
-14. [Issues / Blockers](#issues--blockers)
+8. [Trade Classification: Lee-Ready Algorithm](#trade-classification-lee-ready-algorithm)
+9. [Collector ↔ Trader Communication](#collector--trader-communication)
+10. [Running the Collector](#running-the-collector)
+11. [Deployment](#deployment)
+12. [Roadmap](#roadmap)
+13. [Decisions Log](#decisions-log)
+14. [Open Questions](#open-questions)
+15. [Issues / Blockers](#issues--blockers)
 
 ---
 
@@ -63,7 +64,7 @@ We need:
 
 | Tier | Source | Trade-Size Filtering | Status |
 |------|--------|---------------------|--------|
-| **1** (legacy) | L1: `last_price` + `total_volume` differencing | None — all trades lumped | Shadow collector (active) |
+| **1** (legacy) | L1: `last_price` + `total_volume` differencing | None — all trades lumped | Shadow collector (superseded by tick_collector) |
 | **2** (primary) | L1 + `last_size` (9), `trade_time` (35), `last_mic_id` (41) | Approximate — visible trade + volume gap tracking | **Collector built, needs market-hours test** |
 | **3** (ideal) | `TIMESALE_EQUITY` per-trade feed | Exact — every trade visible | May be unavailable (code=11 outside hours) |
 
@@ -162,7 +163,7 @@ tick_collector/
 | Component | File | Description |
 |-----------|------|-------------|
 | `CollectorConfig` | `config.py` | Loads DSN, Schwab creds, symbols from env + file |
-| `TickClassifier` | `classifier.py` | Compares current price to previous per-symbol. First trade = 0. |
+| `TickClassifier` | `classifier.py` | Lee-Ready algorithm: classifies trades as buyer/seller-initiated using bid/ask midpoint, tick rule fallback. See [Trade Classification](#trade-classification-lee-ready-algorithm). |
 | `TradeBuffer` | `buffer.py` | Thread-safe deque. schwabdev thread appends, async loop drains. |
 | `Trade` | `db.py` | Dataclass with `source` ("L1"/"TS"), `volume_delta`, `total_volume` |
 | `TickCollector` | `collector.py` | Main orchestrator. Subscribes to both L1 and TIMESALE, parses messages, manages buffer + flush loop. |
@@ -375,6 +376,46 @@ In `bars_1m`:
 
 This is an inherent limitation of Tier 2. If TIMESALE_EQUITY becomes available,
 all trades are individually visible and `unclassified_vol` drops to 0.
+
+---
+
+## Trade Classification: Lee-Ready Algorithm
+
+The collector classifies each trade as buyer-initiated (+1), seller-initiated (-1),
+or neutral (0) using the **Lee-Ready algorithm**, a well-known academic method for
+inferring trade direction from quote data.
+
+**Implementation**: `tick_collector/classifier.py` (`TickClassifier`)
+
+### How it works
+
+1. **Quote rule (primary)**: Compare the trade price to the bid/ask midpoint.
+   - Price > midpoint → buyer-initiated (+1)
+   - Price < midpoint → seller-initiated (-1)
+   - Price = midpoint → fall through to tick rule
+
+2. **Tick rule (fallback)**: Compare the trade price to the previous trade price
+   for the same symbol.
+   - Price > previous → uptick (+1)
+   - Price < previous → downtick (-1)
+   - Price = previous or no previous trade → neutral (0)
+
+The tick rule is also used when bid/ask data is unavailable (common on L1 updates
+where quote fields are missing).
+
+### Where classification flows
+
+- The classified `direction` is stored in the `direction` column of the `trades` table.
+- The `bars_1m` continuous aggregate uses direction to compute:
+  - **`uptick_vol`**: `sum(size) FILTER (WHERE direction = 1)` — buyer-initiated volume
+  - **`downtick_vol`**: `sum(size) FILTER (WHERE direction = -1)` — seller-initiated volume
+  - **`net_delta`**: `sum(size * direction)` — net buying/selling pressure
+- These feed directly into the trader app's VDD (Volume Delta Divergence) computation.
+
+### Reference
+
+Lee, C. M. C., & Ready, M. J. (1991). "Inferring Trade Direction from Intraday Data."
+*Journal of Finance*, 46(2), 733-746.
 
 ---
 
@@ -613,6 +654,7 @@ Key observations:
 | 2026-03-10 | asyncpg for DB access | Async-native, matches collector's asyncio flush loop. Batch `executemany` for inserts. |
 | 2026-03-10 | Thread-safe buffer (deque + lock) | schwabdev callback runs on its own thread; async flush loop runs on asyncio. Buffer bridges the two. |
 | 2026-03-10 | Direction classified in collector, not DB | Per-symbol price state tracking is simpler in Python than SQL window functions. First trade of session = 0 (zero-tick). |
+| 2026-03-10 | Lee-Ready algorithm for trade classification | Well-established academic method (Lee & Ready, 1991). Quote rule (bid/ask midpoint) is more accurate than simple tick rule; tick rule used as fallback when quotes unavailable. |
 
 ---
 
@@ -637,8 +679,8 @@ Key observations:
       worst (94-98%), AAPL best (54%). Regular session will likely be similar or higher.
 - [ ] **OAuth token refresh during stream**: Does schwabdev auto-refresh the OAuth
       token while the WebSocket is open? Tokens expire every 30 minutes.
-- [ ] **Existing shadow collector**: Keep running in parallel during transition?
-      Or disable once tick-collector is proven reliable?
+- [x] **Existing shadow collector**: tick_collector supersedes the shadow collector.
+      Disable shadow collector once tick_collector is proven reliable during market hours.
 
 ---
 

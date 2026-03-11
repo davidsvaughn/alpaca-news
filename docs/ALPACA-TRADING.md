@@ -497,7 +497,7 @@ When enabled, the system trades during pre-market (4:00 AM ET) through after-hou
 | **Sell orders** | Market order via `close_position()` | Limit order, whole shares only, `extended_hours=True` |
 | **Time in force** | DAY | DAY |
 | **Fractional shares** | Supported | NOT supported (rounded down to whole shares) |
-| **Stop orders** | GTC or DAY | Stops submitted normally but only fire during market hours |
+| **Stop orders** | GTC or DAY | Accepted but only fire during regular hours (see note below) |
 
 #### Key behaviors and lessons learned
 
@@ -511,11 +511,13 @@ When enabled, the system trades during pre-market (4:00 AM ET) through after-hou
 
 4. **Longer fill timeout** — Extended hours use `ALPACA_EXTENDED_FILL_TIMEOUT` (default **60s**, env-configurable) vs the regular `ALPACA_FILL_TIMEOUT` (default 30s). Thin liquidity means fills take longer. If the order still doesn't fill, it is cancelled to prevent orphan positions.
 
-5. **Stop orders hold shares** — Before selling during extended hours, all open orders for the symbol (stops, etc.) are auto-cancelled. Open orders reserve ("hold") shares, causing Alpaca to reject sell orders with "insufficient qty available."
+5. **Stop orders don't fire during extended hours** — Only limit orders can use `extended_hours=True`. Stop orders are `type=stop` (not limit), so they cannot opt into extended-hours execution. A DAY stop is only valid during regular hours (9:30-16:00); if submitted after-hours, Alpaca queues it for the next trading day. **During extended hours, `live_monitor` is the only exit protection** — it periodically checks exit conditions and submits limit sell orders when triggered.
 
-6. **Order status** — Extended-hours orders go to `pending_new` first (vs `accepted` during regular hours) but fill quickly if liquidity exists.
+6. **Stop orders hold shares** — Before selling during extended hours, all open orders for the symbol (stops, etc.) are auto-cancelled. Open orders reserve ("hold") shares, causing Alpaca to reject sell orders with "insufficient qty available."
 
-7. **Lower liquidity** — Extended hours have wider spreads and thinner order books. Fill may take longer or not happen at all before DAY expiration.
+7. **Order status** — Extended-hours orders go to `pending_new` first (vs `accepted` during regular hours) but fill quickly if liquidity exists.
+
+8. **Lower liquidity** — Extended hours have wider spreads and thinner order books. Fill may take longer or not happen at all before DAY expiration.
 
 #### System gates affected
 
@@ -684,7 +686,7 @@ For each holding watch with an Alpaca position:
 4. Update `watch.alpaca_stop_order_id` with the new order ID
 5. Log loudly if a stop cannot be set — that position is unprotected
 
-For `fractional_day` mode, there is a **brief window without stop protection** between market close (when DAY stops expire) and the next market open (when new stops are submitted). Extended-hours trading is unprotected. For full overnight protection, use `whole_shares` mode.
+For `fractional_day` mode, there is a **window without stop protection** between market close (when DAY stops expire) and the next market open (when new stops are submitted). **Extended-hours trading has no stop protection** — only `live_monitor` periodic exit checks protect positions after-hours (stops cannot use `extended_hours=True` because only limit orders support that flag). For full overnight protection, use `whole_shares` mode (GTC stops persist across sessions).
 
 ### How Whole-Share Mode Works
 

@@ -386,6 +386,14 @@
                 <span class="small text-muted">/bucket</span>
               </div>
             </div>
+            <div class="bt-param-row">
+              <label class="bt-param-label" for="bt-volume-mode">Vol mode</label>
+              <select id="bt-volume-mode" class="form-select form-select-sm bt-short-input" onchange="saveBtSettings()">
+                <option value="proportional">proportional</option>
+                <option value="visible_only" selected>visible_only</option>
+                <option value="bar_binary">bar_binary</option>
+              </select>
+            </div>
           </div>
         </div>
       </div>
@@ -1011,6 +1019,7 @@ function _collectLiveOverrides() {
     overrides.vdd_tick = true;
     overrides.bucket_s = bucketS;
     overrides.min_trades_per_bucket = parseInt(document.getElementById('bt-min-trades-bucket').value) || 3;
+    overrides.volume_mode = document.getElementById('bt-volume-mode').value || 'visible_only';
     overrides.poll_interval_s = bucketS;  // match poll to bucket
   }
   return overrides;
