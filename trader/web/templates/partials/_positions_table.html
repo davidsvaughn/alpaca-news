@@ -23,10 +23,10 @@
 {% endmacro %}
 
 <!-- Macro: holdings table -->
-{% macro holdings_table(watches, config_id='') %}
+{% macro holdings_table(watches, config_id='', table_key='') %}
 {% if watches %}
 <div class="table-responsive">
-  <table class="table table-sm table-hover align-middle mb-1 _holdings-table _sortable" data-config-id="{{ config_id }}">
+  <table class="table table-sm table-hover align-middle mb-1 _holdings-table _sortable" data-config-id="{{ config_id }}" data-sort-key="{{ table_key }}">
     <thead class="table-light"><tr>
       {% if config_id %}<th style="width:30px"><input type="checkbox" class="_select-all" title="Select all"></th>{% endif %}
       <th data-sort="text">Symbol</th><th data-sort="num">Entry</th><th data-sort="num">Current</th><th data-sort="num">Qty</th><th data-sort="num">Value</th><th data-sort="num">P&L</th><th data-sort="num">Conf</th><th data-sort="text">Strategy</th><th data-sort="text">Entered</th><th></th>
@@ -81,10 +81,10 @@
 {% endmacro %}
 
 <!-- Macro: exited/cooling table -->
-{% macro cooling_table(watches) %}
+{% macro cooling_table(watches, table_key='') %}
 {% if watches %}
 <div class="table-responsive">
-  <table class="table table-sm table-hover align-middle mb-1 _sortable">
+  <table class="table table-sm table-hover align-middle mb-1 _sortable" data-sort-key="{{ table_key }}">
     <thead class="table-light"><tr>
       <th data-sort="text">Symbol</th><th data-sort="num">Entry</th><th data-sort="num">Exit</th><th data-sort="num">Qty</th><th data-sort="num">Value</th><th data-sort="num">P&L</th><th data-sort="text">Exited</th><th></th>
     </tr></thead>
@@ -123,10 +123,10 @@
 {% endmacro %}
 
 <!-- Macro: closed table -->
-{% macro closed_table(watches, total) %}
+{% macro closed_table(watches, total, table_key='') %}
 {% if watches %}
 <div class="table-responsive">
-  <table class="table table-sm table-hover align-middle mb-1 _sortable">
+  <table class="table table-sm table-hover align-middle mb-1 _sortable" data-sort-key="{{ table_key }}">
     <thead class="table-light"><tr>
       <th data-sort="text">Symbol</th><th data-sort="num">Entry</th><th data-sort="num">Exit</th><th data-sort="num">P&L</th><th data-sort="text">Reason</th><th data-sort="text">Entered</th><th data-sort="text">Sealed</th><th></th>
     </tr></thead>
@@ -315,7 +315,7 @@
 
   {% if p.holding or p.cooling or p.closed %}
   <a href="#" class="text-decoration-none text-muted _toggle-link _section-toggle" data-target="positions-{{ p.config.config_id }}">
-    <span class="_toggle-arrow" aria-hidden="true">&#9654;</span>positions
+    <span class="_toggle-arrow" aria-hidden="true">&#9654;</span>POSITIONS
   </a>
   {% endif %}
 
@@ -344,7 +344,7 @@
               style="font-size:.7rem" disabled>Liquidate 0 selected</button>
       {% endif %}
     </div>
-    {{ holdings_table(p.holding, p.config.config_id if p.config.alpaca_account_id else '') }}
+    {{ holdings_table(p.holding, p.config.config_id if p.config.alpaca_account_id else '', 'holding-' + p.config.config_id) }}
     {% endif %}
 
     {% if p.cooling %}
@@ -352,7 +352,7 @@
       Recently Exited ({{ p.stats.cooling_count }}) &#9662;
     </a>
     <div id="cooling-{{ p.config.config_id }}" class="_toggle-section" style="display:none">
-      {{ cooling_table(p.cooling) }}
+      {{ cooling_table(p.cooling, 'cooling-' + p.config.config_id) }}
     </div>
     {% endif %}
 
@@ -361,7 +361,7 @@
       Closed ({{ p.stats.closed_count }}) &#9662;
     </a>
     <div id="closed-{{ p.config.config_id }}" class="_toggle-section" style="display:none">
-      {{ closed_table(p.closed, p.stats.closed_count) }}
+      {{ closed_table(p.closed, p.stats.closed_count, 'closed-' + p.config.config_id) }}
     </div>
     {% endif %}
   </div>
@@ -379,19 +379,19 @@
   <h5 class="mb-2 text-muted">Legacy Watches <span class="badge bg-secondary" style="font-size:.65rem">no config</span></h5>
   {{ stats_row(legacy.stats) }}
   <a href="#" class="text-decoration-none text-muted _toggle-link _section-toggle" data-target="positions-legacy">
-    <span class="_toggle-arrow" aria-hidden="true">&#9654;</span>positions
+    <span class="_toggle-arrow" aria-hidden="true">&#9654;</span>POSITIONS
   </a>
   <div id="positions-legacy" class="_toggle-section" style="display:none">
     {% if legacy.holding %}
     <h6 class="text-muted small mb-1 mt-2">Open</h6>
-    {{ holdings_table(legacy.holding) }}
+    {{ holdings_table(legacy.holding, '', 'holding-legacy') }}
     {% endif %}
     {% if legacy.cooling %}
     <a href="#" class="text-decoration-none small text-muted _toggle-link" data-target="cooling-legacy" style="font-size:.75rem">
       Recently Exited ({{ legacy.stats.cooling_count }}) &#9662;
     </a>
     <div id="cooling-legacy" class="_toggle-section" style="display:none">
-      {{ cooling_table(legacy.cooling) }}
+      {{ cooling_table(legacy.cooling, 'cooling-legacy') }}
     </div>
     {% endif %}
     {% if legacy.closed %}
@@ -399,7 +399,7 @@
       Closed ({{ legacy.stats.closed_count }}) &#9662;
     </a>
     <div id="closed-legacy" class="_toggle-section" style="display:none">
-      {{ closed_table(legacy.closed, legacy.stats.closed_count) }}
+      {{ closed_table(legacy.closed, legacy.stats.closed_count, 'closed-legacy') }}
     </div>
     {% endif %}
   </div>
@@ -412,43 +412,89 @@
 
 <script>
 (function() {
+  var SORT_KEY = 'positions_sort_state';
+
+  function getSortState() {
+    try {
+      var raw = localStorage.getItem(SORT_KEY);
+      if (!raw) return {};
+      var parsed = JSON.parse(raw);
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
+      return parsed;
+    } catch (e) {
+      return {};
+    }
+  }
+
+  function saveSortState(state) {
+    try { localStorage.setItem(SORT_KEY, JSON.stringify(state || {})); } catch (e) {}
+  }
+
+  function setHeaderSortVisuals(th, asc) {
+    th.parentNode.querySelectorAll('th[data-sort]').forEach(function(h) {
+      h.dataset.sortDir = '';
+      h.textContent = h.textContent.replace(/ [▲▼]$/, '');
+    });
+    th.dataset.sortDir = asc ? 'asc' : 'desc';
+    th.textContent = th.textContent.replace(/ [▲▼]$/, '') + (asc ? ' ▲' : ' ▼');
+  }
+
+  function sortTableByHeader(table, th, asc) {
+    var tbody = table.querySelector('tbody');
+    if (!tbody) return;
+    var rows = Array.from(tbody.querySelectorAll('tr'));
+    var idx = Array.from(th.parentNode.children).indexOf(th);
+    var sortType = th.dataset.sort;
+
+    setHeaderSortVisuals(th, asc);
+
+    rows.sort(function(a, b) {
+      var aCell = a.children[idx];
+      var bCell = b.children[idx];
+      if (!aCell || !bCell) return 0;
+      var aText = (aCell.textContent || '').trim();
+      var bText = (bCell.textContent || '').trim();
+      if (sortType === 'num') {
+        var aNum = parseFloat(aText.replace(/[$,%+,]/g, '')) || 0;
+        var bNum = parseFloat(bText.replace(/[$,%+,]/g, '')) || 0;
+        if (aText === '—' || aText === '') aNum = -Infinity;
+        if (bText === '—' || bText === '') bNum = -Infinity;
+        return asc ? aNum - bNum : bNum - aNum;
+      }
+      return asc ? aText.localeCompare(bText) : bText.localeCompare(aText);
+    });
+    rows.forEach(function(r) { tbody.appendChild(r); });
+  }
+
   // Sortable tables
   document.querySelectorAll('._sortable').forEach(function(table) {
+    var tableSortKey = table.dataset.sortKey || '';
     table.querySelectorAll('th[data-sort]').forEach(function(th) {
       th.style.cursor = 'pointer';
       th.style.userSelect = 'none';
       th.addEventListener('click', function() {
-        var tbody = table.querySelector('tbody');
-        var rows = Array.from(tbody.querySelectorAll('tr'));
-        var idx = Array.from(th.parentNode.children).indexOf(th);
-        var sortType = th.dataset.sort;
         var asc = th.dataset.sortDir !== 'asc';
-        // Reset all headers in this table
-        th.parentNode.querySelectorAll('th[data-sort]').forEach(function(h) {
-          h.dataset.sortDir = '';
-          h.textContent = h.textContent.replace(/ [▲▼]$/, '');
-        });
-        th.dataset.sortDir = asc ? 'asc' : 'desc';
-        th.textContent = th.textContent + (asc ? ' ▲' : ' ▼');
-
-        rows.sort(function(a, b) {
-          var aCell = a.children[idx];
-          var bCell = b.children[idx];
-          if (!aCell || !bCell) return 0;
-          var aText = (aCell.textContent || '').trim();
-          var bText = (bCell.textContent || '').trim();
-          if (sortType === 'num') {
-            var aNum = parseFloat(aText.replace(/[$,%+]/g, '')) || 0;
-            var bNum = parseFloat(bText.replace(/[$,%+]/g, '')) || 0;
-            if (aText === '—' || aText === '') aNum = -Infinity;
-            if (bText === '—' || bText === '') bNum = -Infinity;
-            return asc ? aNum - bNum : bNum - aNum;
+        sortTableByHeader(table, th, asc);
+        if (tableSortKey) {
+          var headers = Array.from(th.parentNode.querySelectorAll('th[data-sort]'));
+          var col = headers.indexOf(th);
+          if (col >= 0) {
+            var state = getSortState();
+            state[tableSortKey] = { col: col, dir: asc ? 'asc' : 'desc' };
+            saveSortState(state);
           }
-          return asc ? aText.localeCompare(bText) : bText.localeCompare(aText);
-        });
-        rows.forEach(function(r) { tbody.appendChild(r); });
+        }
       });
     });
+
+    if (tableSortKey) {
+      var saved = getSortState()[tableSortKey];
+      if (saved && typeof saved.col === 'number' && (saved.dir === 'asc' || saved.dir === 'desc')) {
+        var headers = Array.from(table.querySelectorAll('th[data-sort]'));
+        var th = headers[saved.col];
+        if (th) sortTableByHeader(table, th, saved.dir === 'asc');
+      }
+    }
   });
 
   // Convert UTC timestamps to local human-readable format
