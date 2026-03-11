@@ -30,15 +30,13 @@
   <table class="table table-sm table-hover align-middle mb-1 _holdings-table _sortable" data-config-id="{{ config_id }}">
     <thead class="table-light"><tr>
       {% if config_id %}<th style="width:30px"><input type="checkbox" class="_select-all" title="Select all"></th>{% endif %}
-      <th data-sort="text">Symbol</th><th data-sort="text">Dir</th><th data-sort="num">Qty</th><th data-sort="num">Entry</th><th data-sort="num">Current</th><th data-sort="num">Value</th><th data-sort="num">P&L</th><th data-sort="num">Conf</th><th data-sort="text">Strategy</th><th data-sort="text">Entered</th><th></th>
+      <th data-sort="text">Symbol</th><th data-sort="num">Entry</th><th data-sort="num">Current</th><th data-sort="num">Qty</th><th data-sort="num">Value</th><th data-sort="num">P&L</th><th data-sort="num">Conf</th><th data-sort="text">Strategy</th><th data-sort="text">Entered</th><th></th>
     </tr></thead>
     <tbody>
     {% for w in watches %}
     <tr>
       {% if config_id %}<td><input type="checkbox" class="_select-pos" value="{{ w.symbol }}"></td>{% endif %}
       <td><strong>{{ w.symbol }}</strong></td>
-      <td>{% if w.entry.direction == 'bullish' %}<span class="text-success">&#9650;</span>{% else %}<span class="text-danger">&#9660;</span>{% endif %}</td>
-      <td>{% if w.qty is defined and w.qty %}{{ "%.2f"|format(w.qty) }}{% else %}<span class="text-muted">&mdash;</span>{% endif %}</td>
       <td>${{ "%.2f"|format(w.entry.price) }}</td>
       {% set cur = w.current_price if w.current_price is defined else none %}
       {% set pnl = w.unrealized_pnl if w.unrealized_pnl is defined else none %}
@@ -52,6 +50,7 @@
         {% endif %}
       </td>
       {% set qty = w.qty if w.qty is defined and w.qty else none %}
+      <td>{% if qty %}{{ "%.2f"|format(qty) }}{% else %}<span class="text-muted">&mdash;</span>{% endif %}</td>
       <td>
         {% if cur and qty %}
           ${{ "{:,.0f}".format(cur * qty) }}
@@ -70,7 +69,7 @@
       </td>
       <td>{{ "%.0f"|format(w.entry.confidence * 100) }}%</td>
       <td class="small text-muted">{{ _strategy_short.get(w.exit_strategy, w.exit_strategy) or 'legacy' }}</td>
-      <td class="small text-muted">{{ w.created_at[:16] }}</td>
+      <td class="small text-muted"><span class="_local-time" data-utc="{{ w.created_at }}">{{ w.created_at[:16] }}</span></td>
       <td><a href="/watches/{{ w.watch_id }}" class="btn btn-sm btn-outline-secondary py-0" style="font-size:.75rem">Detail</a></td>
     </tr>
     {% endfor %}
@@ -99,7 +98,7 @@
       <td>{% if w.exit %}${{ "%.2f"|format(w.exit.price) }}{% else %}&mdash;{% endif %}</td>
       <td>{% if w.exit %}<span class="{% if w.exit.realized_pnl_pct >= 0 %}pnl-positive{% else %}pnl-negative{% endif %}">{{ "%+.2f"|format(w.exit.realized_pnl_pct) }}%</span>{% else %}&mdash;{% endif %}</td>
       <td class="small">{% if w.exit %}{{ w.exit.reason }}{% endif %}</td>
-      <td class="small text-muted">{% if w.cooling_off_until %}{{ w.cooling_off_until[:16] }}{% endif %}</td>
+      <td class="small text-muted">{% if w.cooling_off_until %}<span class="_local-time" data-utc="{{ w.cooling_off_until }}">{{ w.cooling_off_until[:16] }}</span>{% endif %}</td>
       <td><a href="/watches/{{ w.watch_id }}" class="btn btn-sm btn-outline-secondary py-0" style="font-size:.75rem">Detail</a></td>
     </tr>
     {% endfor %}
@@ -127,8 +126,8 @@
       <td>{% if w.exit %}${{ "%.2f"|format(w.exit.price) }}{% else %}&mdash;{% endif %}</td>
       <td>{% if w.exit %}<span class="{% if w.exit.realized_pnl_pct >= 0 %}pnl-positive{% else %}pnl-negative{% endif %}">{{ "%+.2f"|format(w.exit.realized_pnl_pct) }}%</span>{% else %}&mdash;{% endif %}</td>
       <td class="small">{% if w.exit %}{{ w.exit.reason }}{% endif %}</td>
-      <td class="small text-muted">{{ w.created_at[:16] }}</td>
-      <td class="small text-muted">{{ (w.lifecycle_sealed_at or '')[:16] }}</td>
+      <td class="small text-muted"><span class="_local-time" data-utc="{{ w.created_at }}">{{ w.created_at[:16] }}</span></td>
+      <td class="small text-muted">{% if w.lifecycle_sealed_at %}<span class="_local-time" data-utc="{{ w.lifecycle_sealed_at }}">{{ w.lifecycle_sealed_at[:16] }}</span>{% endif %}</td>
       <td><a href="/watches/{{ w.watch_id }}" class="btn btn-sm btn-outline-secondary py-0" style="font-size:.75rem">Detail</a></td>
     </tr>
     {% endfor %}
@@ -216,6 +215,14 @@
   {% if f.pe_max %}{% set _ = af.append('PE<=' + f.pe_max|string) %}{% endif %}
   {% if f.price_10_min %}{% set _ = af.append('P@x>=$' + f.price_10_min|string) %}{% endif %}
   {% if f.symbol %}{% set _ = af.append(f.symbol) %}{% endif %}
+  {% set alloc_key = p.config.allocation %}
+  {% set alloc_params = p.config.allocation_params if p.config.allocation_params is defined and p.config.allocation_params else {} %}
+  {% set alloc_summary = alloc_key %}
+  {% if alloc_key == 'max_positions' %}
+    {% set alloc_summary = alloc_key + ': ' + (alloc_params.get('max_pos', 10)|string) %}
+  {% elif alloc_key in ['fixed_dollar', 'ranking_realloc'] %}
+    {% set alloc_summary = alloc_key + ': ' + (alloc_params.get('alloc_pct', 5)|string) + '%' %}
+  {% endif %}
   <div class="small text-muted mb-0">
     {% if p.config.created_at %}started <span class="_local-time" data-utc="{{ p.config.created_at }}">{{ p.config.created_at[:16] }}</span>{% endif %}
   </div>
@@ -223,7 +230,7 @@
   <div class="small text-muted mb-0">{{ af | join(' | ') }}</div>
   {% endif %}
   <div class="small text-muted mb-0">
-    {{ _strategy_short.get(p.config.exit_strategy, p.config.exit_strategy) }} | Stop: {{ p.config.guard_stop_pct }}% | {{ p.config.allocation }}
+    {{ _strategy_short.get(p.config.exit_strategy, p.config.exit_strategy) }} | Stop: {{ p.config.guard_stop_pct }}% | {{ alloc_summary }}
   </div>
   {% if p.config.exit_strategy is defined %}
   <div class="mb-1">
@@ -424,11 +431,17 @@
     if (!utc) return;
     // Handle ISO format with or without timezone offset
     var s = utc.replace(' ', 'T');
-    if (!/[Z+-]\d/.test(s.slice(-6))) s += 'Z';
+    if (!/(Z|[+-]\d{2}:?\d{2})$/.test(s)) s += 'Z';
     var d = new Date(s);
     if (isNaN(d)) return;
-    el.textContent = d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })
-      + ' ' + d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+    el.textContent = d.toLocaleString(undefined, {
+      month: 'short',
+      day: 'numeric',
+      year: 'numeric',
+      hour: 'numeric',
+      minute: '2-digit',
+      timeZone: 'America/New_York',
+    }) + ' ET';
   });
 
   // Destroy previous Lightweight Charts instances on HTMX re-swap
@@ -678,4 +691,3 @@
   });
 })();
 </script>
-
