@@ -26,7 +26,8 @@
 13. [Reference: Alpaca Trading API](#reference-alpaca-trading-api)
 14. [Reference: Data Sources](#reference-data-sources)
 15. [Reference: Risk Controls](#reference-risk-controls)
-16. [Open Questions](#open-questions)
+16. [Reference: Take-Profit Analysis](#reference-take-profit-analysis-2026-03-11)
+17. [Open Questions](#open-questions)
 17. [Design Choices](#design-choices)
 18. [Progress Log](#progress-log)
 
@@ -342,7 +343,7 @@ From best-performing parameter set (updated 2026-03-05):
 |----------|-----------|-------|
 | Exit Strategy | `volume_delta_divergence` lookback | **80 bars** |
 | Guard Stop | `guard_stop_pct` | **5%** |
-| Guard Target | `guard_target_pct` | **0%** (disabled) |
+| Guard Target | `guard_target_pct` | **0%** (disabled) — analysis suggests **5-6%** improves avg P&L |
 | Market Close | | **16:00** (regular hours) |
 | Min Hold | | **5 bars** |
 | Price Delay | | **5 min** |
@@ -490,6 +491,7 @@ For VDD: use Schwab (full exchange volume, already integrated). Alpaca for order
 |---------|-----------|--------|
 | Daily loss limit | -2% of portfolio | Stop opening new positions |
 | Single position loss | guard_stop_pct (default 5%) | Exit immediately |
+| Single position gain | guard_target_pct (default 0%) | Exit immediately (take profit) |
 | Max positions | From allocation config | Skip new entries |
 | Max daily trades | 50 (PDT-safe buffer) | Stop for the day |
 | API error rate | 3 consecutive failures | Pause trading, alert |
@@ -500,6 +502,55 @@ For VDD: use Schwab (full exchange volume, already integrated). Alpaca for order
 - 3 day trades in rolling 5 business days
 - Our trades typically held for hours — not day trades if held overnight
 - Track day trade count, pause if approaching limit
+
+---
+
+## Reference: Take-Profit Analysis (2026-03-11)
+
+### Motivation
+
+Historical analysis of 245 unique exits (deduplicated across 19 portfolios, 512 total rows) shows positions frequently peak well above their eventual exit P&L. On average, **+2.45% is left on the table** (median +1.04%). Painful examples: CVGI peaked at +20.4% then hit stop-loss at -5.3%.
+
+### Analysis Script
+
+`scripts/take_profit_analysis.py` — loads all exited watches, fetches 1-min bars, and simulates take-profit strategies. Re-run anytime to include new data.
+
+```bash
+uv run python scripts/take_profit_analysis.py              # full analysis with 1-min bars
+uv run python scripts/take_profit_analysis.py --no-bars    # fast mode (stored peak/trough only)
+uv run python scripts/take_profit_analysis.py --csv data/take_profit_analysis.csv  # export
+```
+
+Sections: summary stats, peak P&L buckets, painful reversals, fixed threshold sweep, trailing take-profit sweep, time-to-peak analysis, combined VDD + take-profit simulation.
+
+### Key Findings (2026-03-11, N=245 unique trades)
+
+**Baseline**: avg exit P&L = +0.36%, win rate = 52.7%
+
+| Fixed Threshold | Triggers | Improvement | Losses Prevented |
+|----------------|----------|-------------|-----------------|
+| 5% | 48 (19.6%) | +0.108% | 7 |
+| 6% | 35 (14.3%) | +0.107% | — |
+| 12% | 12 (4.9%) | +0.136% | 1 |
+
+- **3-4% thresholds hurt** — cut winners too early
+- **5-6% is the sweet spot** for frequency × improvement
+- **12-15% thresholds** show best per-trade improvement but trigger rarely
+- **Trailing stops** (activate + trail) underperform fixed thresholds at current sample size
+- **Time-to-peak**: median 94 minutes, at 39% of hold time (peaks happen in first half)
+
+### How It Works (Already Implemented)
+
+`guard_target_pct` is **fully wired** across the entire pipeline — it was built alongside `guard_stop_pct` but has been disabled (set to 0%) in all portfolios so far.
+
+- **Backtest**: `_check_guards()` in `backtest.py` checks `bar["High"] >= entry * (1 + guard_target_pct/100)` on every bar, across all 15 exit strategies
+- **Live monitor**: `_check_holding()` loads `guard_target_pct` from LiveConfig, passes to `evaluate_exit()`
+- **UI**: "Target %" input in backtest panel Risk Controls section, carried through Go Live flow
+- **Exit reason**: `"guard_target"` — distinct from `"signal"` (VDD) and `"guard_stop"` (stop loss)
+
+### Recommendation
+
+Set `guard_target_pct = 5` (or 6) on new portfolios. This adds a take-profit exit that fires alongside the existing VDD signal and guard stop — whichever triggers first wins. Monitor results and re-run the analysis script weekly as sample size grows.
 
 ---
 

@@ -1522,7 +1522,9 @@
     "CWBC",
     "INBK",
     "NUWE",
-    "BGSF"
+    "BGSF",
+    "GNEMF",
+    "JRNGF"
   ],
   "crypto": [],
   "rejected": [
@@ -1698,5 +1700,5 @@
     "CANU",
     "PAYP"
   ],
-  "last_updated": "2026-03-11T22:51:57.442200+00:00"
+  "last_updated": "2026-03-11T23:16:14.028662+00:00"
 }

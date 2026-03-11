@@ -15,6 +15,7 @@ Docs live in `docs/`, organized by topic. Two legacy overview docs plus topic-sp
   - `docs/BACKTEST-*.md` — Backtest architecture, strategies, metrics
   - `docs/ALLOCATION-STRATEGIES.md` — Portfolio allocation methods
   - `docs/RECONCILE-TEST-PLAN.md` — **TODO**: Stress test plan for reconciliation fixes (use Paper2/Paper3)
+  - `scripts/take_profit_analysis.py` — Take-profit threshold analysis (run weekly as sample grows)
 
 Reference papers are in `docs/refs/`. Archived older docs in `docs/archive/`.
 

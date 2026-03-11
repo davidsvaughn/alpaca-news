@@ -34,6 +34,7 @@ from trader.db.database import (
     insert_watch,
     update_watch,
 )
+from trader.market.backtest import normalize_rank_method, RANK_METHOD_CONFIDENCE, RANK_METHOD_UNREAL_PL, RANK_METHOD_COMPOSITE
 from trader.market.market_hours import ET, add_market_hours, is_market_open, is_trading_session_open
 from trader.models.live_config import LiveConfig
 from trader.models.watch import WatchBuilder
@@ -576,9 +577,28 @@ class LivePortfolioManager:
             max_concurrent = 20
 
         print(f"LIVE-EVAL: {symbol} allocation {holding_count}/{max_concurrent}")
+
+        # Determine replacement policy
+        do_replace = False
+        if alloc == "max_positions":
+            do_replace = str(alloc_params.get("when_full", "skip")) == "replace"
+        elif alloc == "ranking_realloc":
+            do_replace = True  # ranking_realloc always replaces
+
+        victim_watch: dict[str, Any] | None = None
         if holding_count >= max_concurrent:
-            print(f"LIVE-EVAL: {symbol} SKIP at capacity")
-            return False
+            if not do_replace:
+                print(f"LIVE-EVAL: {symbol} SKIP at capacity (when_full=skip)")
+                return False
+            # Try to replace the weakest position
+            victim_watch = self._find_replacement_victim(
+                symbol, confidence, direction, cfg,
+            )
+            if victim_watch is None:
+                print(f"LIVE-EVAL: {symbol} SKIP at capacity — new signal not stronger than weakest")
+                return False
+            print(f"LIVE-EVAL: {symbol} will REPLACE {victim_watch['symbol']} "
+                  f"(watch={victim_watch['watch_id']})")
 
         # --- Determine entry price ---
         entry_price = self._extract_entry_price(snapshot, symbol, cfg.price_delay_minutes)
@@ -606,6 +626,12 @@ class LivePortfolioManager:
                     and w.get("symbol") == symbol
                     and w.get("live_config_id") == cfg.config_id):
                 print(f"LIVE-EVAL: {symbol} SKIP already holding in config {cfg.name}")
+                return False
+
+        # --- Exit victim position (replacement) ---
+        if victim_watch is not None:
+            if not self._exit_victim(victim_watch, cfg):
+                print(f"LIVE-EVAL: {symbol} SKIP — failed to exit victim {victim_watch['symbol']}")
                 return False
 
         # --- Create watch ---
