@@ -51,7 +51,7 @@ def sample_config():
         name="Test VDD Config",
         filters={"confidence_min": 85},
         allocation="max_positions",
-        allocation_params={"max_pos": 20, "when_full": "replace", "rank_method": "momentum"},
+        allocation_params={"max_pos": 20, "when_full": "replace", "rank_method": "unreal_pl"},
         starting_capital=100000.0,
         exit_strategy="volume_delta_divergence",
         exit_params={"lookback": 80},
@@ -142,6 +142,21 @@ class TestLiveConfig:
         # Delete
         assert delete_live_config(db, sample_config.config_id)
         assert get_all_live_configs(db) == []
+
+    def test_legacy_rank_method_alias_normalized(self, db):
+        legacy_cfg = LiveConfig.create(
+            name="Legacy Rank Method",
+            filters={},
+            allocation="max_positions",
+            allocation_params={"max_pos": 5, "when_full": "replace", "rank_method": "momentum"},
+            starting_capital=50000.0,
+            exit_strategy="volume_delta_divergence",
+            exit_params={"lookback": 80},
+        )
+        assert insert_live_config(db, config=legacy_cfg.to_dict())
+        fetched = get_live_config(db, legacy_cfg.config_id)
+        assert fetched is not None
+        assert fetched["allocation_params"]["rank_method"] == "unreal_pl"
 
     def test_multiple_active(self, db):
         """Multiple configs can be active simultaneously (multi-portfolio)."""

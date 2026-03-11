@@ -367,8 +367,22 @@ def get_active_watches(db: Database) -> list[dict[str, Any]]:
 # ---------------------------------------------------------------------------
 
 
+def _normalize_live_config(config: dict[str, Any]) -> dict[str, Any]:
+    """Normalize live config payload fields for backward compatibility."""
+    out = dict(config)
+    alloc = out.get("allocation_params")
+    if isinstance(alloc, dict):
+        alloc_out = dict(alloc)
+        # Legacy alias: rank_method=momentum -> unreal_pl
+        if str(alloc_out.get("rank_method", "")).strip().lower() == "momentum":
+            alloc_out["rank_method"] = "unreal_pl"
+        out["allocation_params"] = alloc_out
+    return out
+
+
 def insert_live_config(db: Database, *, config: dict[str, Any]) -> bool:
     """Insert a live config. Returns True if inserted, False if duplicate."""
+    config = _normalize_live_config(config)
     with db.engine.begin() as conn:
         result = conn.execute(
             text(
@@ -388,6 +402,7 @@ def insert_live_config(db: Database, *, config: dict[str, Any]) -> bool:
 
 def update_live_config(db: Database, config_id: str, config: dict[str, Any]) -> None:
     """Update a live config's JSON, name, active flag, and updated_at."""
+    config = _normalize_live_config(config)
     with db.engine.begin() as conn:
         conn.execute(
             text(
@@ -414,7 +429,8 @@ def get_live_config(db: Database, config_id: str) -> dict[str, Any] | None:
     if row is None:
         return None
     raw = row[0]
-    return json.loads(raw) if isinstance(raw, str) else raw
+    cfg = json.loads(raw) if isinstance(raw, str) else raw
+    return _normalize_live_config(cfg)
 
 
 def get_active_live_config(db: Database) -> dict[str, Any] | None:
@@ -429,7 +445,11 @@ def get_active_live_configs(db: Database) -> list[dict[str, Any]]:
         rows = conn.execute(
             text("SELECT config_json FROM live_configs WHERE active = 1 ORDER BY created_at"),
         ).fetchall()
-    return [json.loads(r[0]) if isinstance(r[0], str) else r[0] for r in rows]
+    out: list[dict[str, Any]] = []
+    for row in rows:
+        cfg = json.loads(row[0]) if isinstance(row[0], str) else row[0]
+        out.append(_normalize_live_config(cfg))
+    return out
 
 
 def get_all_live_configs(db: Database) -> list[dict[str, Any]]:
@@ -438,7 +458,11 @@ def get_all_live_configs(db: Database) -> list[dict[str, Any]]:
         rows = conn.execute(
             text("SELECT config_json FROM live_configs ORDER BY created_at DESC"),
         ).fetchall()
-    return [json.loads(r[0]) if isinstance(r[0], str) else r[0] for r in rows]
+    out: list[dict[str, Any]] = []
+    for row in rows:
+        cfg = json.loads(row[0]) if isinstance(row[0], str) else row[0]
+        out.append(_normalize_live_config(cfg))
+    return out
 
 
 def activate_live_config(db: Database, config_id: str) -> bool:
@@ -459,6 +483,7 @@ def activate_live_config(db: Database, config_id: str) -> bool:
             if row:
                 cfg = json.loads(row[0]) if isinstance(row[0], str) else row[0]
                 cfg["active"] = True
+                cfg = _normalize_live_config(cfg)
                 conn.execute(
                     text("UPDATE live_configs SET config_json = :cjson WHERE config_id = :cid"),
                     {"cid": config_id, "cjson": json.dumps(cfg, ensure_ascii=False)},
@@ -481,6 +506,7 @@ def deactivate_live_config(db: Database, config_id: str) -> bool:
             if row:
                 cfg = json.loads(row[0]) if isinstance(row[0], str) else row[0]
                 cfg["active"] = False
+                cfg = _normalize_live_config(cfg)
                 conn.execute(
                     text("UPDATE live_configs SET config_json = :cjson WHERE config_id = :cid"),
                     {"cid": config_id, "cjson": json.dumps(cfg, ensure_ascii=False)},

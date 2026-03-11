@@ -269,10 +269,29 @@ STRATEGIES: dict[str, StrategyDef] = {
 # Allocation strategy definitions
 # ---------------------------------------------------------------------------
 
+RANK_METHOD_CONFIDENCE = "confidence"
+RANK_METHOD_UNREAL_PL = "unreal_pl"
+RANK_METHOD_COMPOSITE = "composite"
+
+
+def normalize_rank_method(method: str | None) -> str:
+    """Canonicalize rank method keys.
+
+    Accepts legacy ``momentum`` as an alias for ``unreal_pl`` so older saved
+    configs continue to work.
+    """
+    key = str(method or "").strip().lower()
+    if key in {"", "momentum"}:
+        return RANK_METHOD_UNREAL_PL
+    if key in {RANK_METHOD_CONFIDENCE, RANK_METHOD_UNREAL_PL, RANK_METHOD_COMPOSITE}:
+        return key
+    return RANK_METHOD_UNREAL_PL
+
+
 _RANK_OPTIONS = [
-    {"value": "confidence", "label": "Signal Confidence"},
-    {"value": "momentum", "label": "Unrealized P&L"},
-    {"value": "composite", "label": "Composite"},
+    {"value": RANK_METHOD_CONFIDENCE, "label": "Signal Confidence"},
+    {"value": RANK_METHOD_UNREAL_PL, "label": "Unrealized P&L"},
+    {"value": RANK_METHOD_COMPOSITE, "label": "Composite"},
 ]
 
 _WHEN_FULL_OPTIONS = [
@@ -307,7 +326,7 @@ ALLOCATIONS: dict[str, AllocationDef] = {
         params={
             "max_pos": ParamDef("int", 10, "Max Positions", 1, 50, 1),
             "when_full": ParamDef("select", "skip", "When Full", options=_WHEN_FULL_OPTIONS),
-            "rank_method": ParamDef("select", "momentum", "Rank By", options=_RANK_OPTIONS),
+            "rank_method": ParamDef("select", RANK_METHOD_UNREAL_PL, "Rank By", options=_RANK_OPTIONS),
             "composite_weight": ParamDef("float", 0.5, "Confidence Weight", 0, 1, 0.1),
         },
     ),
@@ -318,7 +337,7 @@ ALLOCATIONS: dict[str, AllocationDef] = {
         description="Each trade gets a fixed % of capital. When full, replace weakest position.",
         params={
             "alloc_pct": ParamDef("float", 5.0, "Allocation %", 1, 50, 1),
-            "rank_method": ParamDef("select", "momentum", "Rank By", options=_RANK_OPTIONS),
+            "rank_method": ParamDef("select", RANK_METHOD_UNREAL_PL, "Rank By", options=_RANK_OPTIONS),
             "composite_weight": ParamDef("float", 0.5, "Confidence Weight", 0, 1, 0.1),
         },
     ),
@@ -528,7 +547,7 @@ def _rank_confidence(
     return {sid: entry_confidence.get(sid, 0.5) for sid in open_positions}
 
 
-def _rank_momentum(
+def _rank_unreal_pl(
     open_positions: dict[str, BacktestResult],
     _entry_confidence: dict[str, float],
     target_iso: str,
@@ -550,17 +569,17 @@ def _rank_composite(
     target_iso: str,
     weight: float = 0.5,
 ) -> dict[str, float]:
-    """Composite score: w * Z(confidence) + (1-w) * Z(momentum).
+    """Composite score: w * Z(confidence) + (1-w) * Z(unrealized_pnl).
 
-    *weight* controls confidence vs momentum (0 = pure momentum, 1 = pure
-    confidence).
+    *weight* controls confidence vs unrealized P&L (0 = pure unrealized P&L,
+    1 = pure confidence).
     """
     conf = _rank_confidence(open_positions, entry_confidence, target_iso)
-    mom = _rank_momentum(open_positions, entry_confidence, target_iso)
+    pnl = _rank_unreal_pl(open_positions, entry_confidence, target_iso)
     sids = list(open_positions.keys())
     if len(sids) < 2:
-        # Can't z-score with < 2 values; fall back to momentum
-        return mom
+        # Can't z-score with < 2 values; fall back to unrealized P&L
+        return pnl
 
     def _z(vals: list[float]) -> list[float]:
         m = sum(vals) / len(vals)
@@ -569,10 +588,10 @@ def _rank_composite(
         return [(x - m) / s for x in vals]
 
     z_conf = _z([conf[s] for s in sids])
-    z_mom = _z([mom[s] for s in sids])
+    z_pnl = _z([pnl[s] for s in sids])
     return {
-        sid: weight * zc + (1 - weight) * zm
-        for sid, zc, zm in zip(sids, z_conf, z_mom)
+        sid: weight * zc + (1 - weight) * zp
+        for sid, zc, zp in zip(sids, z_conf, z_pnl)
     }
 
 
@@ -584,11 +603,12 @@ def _compute_scores(
     composite_weight: float = 0.5,
 ) -> dict[str, float]:
     """Dispatch to the appropriate ranking function."""
-    if method == "confidence":
+    method = normalize_rank_method(method)
+    if method == RANK_METHOD_CONFIDENCE:
         return _rank_confidence(open_positions, entry_confidence, target_iso)
-    if method == "composite":
+    if method == RANK_METHOD_COMPOSITE:
         return _rank_composite(open_positions, entry_confidence, target_iso, composite_weight)
-    return _rank_momentum(open_positions, entry_confidence, target_iso)
+    return _rank_unreal_pl(open_positions, entry_confidence, target_iso)
 
 
 def _try_replace(
@@ -604,16 +624,17 @@ def _try_replace(
     snapshot_id of the position to replace.  Otherwise return None."""
     if not open_positions:
         return None
+    rank_method = normalize_rank_method(rank_method)
     scores = _compute_scores(
         rank_method, open_positions, entry_confidence, target_iso, composite_weight,
     )
     # Score the incoming signal the same way
-    if rank_method == "confidence":
+    if rank_method == RANK_METHOD_CONFIDENCE:
         new_score = new_confidence
-    elif rank_method == "momentum":
+    elif rank_method == RANK_METHOD_UNREAL_PL:
         new_score = 0.0  # just entered — no unrealised P&L yet
     else:
-        # For composite, approximate: confidence component only (momentum=0)
+        # For composite, approximate: confidence component only (unrealized P&L=0)
         new_score = composite_weight * new_confidence
     worst_sid = min(scores, key=scores.get)  # type: ignore[arg-type]
     if new_score > scores[worst_sid]:
@@ -668,7 +689,7 @@ def apply_allocation(
     else:
         return results, {"taken": len(results), "skipped": 0, "replaced": 0}
 
-    rank_method = str(alloc_params.get("rank_method", "momentum"))
+    rank_method = normalize_rank_method(str(alloc_params.get("rank_method", RANK_METHOD_UNREAL_PL)))
     composite_weight = float(alloc_params.get("composite_weight", 0.5))
 
     # Walk forward chronologically

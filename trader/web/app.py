@@ -1563,8 +1563,17 @@ def create_app(
     async def api_live_config_create(request: Request):
         """Create or update a live config from JSON body."""
         from trader.models.live_config import LiveConfig
+        from trader.market.backtest import normalize_rank_method
 
         body = await request.json()
+        alloc_params = body.get("allocation_params", {})
+        if isinstance(alloc_params, dict):
+            alloc_params = dict(alloc_params)
+            if "rank_method" in alloc_params:
+                alloc_params["rank_method"] = normalize_rank_method(
+                    str(alloc_params.get("rank_method")),
+                )
+            body["allocation_params"] = alloc_params
         config_id = body.get("config_id")
 
         if config_id and get_live_config(db, config_id):
@@ -1637,7 +1646,7 @@ def create_app(
                 name=body.get("name", "Untitled"),
                 filters=body.get("filters", {}),
                 allocation=body.get("allocation", "none"),
-                allocation_params=body.get("allocation_params", {}),
+                allocation_params=alloc_params if isinstance(alloc_params, dict) else {},
                 starting_capital=starting_capital,
                 exit_strategy=body.get("exit_strategy", "volume_delta_divergence"),
                 exit_params=body.get("exit_params", {}),

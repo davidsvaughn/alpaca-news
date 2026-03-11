@@ -1021,6 +1021,10 @@ function _renderParamFields(container, paramDefs, savedVals, storageKey, defKey)
   Object.keys(paramDefs).forEach(function(pk) {
     var p = paramDefs[pk];
     var val = savedVals[pk] !== undefined ? savedVals[pk] : p['default'];
+    if (pk === 'rank_method' && String(val) === 'momentum') {
+      // Legacy localStorage compatibility after enum rename.
+      val = 'unreal_pl';
+    }
     var html;
     if (p.type === 'select' && p.options) {
       html = '<div class="bt-param-field">'
@@ -1145,7 +1149,9 @@ function _collectParamsFrom(selector) {
   var params = {};
   document.querySelectorAll(selector + ' .bt-param').forEach(function(el) {
     var pk = el.getAttribute('data-param');
-    params[pk] = el.tagName === 'SELECT' ? el.value : parseFloat(el.value);
+    var v = el.tagName === 'SELECT' ? el.value : parseFloat(el.value);
+    if (pk === 'rank_method' && String(v) === 'momentum') v = 'unreal_pl';
+    params[pk] = v;
   });
   return params;
 }

@@ -519,7 +519,7 @@ For VDD: use Schwab (full exchange volume, already integrated). Alpaca for order
 
 ### Resolved
 
-- **Allocation replace ranking**: Same user choice as backtest UI (confidence / momentum / composite). No divergence.
+- **Allocation replace ranking**: Same user choice as backtest UI (confidence / unreal_pl / composite). No divergence.
 - **Snapshot visibility**: Snapshots visible immediately after pipeline. Watch lifecycle is separate.
 - **Bar data source**: Schwab 1-min bars (matches backtest). Tick-level in shadow mode only.
 - **Legacy WatchMonitor**: Disabled but preserved with clear fencing comments.

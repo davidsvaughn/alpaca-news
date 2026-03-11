@@ -35,36 +35,92 @@
 // Uses event delegation so it works on dynamically replaced DOM elements.
 (function() {
   var KEY = 'positions_collapse_state';
-  function getState() { return JSON.parse(localStorage.getItem(KEY) || '{}'); }
-  function saveState(s) { localStorage.setItem(KEY, JSON.stringify(s)); }
+  var CONTAINER_ID = 'positions-content';
 
-  // Restore open sections after every HTMX swap
-  function restoreState() {
+  function getContainer() {
+    return document.getElementById(CONTAINER_ID);
+  }
+
+  function getState() {
+    try {
+      var raw = localStorage.getItem(KEY);
+      if (!raw) return {};
+      var parsed = JSON.parse(raw);
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
+      return parsed;
+    } catch (err) {
+      // Self-heal stale/non-JSON values from older builds.
+      try { localStorage.removeItem(KEY); } catch (e) {}
+      return {};
+    }
+  }
+
+  function saveState(state) {
+    try { localStorage.setItem(KEY, JSON.stringify(state || {})); } catch (e) {}
+  }
+
+  function captureCurrentState() {
+    var container = getContainer();
+    if (!container) return;
     var state = getState();
-    document.querySelectorAll('._toggle-section').forEach(function(el) {
-      if (state[el.id]) el.style.display = '';
+    container.querySelectorAll('._toggle-section').forEach(function(el) {
+      if (!el.id) return;
+      state[el.id] = (el.style.display !== 'none');
+    });
+    saveState(state);
+  }
+
+  // Restore sections after HTMX swaps.
+  function restoreState() {
+    var container = getContainer();
+    if (!container) return;
+    var state = getState();
+    container.querySelectorAll('._toggle-section').forEach(function(el) {
+      if (!el.id) return;
+      el.style.display = state[el.id] ? '' : 'none';
     });
   }
+
+  function scheduleRestore() {
+    requestAnimationFrame(restoreState);
+  }
+
+  var container = getContainer();
+  if (!container) return;
 
   // Event delegation on the container — handles clicks on toggle links
-  var container = document.getElementById('positions-content');
-  if (container) {
-    container.addEventListener('click', function(e) {
-      var link = e.target.closest('._toggle-link');
-      if (!link) return;
-      e.preventDefault();
-      var target = document.getElementById(link.dataset.target);
-      if (!target) return;
-      var open = target.style.display !== 'none';
-      target.style.display = open ? 'none' : '';
-      var state = getState();
-      state[target.id] = !open;
-      saveState(state);
-    });
+  container.addEventListener('click', function(e) {
+    var link = e.target.closest('._toggle-link');
+    if (!link) return;
+    e.preventDefault();
+    var target = document.getElementById(link.dataset.target);
+    if (!target) return;
+    var open = target.style.display !== 'none';
+    target.style.display = open ? 'none' : '';
+    var state = getState();
+    state[target.id] = !open;
+    saveState(state);
+  });
 
-    // Restore after each HTMX swap (including initial load)
-    container.addEventListener('htmx:afterSwap', restoreState);
-  }
+  // Snapshot currently open sections before any HTMX refresh of this panel.
+  document.body.addEventListener('htmx:beforeRequest', function(e) {
+    var detail = e.detail || {};
+    var requestTarget = detail.target || null;
+    var source = detail.elt || null;
+    if (requestTarget === container || source === container) {
+      captureCurrentState();
+    }
+  });
+
+  // Restore after swap/settle in case there are event-order races.
+  document.body.addEventListener('htmx:afterSwap', function(e) {
+    var detail = e.detail || {};
+    if (detail.target === container) scheduleRestore();
+  });
+  document.body.addEventListener('htmx:afterSettle', function(e) {
+    var detail = e.detail || {};
+    if (detail.target === container) scheduleRestore();
+  });
 })();
 
 // Portfolio drag-to-reorder — persists order in localStorage, survives HTMX swaps.
