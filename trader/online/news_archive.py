@@ -25,6 +25,7 @@ def _archive_feed_dir(
     incoming_dir: Path,
     archive_root: Path,
     hot_hours: int,
+    bucket_name: str | None = None,
 ) -> tuple[int, int]:
     """Archive stale JSON files for one feed directory.
 
@@ -50,10 +51,13 @@ def _archive_feed_dir(
 
     archived_files = 0
     archived_bytes = 0
-    feed_name = incoming_dir.name or "feed"
+    feed_name = bucket_name if bucket_name is not None else (incoming_dir.name or "feed")
 
     for day, entries in grouped.items():
-        zip_path = archive_root / feed_name / f"{day}.zip"
+        if feed_name:
+            zip_path = archive_root / feed_name / f"{day}.zip"
+        else:
+            zip_path = archive_root / f"{day}.zip"
         zip_path.parent.mkdir(parents=True, exist_ok=True)
         entries.sort(key=lambda x: x[0].name)
 
@@ -152,6 +156,7 @@ def run_news_archive_once(*, settings: Settings) -> tuple[int, int, int]:
             incoming_dir=incoming,
             archive_root=archive_root,
             hot_hours=settings.news_archive_hot_hours,
+            bucket_name=incoming.name or "feed",
         )
         total_files += fcount
         total_bytes += bcount
@@ -163,18 +168,41 @@ def run_news_archive_once(*, settings: Settings) -> tuple[int, int, int]:
     return (total_files, total_bytes, pruned)
 
 
+def run_snapshot_archive_once(*, settings: Settings) -> tuple[int, int, int]:
+    """Run one archive/prune cycle for snapshot JSON files."""
+    snapshots_dir = Path(settings.snapshots_dir)
+    snapshots_dir.mkdir(parents=True, exist_ok=True)
+
+    archive_root = Path(settings.snapshot_archive_dir)
+    archive_root.mkdir(parents=True, exist_ok=True)
+
+    files_archived, bytes_archived = _archive_feed_dir(
+        incoming_dir=snapshots_dir,
+        archive_root=archive_root,
+        hot_hours=settings.snapshot_archive_hot_hours,
+        bucket_name="",  # put daily ZIPs directly in snapshot_archive_dir
+    )
+    archives_pruned = _prune_old_archives(
+        archive_root=archive_root,
+        retention_days=settings.snapshot_archive_retention_days,
+    )
+    return (files_archived, bytes_archived, archives_pruned)
+
+
 def run_news_archive_loop(*, settings: Settings) -> None:
     """Background loop that periodically archives + prunes news files."""
     interval_s = max(60, int(settings.news_archive_interval_s))
     while True:
         try:
-            files_archived, bytes_archived, archives_pruned = run_news_archive_once(settings=settings)
-            if files_archived or archives_pruned:
-                mb = bytes_archived / (1024 * 1024)
+            news_files, news_bytes, news_pruned = run_news_archive_once(settings=settings)
+            snap_files, snap_bytes, snap_pruned = run_snapshot_archive_once(settings=settings)
+            if news_files or news_pruned or snap_files or snap_pruned:
+                news_mb = news_bytes / (1024 * 1024)
+                snap_mb = snap_bytes / (1024 * 1024)
                 print(
-                    "News archive: "
-                    f"archived={files_archived} files ({mb:.1f} MB), "
-                    f"pruned={archives_pruned} zip(s)"
+                    "Archive cycle: "
+                    f"news archived={news_files} ({news_mb:.1f} MB), pruned={news_pruned}; "
+                    f"snapshots archived={snap_files} ({snap_mb:.1f} MB), pruned={snap_pruned}"
                 )
         except Exception as exc:
             print(f"WARN: news archive loop failed: {exc}")

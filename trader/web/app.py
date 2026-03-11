@@ -2058,6 +2058,9 @@ def create_app(
             "news_archive_hot_hours",
             "news_archive_retention_days",
             "news_archive_interval_s",
+            "snapshot_archive_dir",
+            "snapshot_archive_hot_hours",
+            "snapshot_archive_retention_days",
         }
         needs_restart = any(name in restart_fields for name, _, _ in changes)
         restart_note = (
@@ -2600,6 +2603,9 @@ def _settings_groups(s: Settings) -> list[tuple[str, list[tuple[str, Any]]]]:
                 "news_archive_hot_hours",
                 "news_archive_retention_days",
                 "news_archive_interval_s",
+                "snapshot_archive_dir",
+                "snapshot_archive_hot_hours",
+                "snapshot_archive_retention_days",
                 "data_dir",
                 "sqlite_path",
                 "snapshots_dir",

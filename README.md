@@ -86,6 +86,10 @@ Incoming files are automatically archived to daily ZIPs under `data/news/archive
 - `NEWS_ARCHIVE_HOT_HOURS` (default `24`) keeps loose JSON in the hot folder
 - `NEWS_ARCHIVE_RETENTION_DAYS` (default `90`) prunes old ZIP archives
 
+Snapshots are also archived to daily ZIPs under `data/snapshots/archive/`:
+- `SNAPSHOT_ARCHIVE_HOT_HOURS` (default `24`)
+- `SNAPSHOT_ARCHIVE_RETENTION_DAYS` (default `90`)
+
 They terminate automatically when the trader app exits. If they don't (orphaned processes), kill them manually:
 
 ```bash

@@ -94,6 +94,9 @@ class Settings:
     news_archive_hot_hours: int
     news_archive_retention_days: int
     news_archive_interval_s: int
+    snapshot_archive_dir: str
+    snapshot_archive_hot_hours: int
+    snapshot_archive_retention_days: int
 
     # Models (stage configs; providers inferred from model prefixes)
     triage_model: str
@@ -256,6 +259,12 @@ def load_settings(*, dotenv_path: str | None = None, override: bool = False) -> 
     snapshots_dir = _env_str("SNAPSHOTS_DIR", os.path.join(data_dir, "snapshots")) or os.path.join(
         data_dir, "snapshots"
     )
+    snapshot_archive_dir = _env_str(
+        "SNAPSHOT_ARCHIVE_DIR",
+        os.path.join(snapshots_dir, "archive"),
+    ) or os.path.join(snapshots_dir, "archive")
+    snapshot_archive_hot_hours = _env_int("SNAPSHOT_ARCHIVE_HOT_HOURS", 24)
+    snapshot_archive_retention_days = _env_int("SNAPSHOT_ARCHIVE_RETENTION_DAYS", 90)
 
     triage_model = os.getenv("TRIAGE_MODEL") or "grok-4.1-fast-reasoning"
     research_model = os.getenv("RESEARCH_MODEL") or "gpt-5-mini"
@@ -372,6 +381,9 @@ def load_settings(*, dotenv_path: str | None = None, override: bool = False) -> 
         news_archive_hot_hours=news_archive_hot_hours,
         news_archive_retention_days=news_archive_retention_days,
         news_archive_interval_s=news_archive_interval_s,
+        snapshot_archive_dir=snapshot_archive_dir,
+        snapshot_archive_hot_hours=snapshot_archive_hot_hours,
+        snapshot_archive_retention_days=snapshot_archive_retention_days,
         triage_model=triage_model,
         research_model=research_model,
         xsearch_model=xsearch_model,

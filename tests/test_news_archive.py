@@ -8,7 +8,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from zipfile import ZipFile
 
-from trader.online.news_archive import run_news_archive_once
+from trader.online.news_archive import run_news_archive_once, run_snapshot_archive_once
 
 
 def _touch_json(path: Path, *, content: str, age_hours: float) -> None:
@@ -64,6 +64,58 @@ def test_prunes_archives_older_than_retention(tmp_path: Path) -> None:
     )
 
     archived, _bytes, pruned = run_news_archive_once(settings=settings)
+    assert archived == 0
+    assert pruned == 1
+    assert not old_zip.exists()
+    assert recent_zip.exists()
+
+
+def test_snapshot_archive_old_files_and_keep_hot(tmp_path: Path) -> None:
+    snapshots_dir = tmp_path / "snapshots"
+    old_snap = snapshots_dir / "old_snap.json"
+    hot_snap = snapshots_dir / "hot_snap.json"
+    _touch_json(old_snap, content='{"snapshot_id":"old"}', age_hours=30)
+    _touch_json(hot_snap, content='{"snapshot_id":"hot"}', age_hours=1)
+
+    settings = SimpleNamespace(
+        snapshots_dir=str(snapshots_dir),
+        snapshot_archive_dir=str(tmp_path / "snap_archive"),
+        snapshot_archive_hot_hours=24,
+        snapshot_archive_retention_days=90,
+    )
+
+    archived, _bytes, pruned = run_snapshot_archive_once(settings=settings)
+    assert archived == 1
+    assert pruned == 0
+    assert not old_snap.exists()
+    assert hot_snap.exists()
+
+    zips = list((tmp_path / "snap_archive").glob("*.zip"))
+    assert len(zips) == 1
+    with ZipFile(zips[0], mode="r") as zf:
+        assert "old_snap.json" in zf.namelist()
+        assert "hot_snap.json" not in zf.namelist()
+
+
+def test_snapshot_archive_prunes_old_zips(tmp_path: Path) -> None:
+    archive_root = tmp_path / "snap_archive"
+    old_zip = archive_root / "2020-01-01.zip"
+    old_zip.parent.mkdir(parents=True, exist_ok=True)
+    with ZipFile(old_zip, mode="w") as zf:
+        zf.writestr("x.json", '{"x":1}')
+
+    recent_zip = archive_root / "2099-01-01.zip"
+    with ZipFile(recent_zip, mode="w") as zf:
+        zf.writestr("y.json", '{"y":1}')
+
+    settings = SimpleNamespace(
+        snapshots_dir=str(tmp_path / "snapshots"),
+        snapshot_archive_dir=str(archive_root),
+        snapshot_archive_hot_hours=24,
+        snapshot_archive_retention_days=90,
+    )
+
+    archived, _bytes, pruned = run_snapshot_archive_once(settings=settings)
     assert archived == 0
     assert pruned == 1
     assert not old_zip.exists()

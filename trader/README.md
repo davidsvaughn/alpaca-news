@@ -17,6 +17,7 @@ for offline labeling + policy learning.
   - **Phase 1**: broad, cheap, shallow evidence gathering → generates competing hypotheses
   - **Phase 2**: selective deepening → confirms/refutes top-K hypotheses with gated follow-ups
 - Seals an immutable **Snapshot** JSON artifact under `data/snapshots/`
+- Archives snapshot JSON older than 24h into `data/snapshots/archive/YYYY-MM-DD.zip`
 - Persists Snapshot metadata+JSON into `data/trader.db` (SQLite)
 - Captures **Schwab market context** + **price context** (quotes + recent candles; optional stream)
 - Serves a minimal **FastAPI dashboard** with **SSE** at `http://127.0.0.1:8000/`

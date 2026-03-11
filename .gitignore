@@ -236,3 +236,4 @@ data/watches/*.json
 data/bak/trader_mar102026.zip
 data/news/incoming/**/*.json
 data/news/archive/
+data/snapshots/archive/
