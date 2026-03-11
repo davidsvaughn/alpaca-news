@@ -4,6 +4,25 @@
 
 {% block extra_css %}
 .config-badge { font-size: 0.75rem; }
+._section-toggle {
+  display: inline-flex;
+  align-items: center;
+  font-size: 0.9rem;
+  font-weight: 600;
+  line-height: 1.2;
+}
+._toggle-arrow {
+  display: inline-block;
+  margin-right: 5px;
+  color: #fd7e14;
+  font-size: 0.95em;
+  transition: transform 0.2s ease;
+  transform: rotate(0deg);
+  vertical-align: middle;
+}
+._toggle-link._is-open ._toggle-arrow {
+  transform: rotate(90deg);
+}
 {% endblock %}
 
 {% block content %}
@@ -79,6 +98,19 @@
       if (!el.id) return;
       el.style.display = state[el.id] ? '' : 'none';
     });
+    syncToggleArrows(container);
+  }
+
+  function syncToggleArrows(scope) {
+    var root = scope || getContainer();
+    if (!root) return;
+    root.querySelectorAll('._toggle-link').forEach(function(link) {
+      var targetId = link.dataset.target;
+      if (!targetId || !link.querySelector('._toggle-arrow')) return;
+      var target = document.getElementById(targetId);
+      var isOpen = !!target && target.style.display !== 'none';
+      link.classList.toggle('_is-open', isOpen);
+    });
   }
 
   function scheduleRestore() {
@@ -97,6 +129,7 @@
     if (!target) return;
     var open = target.style.display !== 'none';
     target.style.display = open ? 'none' : '';
+    link.classList.toggle('_is-open', !open);
     var state = getState();
     state[target.id] = !open;
     saveState(state);

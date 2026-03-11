@@ -144,7 +144,7 @@
 <div class="card mb-3 _portfolio-card" data-portfolio-id="{{ p.config.config_id }}" style="border-left: 4px solid {% if p.config.active %}#198754{% else %}#6c757d{% endif %};">
   <div class="card-body py-3 px-3">
   <!-- Two-column layout: info left, chart right -->
-  <div class="d-flex align-items-stretch flex-wrap">
+  <div class="d-flex align-items-start flex-wrap">
   <div class="flex-shrink-1 me-3" style="min-width:280px; flex-basis:360px;">
 
   <!-- Header: config ID + deactivate/delete -->
@@ -174,7 +174,10 @@
   </div>
   <div class="mb-1">
     {% if p.config.paused is defined and p.config.paused %}<span class="badge bg-warning text-dark me-1" style="font-size:.65rem">PAUSED</span>{% endif %}
-    {% if p.config.alpaca_account_id %}<span class="badge bg-warning text-dark" style="font-size:.65rem">Alpaca: {{ p.config.alpaca_account_id }}</span>{% endif %}
+    {% if p.config.alpaca_account_id %}
+      <span class="badge bg-warning text-dark" style="font-size:.65rem">Alpaca: {{ p.config.alpaca_account_id }}</span>
+      {% if p.config.alpaca_account_name %}<span class="ms-1 fw-bold text-dark" style="font-size:.72rem">{{ p.config.alpaca_account_name }}</span>{% endif %}
+    {% endif %}
   </div>
 
   <!-- Sim value display -->
@@ -232,26 +235,16 @@
   <div class="small text-muted mb-0">
     {{ _strategy_short.get(p.config.exit_strategy, p.config.exit_strategy) }} | Stop: {{ p.config.guard_stop_pct }}% | {{ alloc_summary }}
   </div>
-  {% if p.config.exit_strategy is defined %}
-  <div class="mb-1">
-    <a href="#" class="text-decoration-none small text-muted _toggle-link" data-target="cfg-detail-{{ p.config.config_id }}" style="font-size:.7rem">details &#9662;</a>
-  </div>
-  {% endif %}
 
   {{ stats_row(p.stats) }}
 
-  </div><!-- end left column -->
-
-  <!-- Right column: equity chart fills available space -->
-  <div class="flex-grow-1" style="position:relative; min-height:150px; min-width:200px;">
-    <div id="equity-chart-{{ p.config.config_id }}" data-config-id="{{ p.config.config_id }}"
-         data-sim-ending="{{ p.sim.sim_ending if p.sim and p.sim.sim_ending else '' }}"
-         style="position:absolute; top:0; left:0; width:100%; height:100%;"></div>
-  </div>
-  </div><!-- end two-column layout -->
-
-  <!-- Collapsible config details -->
   {% if p.config.exit_strategy is defined %}
+  <div class="mb-1">
+    <a href="#" class="text-decoration-none text-muted _toggle-link _section-toggle" data-target="cfg-detail-{{ p.config.config_id }}">
+      <span class="_toggle-arrow" aria-hidden="true">&#9654;</span>details
+    </a>
+  </div>
+  <!-- Collapsible config details -->
   <div class="small text-muted mb-2 _toggle-section" id="cfg-detail-{{ p.config.config_id }}" style="display:none">
     <div class="card card-body py-2 px-3 bg-light border-0" style="font-size:.75rem">
       <div class="row g-3">
@@ -300,9 +293,19 @@
   </div>
   {% endif %}
 
+  </div><!-- end left column -->
+
+  <!-- Right column: equity chart fills available space -->
+  <div class="flex-grow-1" style="position:relative; min-height:150px; height:clamp(150px, 20vh, 210px); min-width:200px;">
+    <div id="equity-chart-{{ p.config.config_id }}" data-config-id="{{ p.config.config_id }}"
+         data-sim-ending="{{ p.sim.sim_ending if p.sim and p.sim.sim_ending else '' }}"
+         style="position:absolute; top:0; left:0; width:100%; height:100%;"></div>
+  </div>
+  </div><!-- end two-column layout -->
+
   {% if p.holding or p.cooling or p.closed %}
-  <a href="#" class="text-decoration-none small text-muted _toggle-link" data-target="positions-{{ p.config.config_id }}" style="font-size:.75rem">
-    positions &#9662;
+  <a href="#" class="text-decoration-none text-muted _toggle-link _section-toggle" data-target="positions-{{ p.config.config_id }}">
+    <span class="_toggle-arrow" aria-hidden="true">&#9654;</span>positions
   </a>
   <div id="positions-{{ p.config.config_id }}" class="_toggle-section" style="display:none">
 
@@ -352,8 +355,8 @@
 <div class="portfolio-section">
   <h5 class="mb-2 text-muted">Legacy Watches <span class="badge bg-secondary" style="font-size:.65rem">no config</span></h5>
   {{ stats_row(legacy.stats) }}
-  <a href="#" class="text-decoration-none small text-muted _toggle-link" data-target="positions-legacy" style="font-size:.75rem">
-    positions &#9662;
+  <a href="#" class="text-decoration-none text-muted _toggle-link _section-toggle" data-target="positions-legacy">
+    <span class="_toggle-arrow" aria-hidden="true">&#9654;</span>positions
   </a>
   <div id="positions-legacy" class="_toggle-section" style="display:none">
     {% if legacy.holding %}

@@ -61,6 +61,7 @@ class LiveConfig:
 
     # Alpaca paper trading (optional — when set, orders are executed via Alpaca)
     alpaca_account_id: str | None = None  # e.g. "PA31QXNAPB1H"
+    alpaca_account_name: str | None = None  # e.g. "AlpacaPaper1"
 
     # Metadata
     created_at: str = ""

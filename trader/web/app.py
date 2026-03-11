@@ -1449,6 +1449,7 @@ def create_app(
 
         # Fetch Alpaca equity for linked accounts (one API call per account)
         alpaca_equity_by_account: dict[str, float] = {}
+        alpaca_name_by_account: dict[str, str] = {}
         try:
             from trader.market.alpaca_broker import AlpacaAccountRegistry, AlpacaBroker
             registry = AlpacaAccountRegistry()
@@ -1460,6 +1461,7 @@ def create_app(
             for acct_id in linked_accounts:
                 creds = registry.get(acct_id)
                 if creds:
+                    alpaca_name_by_account[acct_id] = str(getattr(creds, "name", "") or "")
                     try:
                         broker = AlpacaBroker(
                             api_key=creds.api_key, secret_key=creds.secret_key,
@@ -1476,6 +1478,8 @@ def create_app(
             cfg = p["config"]
             acct_id = cfg.get("alpaca_account_id") if isinstance(cfg, dict) else getattr(cfg, "alpaca_account_id", None)
             alpaca_equity = alpaca_equity_by_account.get(acct_id) if acct_id else None
+            if acct_id and isinstance(cfg, dict):
+                cfg["alpaca_account_name"] = alpaca_name_by_account.get(acct_id, "")
             p["sim"] = _compute_sim(p, alpaca_equity=alpaca_equity)
 
         # Wrap for Jinja
@@ -1580,12 +1584,25 @@ def create_app(
             # Update existing
             existing = get_live_config(db, config_id)
             existing.update(body)
+            resolved_alpaca_id = existing.get("alpaca_account_id")
+            if resolved_alpaca_id:
+                try:
+                    from trader.market.alpaca_broker import AlpacaAccountRegistry
+                    registry = AlpacaAccountRegistry()
+                    creds = registry.get(resolved_alpaca_id)
+                    if creds:
+                        existing["alpaca_account_name"] = str(getattr(creds, "name", "") or "")
+                except Exception:
+                    pass
+            elif "alpaca_account_id" in body:
+                existing["alpaca_account_name"] = None
             existing["updated_at"] = datetime.now(tz=timezone.utc).isoformat()
             update_live_config(db, config_id, existing)
             return existing
         else:
             # Enforce one-to-one: Alpaca account can only link to one active config
             alpaca_id = body.get("alpaca_account_id")
+            alpaca_name: str | None = None
             if alpaca_id:
                 for existing_cfg in get_active_live_configs(db):
                     if existing_cfg.get("alpaca_account_id") == alpaca_id:
@@ -1603,6 +1620,7 @@ def create_app(
                     registry = AlpacaAccountRegistry()
                     creds = registry.get(alpaca_id)
                     if creds:
+                        alpaca_name = str(getattr(creds, "name", "") or "")
                         broker = AlpacaBroker(
                             api_key=creds.api_key, secret_key=creds.secret_key,
                             paper=creds.paper, account_id=alpaca_id, name=creds.name,
@@ -1658,6 +1676,7 @@ def create_app(
                 cooling_off_market_hours=float(body.get("cooling_off_market_hours", 24.0)),
                 live_overrides=body.get("live_overrides", {}),
                 alpaca_account_id=body.get("alpaca_account_id"),
+                alpaca_account_name=alpaca_name,
             )
             insert_live_config(db, config=cfg.to_dict())
             result = cfg.to_dict()
