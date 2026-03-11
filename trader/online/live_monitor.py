@@ -215,7 +215,17 @@ class LiveExitMonitor:
         entry_ts = pd.Timestamp(entry_dt_et).floor("s")
         entry_idx = bars.index.searchsorted(entry_ts)
         if entry_idx >= len(bars):
-            # Entry is after all available bars — nothing to evaluate yet
+            # Entry is after all available bars — can't evaluate exit yet,
+            # but still update peak/trough P&L from latest bar
+            current_price = float(bars.iloc[-1]["Close"])
+            if entry_price and entry_price > 0:
+                current_pnl = ((current_price - entry_price) / entry_price) * 100.0
+                builder = WatchBuilder.from_dict(watch_dict)
+                if builder.peak_pnl_pct is None or current_pnl > builder.peak_pnl_pct:
+                    builder.peak_pnl_pct = round(current_pnl, 4)
+                if builder.trough_pnl_pct is None or current_pnl < builder.trough_pnl_pct:
+                    builder.trough_pnl_pct = round(current_pnl, 4)
+                update_watch(self.db, watch_id, builder.to_watch().to_dict())
             return
 
         # Get or create indicator cache for this symbol;

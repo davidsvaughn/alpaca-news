@@ -15,13 +15,13 @@ from datetime import datetime, timedelta
 
 import pandas as pd
 
-from trader.db.database import Database, get_all_watches, update_watch
+from trader.db.database import get_all_watches, open_sqlite, update_watch
 from trader.market.backtest import _filter_trading_hours, _get_ohlcv_1m
 from trader.market.market_hours import ET
 from trader.models.watch import WatchBuilder
 
 
-def backfill_watch(db: Database, watch_dict: dict, *, dry_run: bool = False) -> bool:
+def backfill_watch(db, watch_dict: dict, *, dry_run: bool = False) -> bool:
     """Compute and store peak/trough P&L for one watch. Returns True if updated."""
     entry = watch_dict.get("entry", {})
     entry_price = entry.get("price")
@@ -58,7 +58,7 @@ def backfill_watch(db: Database, watch_dict: dict, *, dry_run: bool = False) -> 
         print(f"  SKIP {watch_id} ({symbol}): no bar data")
         return False
 
-    bars = _filter_trading_hours(bars)
+    bars = _filter_trading_hours(bars, market_close=None)
     if bars.empty:
         return False
 
@@ -69,8 +69,9 @@ def backfill_watch(db: Database, watch_dict: dict, *, dry_run: bool = False) -> 
         entry_dt_et = entry_dt
     entry_ts = pd.Timestamp(entry_dt_et).floor("s")
     entry_idx = bars.index.searchsorted(entry_ts)
+    # Clamp: if entry is after all bars, use last bar only
     if entry_idx >= len(bars):
-        return False
+        entry_idx = len(bars) - 1
 
     # Find end bar
     if end_dt.tzinfo is not None:
@@ -84,7 +85,8 @@ def backfill_watch(db: Database, watch_dict: dict, *, dry_run: bool = False) -> 
     # Compute P&L at each bar's close
     holding_bars = bars.iloc[entry_idx:end_idx]
     if holding_bars.empty:
-        return False
+        # Fallback: use last bar
+        holding_bars = bars.iloc[-1:]
 
     closes = holding_bars["Close"].values
     pnl_pcts = ((closes - entry_price) / entry_price) * 100.0
@@ -107,10 +109,11 @@ def backfill_watch(db: Database, watch_dict: dict, *, dry_run: bool = False) -> 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Backfill peak/trough P&L for watches")
     parser.add_argument("--dry-run", action="store_true", help="Preview without writing")
+    parser.add_argument("--db", default="data/trader.db", help="SQLite DB path")
     args = parser.parse_args()
 
-    db = Database()
-    watches = get_all_watches(db, limit=10000)
+    db = open_sqlite(args.db)
+    watches = get_all_watches(db)
     print(f"Found {len(watches)} watches")
 
     updated = 0

@@ -8,6 +8,7 @@ dashboard toggle buttons.
 
 from __future__ import annotations
 
+import io
 import subprocess
 import sys
 import threading
@@ -115,10 +116,17 @@ class FeedManager:
     def _start_subprocess(self) -> None:
         if self._proc is not None and self._proc.poll() is None:
             return  # already running
+        # Use None (inherit) instead of sys.stdout/sys.stderr directly,
+        # because uvicorn may replace them with objects lacking fileno().
+        try:
+            sys.stdout.fileno()
+            stdout, stderr = sys.stdout, sys.stderr
+        except (io.UnsupportedOperation, AttributeError):
+            stdout, stderr = None, None
         self._proc = subprocess.Popen(
             [sys.executable, "-u", self._script],
-            stdout=sys.stdout,
-            stderr=sys.stderr,
+            stdout=stdout,
+            stderr=stderr,
         )
         print(f"{self.label} websocket started (pid {self._proc.pid})")
 

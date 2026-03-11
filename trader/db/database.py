@@ -925,18 +925,26 @@ def _parse_rows(rows: list, col: int = 0) -> list[dict[str, Any]]:
 
 
 def get_all_watches(
-    db: Database, *, status: str | None = None, limit: int = 50, offset: int = 0
+    db: Database, *, status: str | None = None, limit: int = 0, offset: int = 0
 ) -> list[dict[str, Any]]:
-    """Fetch watches ordered by created_at DESC, with optional status filter."""
+    """Fetch watches ordered by created_at DESC, with optional status filter.
+
+    Args:
+        limit: Max rows to return. 0 (default) = no limit (return all).
+    """
+    parts = ["SELECT watch_json FROM watches"]
+    params: dict[str, Any] = {}
     if status:
-        sql = (
-            "SELECT watch_json FROM watches WHERE status = :status "
-            "ORDER BY created_at DESC LIMIT :lim OFFSET :off"
-        )
-        params: dict[str, Any] = {"status": status, "lim": limit, "off": offset}
-    else:
-        sql = "SELECT watch_json FROM watches ORDER BY created_at DESC LIMIT :lim OFFSET :off"
-        params = {"lim": limit, "off": offset}
+        parts.append("WHERE status = :status")
+        params["status"] = status
+    parts.append("ORDER BY created_at DESC")
+    if limit > 0:
+        parts.append("LIMIT :lim")
+        params["lim"] = limit
+    if offset > 0:
+        parts.append("OFFSET :off")
+        params["off"] = offset
+    sql = " ".join(parts)
     with db.engine.connect() as conn:
         rows = conn.execute(text(sql), params).fetchall()
     return _parse_rows(rows)
