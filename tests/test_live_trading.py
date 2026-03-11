@@ -447,6 +447,113 @@ class TestLivePortfolioManager:
         snap2 = _make_snapshot(snapshot_id="snap_2", symbol="TSLA")
         assert not pm.evaluate_snapshot(snap2, "TSLA")
 
+    def test_replace_weakest_by_confidence(self, db):
+        """When at capacity with rank_method=confidence, a higher-confidence
+        signal should replace the lowest-confidence holding."""
+        from trader.online.live_monitor import LivePortfolioManager
+
+        cfg = LiveConfig.create(
+            name="Replace Test",
+            filters={},
+            allocation="max_positions",
+            allocation_params={"max_pos": 1, "when_full": "replace", "rank_method": "confidence"},
+            starting_capital=100000.0,
+            exit_strategy="volume_delta_divergence",
+            exit_params={"lookback": 80},
+            guard_stop_pct=0.0,
+            min_hold=5,
+            price_delay_minutes=5,
+        )
+        insert_live_config(db, config=cfg.to_dict())
+        activate_live_config(db, cfg.config_id)
+
+        pm = LivePortfolioManager(db=db)
+
+        # Buy first stock with confidence 0.70
+        snap1 = _make_snapshot(snapshot_id="snap_1", symbol="AAPL", confidence=0.70)
+        assert pm.evaluate_snapshot(snap1, "AAPL")
+
+        # Higher confidence signal should replace AAPL
+        snap2 = _make_snapshot(snapshot_id="snap_2", symbol="TSLA", confidence=0.95)
+        assert pm.evaluate_snapshot(snap2, "TSLA")
+
+        # Verify: AAPL exited with reason "replaced", TSLA is now holding
+        watches = get_active_watches(db)
+        holding = [w for w in watches if w["status"] == "holding"]
+        assert len(holding) == 1
+        assert holding[0]["symbol"] == "TSLA"
+
+        exited = [w for w in watches if w["status"] == "exited"]
+        assert len(exited) == 1
+        assert exited[0]["symbol"] == "AAPL"
+        assert exited[0]["exit"]["reason"] == "replaced"
+
+    def test_no_replace_when_skip(self, db):
+        """With when_full=skip, should NOT replace even if new signal is stronger."""
+        from trader.online.live_monitor import LivePortfolioManager
+
+        cfg = LiveConfig.create(
+            name="Skip Test",
+            filters={},
+            allocation="max_positions",
+            allocation_params={"max_pos": 1, "when_full": "skip", "rank_method": "confidence"},
+            starting_capital=100000.0,
+            exit_strategy="volume_delta_divergence",
+            exit_params={"lookback": 80},
+            guard_stop_pct=0.0,
+            min_hold=5,
+            price_delay_minutes=5,
+        )
+        insert_live_config(db, config=cfg.to_dict())
+        activate_live_config(db, cfg.config_id)
+
+        pm = LivePortfolioManager(db=db)
+
+        snap1 = _make_snapshot(snapshot_id="snap_1", symbol="AAPL", confidence=0.70)
+        assert pm.evaluate_snapshot(snap1, "AAPL")
+
+        # Higher confidence but when_full=skip — should be rejected
+        snap2 = _make_snapshot(snapshot_id="snap_2", symbol="TSLA", confidence=0.95)
+        assert not pm.evaluate_snapshot(snap2, "TSLA")
+
+        watches = get_active_watches(db)
+        holding = [w for w in watches if w["status"] == "holding"]
+        assert len(holding) == 1
+        assert holding[0]["symbol"] == "AAPL"
+
+    def test_no_replace_weaker_signal(self, db):
+        """New signal weaker than existing — should not replace."""
+        from trader.online.live_monitor import LivePortfolioManager
+
+        cfg = LiveConfig.create(
+            name="No Replace Test",
+            filters={},
+            allocation="max_positions",
+            allocation_params={"max_pos": 1, "when_full": "replace", "rank_method": "confidence"},
+            starting_capital=100000.0,
+            exit_strategy="volume_delta_divergence",
+            exit_params={"lookback": 80},
+            guard_stop_pct=0.0,
+            min_hold=5,
+            price_delay_minutes=5,
+        )
+        insert_live_config(db, config=cfg.to_dict())
+        activate_live_config(db, cfg.config_id)
+
+        pm = LivePortfolioManager(db=db)
+
+        snap1 = _make_snapshot(snapshot_id="snap_1", symbol="AAPL", confidence=0.95)
+        assert pm.evaluate_snapshot(snap1, "AAPL")
+
+        # Weaker signal — should be rejected
+        snap2 = _make_snapshot(snapshot_id="snap_2", symbol="TSLA", confidence=0.70)
+        assert not pm.evaluate_snapshot(snap2, "TSLA")
+
+        watches = get_active_watches(db)
+        holding = [w for w in watches if w["status"] == "holding"]
+        assert len(holding) == 1
+        assert holding[0]["symbol"] == "AAPL"
+
 
 # ---------------------------------------------------------------------------
 # LiveExitMonitor tests

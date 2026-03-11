@@ -1524,7 +1524,11 @@
     "NUWE",
     "BGSF",
     "GNEMF",
-    "JRNGF"
+    "JRNGF",
+    "WHD",
+    "TGLS",
+    "STT",
+    "STNE"
   ],
   "crypto": [],
   "rejected": [
@@ -1700,5 +1704,5 @@
     "CANU",
     "PAYP"
   ],
-  "last_updated": "2026-03-11T23:16:14.028662+00:00"
+  "last_updated": "2026-03-11T23:50:34.026836+00:00"
 }

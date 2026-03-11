@@ -747,6 +747,211 @@ class LivePortfolioManager:
 
         return True
 
+    # ------------------------------------------------------------------
+    # Replace-weakest helpers
+    # ------------------------------------------------------------------
+
+    def _score_holding_watches(
+        self,
+        holdings: list[dict[str, Any]],
+        rank_method: str,
+        composite_weight: float,
+        broker: Any | None,
+    ) -> dict[str, float]:
+        """Score each holding watch. Returns {watch_id: score}.
+
+        For unreal_pl: uses Alpaca current_price if broker connected,
+        otherwise falls back to entry_price (score = 0).
+        For confidence: uses entry confidence from the watch.
+        For composite: z-score combination of both.
+        """
+        scores: dict[str, float] = {}
+        confidences: dict[str, float] = {}
+        pnl_scores: dict[str, float] = {}
+
+        # If broker connected, batch-fetch all positions for current prices
+        alpaca_prices: dict[str, float] = {}
+        if broker:
+            try:
+                positions = broker.get_positions()
+                alpaca_prices = {p.symbol.upper(): p.current_price for p in positions}
+            except Exception:
+                log.warning("Could not fetch Alpaca positions for ranking")
+
+        for w in holdings:
+            wid = w["watch_id"]
+            entry = w.get("entry") or {}
+            entry_price = float(entry.get("price", 0))
+            conf = float(entry.get("confidence", 0.5))
+            sym = w.get("symbol", "").upper()
+            confidences[wid] = conf
+
+            # Compute unrealized P&L
+            current_price = alpaca_prices.get(sym)
+            if current_price and entry_price > 0:
+                pnl_scores[wid] = (current_price - entry_price) / entry_price
+            else:
+                pnl_scores[wid] = 0.0
+
+        if rank_method == RANK_METHOD_CONFIDENCE:
+            scores = confidences
+        elif rank_method == RANK_METHOD_UNREAL_PL:
+            scores = pnl_scores
+        elif rank_method == RANK_METHOD_COMPOSITE:
+            wids = list(confidences.keys())
+            if len(wids) < 2:
+                scores = pnl_scores
+            else:
+                import math
+
+                def _z(vals: list[float]) -> list[float]:
+                    m = sum(vals) / len(vals)
+                    v = sum((x - m) ** 2 for x in vals) / (len(vals) - 1)
+                    s = math.sqrt(v) if v > 0 else 1.0
+                    return [(x - m) / s for x in vals]
+
+                z_conf = _z([confidences[w] for w in wids])
+                z_pnl = _z([pnl_scores[w] for w in wids])
+                scores = {
+                    wid: composite_weight * zc + (1 - composite_weight) * zp
+                    for wid, zc, zp in zip(wids, z_conf, z_pnl)
+                }
+        else:
+            scores = pnl_scores
+
+        return scores
+
+    def _find_replacement_victim(
+        self,
+        new_symbol: str,
+        new_confidence: float,
+        new_direction: str,
+        cfg: LiveConfig,
+    ) -> dict[str, Any] | None:
+        """Find the weakest holding in this config's portfolio.
+
+        Returns the watch dict of the victim if the new signal is stronger,
+        or None if no replacement should happen.
+        """
+        alloc_params = cfg.allocation_params or {}
+        rank_method = normalize_rank_method(
+            str(alloc_params.get("rank_method", RANK_METHOD_UNREAL_PL))
+        )
+        composite_weight = float(alloc_params.get("composite_weight", 0.5))
+
+        # Get all holding watches for this config
+        all_watches = get_active_watches(self.db)
+        holdings = [
+            w for w in all_watches
+            if w.get("status") == "holding"
+            and w.get("live_config_id") == cfg.config_id
+        ]
+        if not holdings:
+            return None
+
+        # Get broker for current prices
+        broker = (self.broker_pool.get(cfg.alpaca_account_id)
+                  if self.broker_pool and cfg.alpaca_account_id else None)
+
+        scores = self._score_holding_watches(holdings, rank_method, composite_weight, broker)
+        if not scores:
+            return None
+
+        # Score the incoming signal
+        if rank_method == RANK_METHOD_CONFIDENCE:
+            new_score = new_confidence
+        elif rank_method == RANK_METHOD_UNREAL_PL:
+            new_score = 0.0  # just entered — no unrealised P&L yet
+        else:
+            # composite: confidence component only (unrealized P&L=0)
+            new_score = composite_weight * new_confidence
+
+        # Find weakest
+        worst_wid = min(scores, key=scores.get)  # type: ignore[arg-type]
+        worst_score = scores[worst_wid]
+
+        if new_score <= worst_score:
+            print(f"LIVE-EVAL: {new_symbol} new_score={new_score:.4f} <= "
+                  f"worst_score={worst_score:.4f} ({worst_wid}) — no replacement")
+            return None
+
+        # Find the watch dict for the victim
+        for w in holdings:
+            if w["watch_id"] == worst_wid:
+                print(f"LIVE-EVAL: {new_symbol} new_score={new_score:.4f} > "
+                      f"worst={w['symbol']} score={worst_score:.4f} — replacing")
+                return w
+        return None
+
+    def _exit_victim(
+        self,
+        victim: dict[str, Any],
+        cfg: LiveConfig,
+    ) -> bool:
+        """Exit (sell) the victim watch to make room for a replacement.
+
+        Returns True on success, False if the exit failed.
+        """
+        symbol = victim["symbol"]
+        watch_id = victim["watch_id"]
+        entry = victim.get("entry") or {}
+        entry_price = float(entry.get("price", 0))
+
+        builder = WatchBuilder.from_dict(victim)
+
+        # Get current price for exit (fallback to entry price)
+        exit_price = entry_price
+
+        broker = (self.broker_pool.get(cfg.alpaca_account_id)
+                  if self.broker_pool and cfg.alpaca_account_id else None)
+
+        if broker and victim.get("alpaca_buy_order_id"):
+            # Cancel stop order first
+            stop_id = victim.get("alpaca_stop_order_id")
+            if stop_id:
+                broker.cancel_order(stop_id)
+                builder.alpaca_stop_order_id = None
+
+            # Close Alpaca position
+            try:
+                sell_confirmed = broker.close_position_and_confirm(symbol)
+                if sell_confirmed and sell_confirmed.filled_avg_price:
+                    exit_price = sell_confirmed.filled_avg_price
+                    log.info("REPLACE SELL CONFIRMED: %s price=%.2f qty=%s",
+                             symbol, exit_price, sell_confirmed.filled_qty)
+            except Exception:
+                log.exception("REPLACE SELL FAILED for %s — aborting replacement", symbol)
+                return False
+        else:
+            # Shadow portfolio: use Alpaca position price if available, else entry
+            if broker:
+                pos = broker.get_position(symbol)
+                if pos:
+                    exit_price = pos.current_price
+
+        builder.record_exit(price=exit_price, reason="replaced")
+        log.info("REPLACE EXIT: %s %s — exit_price=%.2f", symbol, watch_id, exit_price)
+
+        updated = builder.to_watch()
+        update_watch(self.db, watch_id, updated.to_dict())
+
+        if self.bus:
+            from trader.online.event_bus import PipelineEvent
+            pnl_pct = ((exit_price - entry_price) / entry_price * 100) if entry_price else 0
+            self.bus.publish(PipelineEvent(
+                type="watch_exited",
+                payload={
+                    "watch_id": watch_id,
+                    "symbol": symbol,
+                    "exit_price": exit_price,
+                    "reason": "replaced",
+                    "pnl_pct": round(pnl_pct, 2),
+                    "bars_held": 0,
+                },
+            ))
+
+        return True
+
     def _extract_entry_price(
         self,
         snapshot: dict[str, Any],
