@@ -1349,6 +1349,16 @@ def create_app(
                 pass  # prices stay empty — template handles gracefully
 
         # Inject current price + unrealized P&L + backfill qty into holding watches
+        def _backfill_qty(w: dict, cfg: dict | None = None) -> dict:
+            entry_price = w.get("entry", {}).get("price", 0)
+            # Backfill qty for older watches that don't have it
+            if not w.get("qty") and cfg and entry_price and entry_price > 0:
+                starting = cfg.get("starting_capital", 0)
+                alloc_pct = float((cfg.get("allocation_params") or {}).get("alloc_pct", 5))
+                if starting and alloc_pct:
+                    w["qty"] = (starting * alloc_pct / 100.0) / entry_price
+            return w
+
         def _enrich_holding(w: dict, cfg: dict | None = None) -> dict:
             sym = w.get("symbol", "").upper()
             entry_price = w.get("entry", {}).get("price", 0)
@@ -1359,16 +1369,13 @@ def create_app(
                 w["unrealized_pnl"] = round(pnl, 2)
             else:
                 w["unrealized_pnl"] = None
-            # Backfill qty for older watches that don't have it
-            if not w.get("qty") and cfg and entry_price and entry_price > 0:
-                starting = cfg.get("starting_capital", 0)
-                alloc_pct = float((cfg.get("allocation_params") or {}).get("alloc_pct", 5))
-                if starting and alloc_pct:
-                    w["qty"] = (starting * alloc_pct / 100.0) / entry_price
+            _backfill_qty(w, cfg)
             return w
 
         for p in portfolios:
             p["holding"] = [_enrich_holding(w, p.get("config")) for w in p["holding"]]
+            p["cooling"] = [_backfill_qty(w, p.get("config")) for w in p["cooling"]]
+            p["closed"] = [_backfill_qty(w, p.get("config")) for w in p["closed"]]
         legacy_data["holding"] = [_enrich_holding(w) for w in legacy_data["holding"]]
 
         # Compute portfolio dollar value for each portfolio

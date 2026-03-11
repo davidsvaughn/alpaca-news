@@ -86,18 +86,31 @@
 <div class="table-responsive">
   <table class="table table-sm table-hover align-middle mb-1 _sortable">
     <thead class="table-light"><tr>
-      <th data-sort="text">Symbol</th><th data-sort="text">Status</th><th data-sort="num">Entry</th><th data-sort="num">Exit</th><th data-sort="num">P&L</th><th data-sort="text">Reason</th><th data-sort="text">Until</th><th></th>
+      <th data-sort="text">Symbol</th><th data-sort="num">Entry</th><th data-sort="num">Exit</th><th data-sort="num">Qty</th><th data-sort="num">Value</th><th data-sort="num">P&L</th><th data-sort="text">Exited</th><th></th>
     </tr></thead>
     <tbody>
     {% for w in watches %}
+    {% set qty = w.qty if w.qty is defined and w.qty else none %}
+    {% set value = none %}
+    {% if w.exit and qty and w.exit.realized_pnl_pct is not none %}
+      {% set value = (w.entry.price * qty) * (w.exit.realized_pnl_pct / 100.0) %}
+    {% endif %}
     <tr>
       <td><strong>{{ w.symbol }}</strong></td>
-      <td><span class="badge badge-{{ w.status }}">{{ w.status }}</span></td>
       <td>${{ "%.2f"|format(w.entry.price) }}</td>
       <td>{% if w.exit %}${{ "%.2f"|format(w.exit.price) }}{% else %}&mdash;{% endif %}</td>
+      <td>{% if qty %}{{ "%.2f"|format(qty) }}{% else %}<span class="text-muted">&mdash;</span>{% endif %}</td>
+      <td>
+        {% if value is not none %}
+          <span class="{% if value >= 0 %}pnl-positive{% else %}pnl-negative{% endif %}">
+            {{ "${:+,.2f}".format(value) }}
+          </span>
+        {% else %}
+          <span class="text-muted">&mdash;</span>
+        {% endif %}
+      </td>
       <td>{% if w.exit %}<span class="{% if w.exit.realized_pnl_pct >= 0 %}pnl-positive{% else %}pnl-negative{% endif %}">{{ "%+.2f"|format(w.exit.realized_pnl_pct) }}%</span>{% else %}&mdash;{% endif %}</td>
-      <td class="small">{% if w.exit %}{{ w.exit.reason }}{% endif %}</td>
-      <td class="small text-muted">{% if w.cooling_off_until %}<span class="_local-time" data-utc="{{ w.cooling_off_until }}">{{ w.cooling_off_until[:16] }}</span>{% endif %}</td>
+      <td class="small text-muted">{% if w.exit and w.exit.time %}<span class="_local-time" data-utc="{{ w.exit.time }}">{{ w.exit.time[:16] }}</span>{% endif %}</td>
       <td><a href="/watches/{{ w.watch_id }}" class="btn btn-sm btn-outline-secondary py-0" style="font-size:.75rem">Detail</a></td>
     </tr>
     {% endfor %}

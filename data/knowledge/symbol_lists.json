@@ -1357,7 +1357,26 @@
     "ON",
     "GAME",
     "ALOY",
-    "VICI"
+    "VICI",
+    "TH",
+    "KMDA",
+    "SDHC",
+    "NERV",
+    "ACTG",
+    "CXM",
+    "TSSI",
+    "BWEN",
+    "FICO",
+    "RNA",
+    "CX",
+    "VRCA",
+    "GOVX",
+    "DPRO",
+    "FSK",
+    "ISRG",
+    "TSEM",
+    "API",
+    "WTW"
   ],
   "crypto": [],
   "rejected": [
@@ -1521,7 +1540,9 @@
     "SAUD",
     "BARKA",
     "SSE",
-    "DRX"
+    "DRX",
+    "ALGR",
+    "BSIF"
   ],
-  "last_updated": "2026-03-11T10:19:00.776883+00:00"
+  "last_updated": "2026-03-11T14:19:19.306604+00:00"
 }

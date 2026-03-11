@@ -498,15 +498,16 @@ When enabled, the system trades during pre-market (4:00 AM ET) through after-hou
 2. **Whole shares only** — Fractional qty is not supported during extended hours. Buys convert notional to whole shares via latest price. Sells round down, leaving any fractional remainder to be sold during regular hours.
 
 3. **Aggressive limit pricing** — Limit orders fill at the best available price, so the limit is just a ceiling/floor:
-   - Buy: limit = latest price × 1.02 (2% above, accommodates stale data API prices)
-   - Sell: limit = position's current_price × 0.995 (0.5% below)
-   - Position's `current_price` is used for sells (more accurate than Alpaca data API's `get_stock_latest_trade()` which can be very stale during extended hours)
+   - **Buy**: uses the **live ask price** from `get_stock_latest_quote()` + 2% buffer. Falls back to last trade price + 4% buffer if quote unavailable. The ask price is critical because `get_stock_latest_trade()` returns the last trade which can be hours stale during pre/post-market, leading to limit prices well below the current offer and orders that never fill.
+   - **Sell**: limit = position's `current_price` × 0.995 (0.5% below). Position's `current_price` is more accurate than the data API's last trade during extended hours.
 
-4. **Stop orders hold shares** — Before selling during extended hours, all open orders for the symbol (stops, etc.) are auto-cancelled. Open orders reserve ("hold") shares, causing Alpaca to reject sell orders with "insufficient qty available."
+4. **Longer fill timeout** — Extended hours use `ALPACA_EXTENDED_FILL_TIMEOUT` (default **60s**, env-configurable) vs the regular `ALPACA_FILL_TIMEOUT` (default 30s). Thin liquidity means fills take longer. If the order still doesn't fill, it is cancelled to prevent orphan positions.
 
-5. **Order status** — Extended-hours orders go to `pending_new` first (vs `accepted` during regular hours) but fill quickly if liquidity exists.
+5. **Stop orders hold shares** — Before selling during extended hours, all open orders for the symbol (stops, etc.) are auto-cancelled. Open orders reserve ("hold") shares, causing Alpaca to reject sell orders with "insufficient qty available."
 
-6. **Lower liquidity** — Extended hours have wider spreads and thinner order books. Fill may take longer or not happen at all before DAY expiration.
+6. **Order status** — Extended-hours orders go to `pending_new` first (vs `accepted` during regular hours) but fill quickly if liquidity exists.
+
+7. **Lower liquidity** — Extended hours have wider spreads and thinner order books. Fill may take longer or not happen at all before DAY expiration.
 
 #### System gates affected
 
