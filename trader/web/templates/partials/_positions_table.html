@@ -6,8 +6,7 @@
 <div class="row mb-0 g-2">
   {% for label, value, cls in [
     ('Open', stats.holding_count, ''),
-    ('Cooling', stats.cooling_count, ''),
-    ('Closed', stats.closed_count, ''),
+    ('Closed', (stats.cooling_count + stats.closed_count), ''),
     ('Realized', ('%+.2f'|format(stats.total_realized_pnl)) + '%', 'pnl-positive' if stats.total_realized_pnl >= 0 else 'pnl-negative'),
     ('W/L', stats.wins|string + '/' + stats.losses|string, ''),
   ] %}
@@ -204,6 +203,8 @@
   {% endif %}
   {% endif %}
 
+  {{ stats_row(p.stats) }}
+
   <!-- Started date -->
   {% set f = p.config.filters %}
   {% set af = [] %}
@@ -232,18 +233,16 @@
   {% if af %}
   <div class="small text-muted mb-0">{{ af | join(' | ') }}</div>
   {% endif %}
-  <div class="small text-muted mb-0">
-    {{ _strategy_short.get(p.config.exit_strategy, p.config.exit_strategy) }} | Stop: {{ p.config.guard_stop_pct }}% | {{ alloc_summary }}
+  <div class="small text-muted mb-0 d-flex align-items-center">
+    {% if p.config.exit_strategy is defined %}
+    <a href="#" class="text-decoration-none text-muted _toggle-link me-1" data-target="cfg-detail-{{ p.config.config_id }}" aria-label="Toggle details">
+      <span class="_toggle-arrow" aria-hidden="true">&#9654;</span>
+    </a>
+    {% endif %}
+    <span>{{ _strategy_short.get(p.config.exit_strategy, p.config.exit_strategy) }} | Stop: {{ p.config.guard_stop_pct }}% | {{ alloc_summary }}</span>
   </div>
-
-  {{ stats_row(p.stats) }}
 
   {% if p.config.exit_strategy is defined %}
-  <div class="mb-1">
-    <a href="#" class="text-decoration-none text-muted _toggle-link _section-toggle" data-target="cfg-detail-{{ p.config.config_id }}">
-      <span class="_toggle-arrow" aria-hidden="true">&#9654;</span>details
-    </a>
-  </div>
   <!-- Collapsible config details -->
   <div class="small text-muted mb-2 _toggle-section" id="cfg-detail-{{ p.config.config_id }}" style="display:none">
     <div class="card card-body py-2 px-3 bg-light border-0" style="font-size:.75rem">
@@ -293,6 +292,12 @@
   </div>
   {% endif %}
 
+  {% if p.holding or p.cooling or p.closed %}
+  <a href="#" class="text-decoration-none text-muted _toggle-link _section-toggle" data-target="positions-{{ p.config.config_id }}">
+    <span class="_toggle-arrow" aria-hidden="true">&#9654;</span>positions
+  </a>
+  {% endif %}
+
   </div><!-- end left column -->
 
   <!-- Right column: equity chart fills available space -->
@@ -304,9 +309,6 @@
   </div><!-- end two-column layout -->
 
   {% if p.holding or p.cooling or p.closed %}
-  <a href="#" class="text-decoration-none text-muted _toggle-link _section-toggle" data-target="positions-{{ p.config.config_id }}">
-    <span class="_toggle-arrow" aria-hidden="true">&#9654;</span>positions
-  </a>
   <div id="positions-{{ p.config.config_id }}" class="_toggle-section" style="display:none">
 
     {% if p.holding %}
