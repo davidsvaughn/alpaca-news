@@ -12,24 +12,19 @@
   <h2 class="mb-0">Dashboard</h2>
   <button id="online-toggle-btn" class="btn btn-sm ms-3"
           hx-post="/api/online-toggle"
-          hx-target="#online-toggle-result"
-          hx-swap="innerHTML">
+          hx-swap="none">
     Loading...
   </button>
-  <div id="online-toggle-result" class="ms-2"></div>
   <button id="feed-insight_sentry-btn" class="btn btn-sm ms-2"
           hx-post="/api/feed-toggle/insight_sentry"
-          hx-target="#feed-toggle-result"
-          hx-swap="innerHTML">
+          hx-swap="none">
     Loading...
   </button>
   <button id="feed-alpaca-btn" class="btn btn-sm ms-2"
           hx-post="/api/feed-toggle/alpaca"
-          hx-target="#feed-toggle-result"
-          hx-swap="innerHTML">
+          hx-swap="none">
     Loading...
   </button>
-  <div id="feed-toggle-result" class="ms-2"></div>
 </div>
 
 <!-- Stats cards (HTMX-loaded) -->
@@ -128,10 +123,10 @@
     if (!btn) return;
     if (enabled) {
       btn.className = 'btn btn-success btn-sm ms-3';
-      btn.textContent = 'Online';
+      btn.textContent = 'Trading: ON';
     } else {
       btn.className = 'btn btn-outline-secondary btn-sm ms-3';
-      btn.textContent = 'Offline';
+      btn.textContent = 'Trading: OFF';
     }
   }
   fetch('/api/online-status').then(function(r) { return r.json(); }).then(function(d) { updateBtn(d.online); }).catch(function() {});
@@ -296,7 +291,7 @@
       case 'backfill_complete':
         return (p.succeeded||0) + '/' + (p.total||0) + ' succeeded';
       case 'online_mode_changed':
-        return p.enabled ? 'System ONLINE' : 'System OFFLINE';
+        return p.enabled ? 'Trading ON' : 'Trading OFF';
       case 'online_skipped':
         return '<span class="feed-dim">Skipped: ' + ((p.path || '').split('/').pop() || '') + '</span>';
       case 'feed_toggled':

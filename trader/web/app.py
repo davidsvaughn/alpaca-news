@@ -2124,8 +2124,7 @@ def create_app(
             type="online_mode_changed",
             payload={"enabled": new_state},
         ))
-        label = "ON" if new_state else "OFF"
-        return HTMLResponse(f"<span class='small text-muted'>Online: {label}</span>")
+        return HTMLResponse("")
 
     # ------------------------------------------------------------------
     # Feed toggles (Insight Sentry / Alpaca)
@@ -2147,8 +2146,7 @@ def create_app(
             type="feed_toggled",
             payload={"feed": feed_name, "enabled": new_state},
         ))
-        label = "ON" if new_state else "OFF"
-        return HTMLResponse(f"<span class='small text-muted'>{fm.label}: {label}</span>")
+        return HTMLResponse("")
 
     @app.post("/api/watches/{watch_id}/exit", response_class=HTMLResponse)
     async def api_force_exit_watch(request: Request, watch_id: str):

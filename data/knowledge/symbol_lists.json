@@ -1329,7 +1329,9 @@
     "JOYY",
     "SSII",
     "BL",
-    "AOSL"
+    "AOSL",
+    "HVWRF",
+    "BRKCF"
   ],
   "crypto": [],
   "rejected": [
@@ -1479,7 +1481,8 @@
     "3900.HK",
     "MPW",
     "MRD",
-    "YY"
+    "YY",
+    "GXLD"
   ],
-  "last_updated": "2026-03-10T23:21:43.276946+00:00"
+  "last_updated": "2026-03-11T02:31:08.933882+00:00"
 }
