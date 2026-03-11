@@ -681,15 +681,7 @@ class LivePortfolioManager:
             "yes" if wb.alpaca_buy_order_id else "no",
         )
 
-        # Start streaming for this symbol (shadow collector + Schwab stream)
-        if self.collector is not None:
-            self.collector.add_symbol(symbol)
-        if self.market is not None and hasattr(self.market, '_schwab') and self.market.schwab_available:
-            try:
-                self.market._schwab.start_stream([symbol])
-                log.info("Started Schwab stream for %s", symbol)
-            except Exception:
-                log.exception("Failed to start Schwab stream for %s", symbol)
+        # Shadow collector + Schwab stream disabled — tick_collector handles all streaming
 
         if self.bus:
             from trader.online.event_bus import PipelineEvent

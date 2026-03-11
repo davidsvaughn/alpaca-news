@@ -239,7 +239,7 @@
       <span class="_toggle-arrow" aria-hidden="true">&#9654;</span>
     </a>
     {% endif %}
-    <span>{{ _strategy_short.get(p.config.exit_strategy, p.config.exit_strategy) }} | Stop: {{ p.config.guard_stop_pct }}% | {{ alloc_summary }}</span>
+    <span>{{ _strategy_short.get(p.config.exit_strategy, p.config.exit_strategy) }}{% if p.config.live_overrides is defined and p.config.live_overrides.get('vdd_tick') %}<span class="badge bg-info text-dark ms-1" style="font-size:.6rem">Tick</span>{% endif %} | Stop: {{ p.config.guard_stop_pct }}% | {{ alloc_summary }}</span>
   </div>
 
   {% if p.config.exit_strategy is defined %}
@@ -284,6 +284,14 @@
           <strong>Filters</strong><br>
           {% for item in af %}
             {{ item }}<br>
+          {% endfor %}
+        </div>
+        {% endif %}
+        {% if p.config.live_overrides is defined and p.config.live_overrides %}
+        <div class="col-auto">
+          <strong>Live Overrides</strong><br>
+          {% for k, v in p.config.live_overrides.items() %}
+            <span class="text-muted">{{ k }}:</span> {{ v }}{% if not loop.last %}<br>{% endif %}
           {% endfor %}
         </div>
         {% endif %}

@@ -32,6 +32,7 @@ ALPACA_STOP_MODE = os.getenv("ALPACA_STOP_MODE", "fractional_day").lower()
 
 # How long to wait for order fill confirmation (seconds)
 ALPACA_FILL_TIMEOUT = float(os.getenv("ALPACA_FILL_TIMEOUT", "30"))
+ALPACA_EXTENDED_FILL_TIMEOUT = float(os.getenv("ALPACA_EXTENDED_FILL_TIMEOUT", "60"))
 
 
 # ------------------------------------------------------------------
@@ -378,12 +379,19 @@ class AlpacaBroker:
         from alpaca.trading.requests import LimitOrderRequest
         from alpaca.trading.enums import OrderSide, TimeInForce
 
-        price = self._get_latest_price(symbol)
+        # Prefer ask price (current offer) over last trade price — last trade
+        # can be hours stale during pre/post-market.
+        ask_price = self._get_latest_ask_price(symbol)
+        trade_price = self._get_latest_price(symbol)
+        price = ask_price or trade_price
         if not price or price <= 0:
             raise ValueError(f"{symbol}: cannot get price for extended-hours limit order")
 
-        # Aggressive limit price (slightly above current for buy)
-        limit_price = round(price * (1 + slippage_pct), 2)
+        # Use smaller buffer when we have a live ask, larger when falling back to stale trade
+        effective_slippage = slippage_pct if ask_price else slippage_pct * 2
+        limit_price = round(price * (1 + effective_slippage), 2)
+        log.info("BUY EXTENDED %s: ask=%.2f trade=%.2f -> limit=%.2f (slippage=%.1f%%)",
+                 symbol, ask_price or 0, trade_price or 0, limit_price, effective_slippage * 100)
 
         # Extended hours: must use whole-share qty (no notional/fractional)
         if qty is not None:
@@ -434,6 +442,30 @@ class AlpacaBroker:
         except Exception:
             log.warning("Could not get latest price for %s", symbol)
             return None
+
+    def _get_latest_ask_price(self, symbol: str) -> float | None:
+        """Get latest ask price from Alpaca quote API.
+
+        More accurate than last trade price during extended hours,
+        where trades can be infrequent and stale.
+        """
+        try:
+            from alpaca.data.requests import StockLatestQuoteRequest
+            from alpaca.data.historical import StockHistoricalDataClient
+            if not hasattr(self, "_data_client"):
+                self._data_client = StockHistoricalDataClient(self._api_key, self._secret_key)
+            quote = self._data_client.get_stock_latest_quote(
+                StockLatestQuoteRequest(symbol_or_symbols=symbol.upper())
+            )
+            if isinstance(quote, dict):
+                q = quote.get(symbol.upper())
+                if q and q.ask_price and q.ask_price > 0:
+                    return float(q.ask_price)
+            elif quote and quote.ask_price and quote.ask_price > 0:
+                return float(quote.ask_price)
+        except Exception:
+            log.warning("Could not get latest ask price for %s", symbol)
+        return None
 
     def set_stop(
         self,
@@ -665,13 +697,21 @@ class AlpacaBroker:
         *,
         notional: float | None = None,
         qty: float | None = None,
-        timeout_s: float = ALPACA_FILL_TIMEOUT,
+        timeout_s: float | None = None,
     ) -> OrderResult:
         """Submit a market buy and wait for fill confirmation.
 
         Returns OrderResult with actual filled_avg_price and filled_qty.
         Raises on rejection, cancellation, or timeout.
         """
+        # Use longer timeout for extended hours (limit orders, thin liquidity)
+        if timeout_s is None:
+            from trader.market.market_hours import in_extended_only, ALPACA_EXTENDED_HOURS
+            if ALPACA_EXTENDED_HOURS and in_extended_only():
+                timeout_s = ALPACA_EXTENDED_FILL_TIMEOUT
+            else:
+                timeout_s = ALPACA_FILL_TIMEOUT
+
         result = self.buy(symbol, notional=notional, qty=qty)
         try:
             confirmed = self.wait_for_fill(result.order_id, timeout_s=timeout_s)

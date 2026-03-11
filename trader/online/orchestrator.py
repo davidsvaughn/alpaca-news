@@ -1270,31 +1270,16 @@ def run_watch_loop(
     if settings.watch_enabled:
         from trader.online.live_monitor import LiveExitMonitor, live_monitoring_loop
 
-        # Create shadow collector for tick-level volume delta
-        try:
-            from trader.market.volume_delta_shadow import VolumeDeltaCollector
-            _live_collector = VolumeDeltaCollector()
-            _live_collector.start()
-        except Exception as e:
-            print(f"WARN: VolumeDeltaCollector init failed: {e}")
+        # Shadow collector disabled — tick_collector service handles all
+        # Schwab streaming now. Keeping _live_collector=None means the live
+        # monitor won't try to attach/stream via the trader app's Schwab client.
 
-        # Create shared MarketDataService for streaming
+        # Create shared MarketDataService (API calls only, no streaming)
         try:
             from trader.market.data_service import MarketDataService
             _live_market = MarketDataService()
-            # Attach collector to Schwab stream
-            if _live_collector and _live_market.schwab_available:
-                _live_market._schwab.attach_volume_delta_collector(_live_collector)
-                # Start streaming for any existing holding/cooling_off watches
-                existing = get_active_watches(db)
-                stream_symbols = list({w["symbol"] for w in existing if w.get("status") in ("holding", "cooling_off")})
-                if stream_symbols:
-                    _live_market._schwab.start_stream(stream_symbols)
-                    for sym in stream_symbols:
-                        _live_collector.add_symbol(sym)
-                    print(f"Resumed streaming for {len(stream_symbols)} active watches: {stream_symbols}")
         except Exception as e:
-            print(f"WARN: Live market/stream init failed: {e}")
+            print(f"WARN: Live market init failed: {e}")
 
         # Alpaca broker pool + trade streams (one per account in use)
         try:
