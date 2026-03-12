@@ -1674,7 +1674,20 @@
     "SRFM",
     "LMNR",
     "SBEV",
-    "OAKU"
+    "OAKU",
+    "SENS",
+    "AFYA",
+    "TISI",
+    "CHMI",
+    "KODK",
+    "NLY",
+    "NKTR",
+    "MAPS",
+    "PEW",
+    "BZFD",
+    "ACXP",
+    "PSTV",
+    "LSTA"
   ],
   "crypto": [],
   "rejected": [
@@ -1861,7 +1874,8 @@
     "SANP",
     "ZOMATO",
     "RWOD",
-    "FL"
+    "FL",
+    "HEAR"
   ],
-  "last_updated": "2026-03-12T20:43:57.368721+00:00"
+  "last_updated": "2026-03-12T20:52:05.230624+00:00"
 }
