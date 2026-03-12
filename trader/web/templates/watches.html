@@ -19,11 +19,70 @@
   </div>
 </div>
 
+<div class="mb-3 d-flex gap-2">
+  {% if status_filter %}
+  <button class="btn btn-sm btn-outline-danger" onclick="deleteFilteredWatches()">
+    Delete All {{ status_filter }}
+  </button>
+  {% endif %}
+  <button class="btn btn-sm btn-danger" onclick="deleteOrphanHoldingWatches()">
+    Delete Orphan Holding Watches
+  </button>
+</div>
+
 <!-- Watches table -->
 <div id="watches-table"
      hx-get="/api/watches?status={{ status_filter or '' }}"
-     hx-trigger="load, sse-refresh from:body"
+     hx-trigger="load, sse-refresh from:body, watches-refresh from:body"
      hx-swap="innerHTML">
   <div class="text-center text-muted py-3">Loading...</div>
 </div>
+
+<script>
+(function() {
+  var statusFilter = "{{ status_filter or '' }}";
+
+  async function _deleteWatches(payload, confirmText) {
+    if (!confirm(confirmText)) return;
+    try {
+      var res = await fetch('/api/watches/delete', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(payload),
+      });
+      var data = await res.json();
+      if (!res.ok) {
+        alert('Delete failed: ' + (data.error || res.status));
+        return;
+      }
+      if (window.htmx) {
+        htmx.trigger(document.body, 'watches-refresh');
+      } else {
+        location.reload();
+      }
+      alert('Deleted ' + (data.deleted || 0) + ' watch(es).');
+    } catch (err) {
+      alert('Delete request failed: ' + err);
+    }
+  }
+
+  window.deleteFilteredWatches = function() {
+    if (!statusFilter) {
+      alert('Apply a status filter first.');
+      return;
+    }
+    _deleteWatches(
+      {status: statusFilter},
+      'Delete ALL watches with status \"' + statusFilter + '\"?'
+    );
+  };
+
+  window.deleteOrphanHoldingWatches = function() {
+    _deleteWatches(
+      {orphaned_only: true},
+      'Delete all orphan holding watches (holding + missing live_config)?'
+    );
+  };
+})();
+</script>
 {% endblock %}

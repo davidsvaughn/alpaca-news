@@ -47,7 +47,15 @@
         </td>
         <td class="text-truncate" style="max-width: 200px;">{{ w.entry.thesis }}</td>
         <td class="small text-muted">{{ w.created_at[:16] }}</td>
-        <td><a href="/watches/{{ w.watch_id }}" class="btn btn-sm btn-outline-secondary">Detail</a></td>
+        <td class="text-nowrap">
+          <a href="/watches/{{ w.watch_id }}" class="btn btn-sm btn-outline-secondary">Detail</a>
+          <button class="btn btn-sm btn-outline-danger"
+                  hx-delete="/api/watches/{{ w.watch_id }}"
+                  hx-swap="none"
+                  hx-confirm="Delete watch {{ w.watch_id }} ({{ w.symbol }})?">
+            Delete
+          </button>
+        </td>
       </tr>
       {% endfor %}
     </tbody>

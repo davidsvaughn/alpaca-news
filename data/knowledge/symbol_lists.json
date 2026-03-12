@@ -1594,7 +1594,8 @@
     "QGAI",
     "IOR",
     "MUX",
-    "ZCAR"
+    "ZCAR",
+    "SUI"
   ],
   "crypto": [],
   "rejected": [
@@ -1780,5 +1781,5 @@
     "FRM",
     "SANP"
   ],
-  "last_updated": "2026-03-12T18:33:36.198975+00:00"
+  "last_updated": "2026-03-12T18:56:09.059445+00:00"
 }

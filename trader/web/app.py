@@ -50,6 +50,9 @@ from trader.db.database import (
     activate_live_config,
     deactivate_live_config,
     delete_live_config,
+    delete_watch,
+    delete_watches_bulk,
+    delete_watches_by_filter,
 )
 from trader.knowledge.store import KnowledgeStore
 from trader.models.watch import WatchBuilder
@@ -784,6 +787,53 @@ def create_app(
             request=request,
             name="partials/_watches_table.html",
             context={"watches": [_DictObj(w) for w in watches]},
+        )
+
+    @app.delete("/api/watches/{watch_id}")
+    async def api_watch_delete(watch_id: str):
+        """Delete a watch by ID, regardless of status."""
+        ok = delete_watch(db, watch_id)
+        if not ok:
+            return JSONResponse({"error": "not_found", "watch_id": watch_id}, status_code=404)
+        return JSONResponse(
+            {"status": "deleted", "watch_id": watch_id},
+            headers={"HX-Trigger": "watches-refresh"},
+        )
+
+    @app.post("/api/watches/delete")
+    async def api_watches_delete(request: Request):
+        """Bulk delete watches (explicit IDs or filter-based)."""
+        body = await request.json()
+        watch_ids = body.get("watch_ids") or []
+        status = (body.get("status") or "").strip() or None
+        orphaned_only = bool(body.get("orphaned_only", False))
+
+        deleted = 0
+        if watch_ids:
+            if not isinstance(watch_ids, list):
+                return JSONResponse({"error": "watch_ids must be a list"}, status_code=400)
+            ids = [str(w).strip() for w in watch_ids if str(w).strip()]
+            deleted = delete_watches_bulk(db, ids)
+        else:
+            if not status and not orphaned_only:
+                return JSONResponse(
+                    {"error": "provide watch_ids or at least one filter (status/orphaned_only)"},
+                    status_code=400,
+                )
+            deleted = delete_watches_by_filter(
+                db,
+                status=status,
+                orphaned_only=orphaned_only,
+            )
+
+        return JSONResponse(
+            {
+                "status": "deleted",
+                "deleted": deleted,
+                "status_filter": status,
+                "orphaned_only": orphaned_only,
+            },
+            headers={"HX-Trigger": "watches-refresh"},
         )
 
     @app.get("/api/snapshots", response_class=HTMLResponse)

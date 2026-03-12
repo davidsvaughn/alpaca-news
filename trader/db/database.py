@@ -991,6 +991,63 @@ def count_all_watches(db: Database, *, status: str | None = None) -> int:
     return row[0] if row else 0
 
 
+def delete_watch(db: Database, watch_id: str) -> bool:
+    """Delete a watch by ID, regardless of status."""
+    with db.engine.begin() as conn:
+        result = conn.execute(
+            text("DELETE FROM watches WHERE watch_id = :wid"),
+            {"wid": watch_id},
+        )
+    return bool(result.rowcount)
+
+
+def delete_watches_bulk(db: Database, watch_ids: list[str]) -> int:
+    """Delete multiple watches by ID, regardless of status."""
+    if not watch_ids:
+        return 0
+    placeholders = ",".join(f":wid{i}" for i in range(len(watch_ids)))
+    params = {f"wid{i}": wid for i, wid in enumerate(watch_ids)}
+    with db.engine.begin() as conn:
+        result = conn.execute(
+            text(f"DELETE FROM watches WHERE watch_id IN ({placeholders})"),
+            params,
+        )
+    return int(result.rowcount or 0)
+
+
+def delete_watches_by_filter(
+    db: Database,
+    *,
+    status: str | None = None,
+    orphaned_only: bool = False,
+) -> int:
+    """Delete watches matching a status filter and/or orphaned holding criteria.
+
+    orphaned_only=True deletes holding watches whose live_config_id no longer
+    exists in live_configs.
+    """
+    where = []
+    params: dict[str, Any] = {}
+    if status:
+        where.append("status = :status")
+        params["status"] = status
+    if orphaned_only:
+        where.append("status = 'holding'")
+        where.append("json_extract(watch_json, '$.live_config_id') IS NOT NULL")
+        where.append(
+            "NOT EXISTS ("
+            "SELECT 1 FROM live_configs lc "
+            "WHERE lc.config_id = json_extract(watches.watch_json, '$.live_config_id')"
+            ")"
+        )
+    if not where:
+        return 0
+    sql = "DELETE FROM watches WHERE " + " AND ".join(where)
+    with db.engine.begin() as conn:
+        result = conn.execute(text(sql), params)
+    return int(result.rowcount or 0)
+
+
 def _price_expr(price_delay: int = 10) -> str:
     """Build a COALESCE expression that reads price_at first, then legacy price_10min."""
     delay_s = str(int(price_delay))
