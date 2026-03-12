@@ -1585,7 +1585,11 @@
     "JLL",
     "FUSB",
     "CFBK",
-    "PRME"
+    "PRME",
+    "AGL",
+    "CBK",
+    "ARL",
+    "UPXI"
   ],
   "crypto": [],
   "rejected": [
@@ -1762,7 +1766,12 @@
     "PAYP",
     "TALABAT",
     "DHER",
-    "PLPL3"
+    "PLPL3",
+    "ARENITSDB.ST",
+    "ZAL",
+    "HNR1",
+    "RWE",
+    "DBK"
   ],
-  "last_updated": "2026-03-12T17:23:53.844637+00:00"
+  "last_updated": "2026-03-12T17:56:08.008089+00:00"
 }

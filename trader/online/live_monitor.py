@@ -29,7 +29,7 @@ import pandas as pd
 from trader.db.database import (
     Database,
     count_holding_watches,
-    get_active_live_config,
+    get_active_live_configs,
     get_live_config,
     get_active_watches,
     insert_watch,
@@ -92,13 +92,24 @@ class LiveExitMonitor:
         return self.broker_pool.get(acct_id)
 
     def _get_config_for_watch(self, watch_dict: dict[str, Any]) -> dict[str, Any] | None:
-        """Resolve the watch's own config (fallback: first active config for legacy watches)."""
+        """Resolve the watch's own config by explicit live_config_id only."""
+        watch_id = watch_dict.get("watch_id", "?")
+        symbol = watch_dict.get("symbol", "?")
         config_id = watch_dict.get("live_config_id")
-        if config_id:
-            cfg = get_live_config(self.db, str(config_id))
-            if cfg:
-                return cfg
-        return get_active_live_config(self.db)
+        if not config_id:
+            log.error(
+                "Watch %s (%s) has no live_config_id; refusing fallback config resolution",
+                watch_id, symbol,
+            )
+            return None
+        cfg = get_live_config(self.db, str(config_id))
+        if cfg:
+            return cfg
+        log.error(
+            "Watch %s (%s) references missing config %s; refusing fallback config resolution",
+            watch_id, symbol, config_id,
+        )
+        return None
 
     def run_cycle(self) -> None:
         """Run one check cycle across all active watches."""
@@ -186,20 +197,30 @@ class LiveExitMonitor:
         market_close: str | None = "16:00"
         live_overrides: dict[str, Any] = {}
 
-        # If watch has a live_config_id, load THAT config for guards/timing.
-        # Fallback to single active config for legacy watches without config_id.
         config_dict = self._get_config_for_watch(watch_dict)
-        if config_dict:
-            cfg = LiveConfig.from_dict(config_dict)
-            if not strategy_key:
-                strategy_key = cfg.exit_strategy
-                exit_params = cfg.exit_params
-            guard_stop_pct = cfg.guard_stop_pct
-            guard_target_pct = cfg.guard_target_pct
-            guard_trail_pct = cfg.guard_trail_pct
-            min_hold = cfg.min_hold
-            market_close = cfg.market_close
-            live_overrides = cfg.live_overrides
+        if not config_dict:
+            log.error(
+                "Watch %s (%s): cannot evaluate holding without valid config; skipping",
+                watch_id, symbol,
+            )
+            return
+        if not config_dict.get("active", False):
+            log.error(
+                "Watch %s (%s): config %s is inactive; skipping holding evaluation",
+                watch_id, symbol, config_dict.get("config_id"),
+            )
+            return
+
+        cfg = LiveConfig.from_dict(config_dict)
+        if not strategy_key:
+            strategy_key = cfg.exit_strategy
+            exit_params = cfg.exit_params
+        guard_stop_pct = cfg.guard_stop_pct
+        guard_target_pct = cfg.guard_target_pct
+        guard_trail_pct = cfg.guard_trail_pct
+        min_hold = cfg.min_hold
+        market_close = cfg.market_close
+        live_overrides = cfg.live_overrides
 
         if not strategy_key:
             log.warning("Watch %s has no exit strategy configured", watch_id)
@@ -1511,12 +1532,23 @@ def _snapshot_equity(monitor: LiveExitMonitor, last_time: float) -> float:
 
 
 def _get_poll_interval(monitor: LiveExitMonitor, default: int = 60) -> int:
-    """Read poll_interval_s from active config's live_overrides, or use default."""
+    """Read poll_interval_s from active configs and use the smallest valid value."""
     try:
-        config_dict = get_active_live_config(monitor.db)
-        if config_dict:
-            cfg = LiveConfig.from_dict(config_dict)
-            return int(cfg.live_overrides.get("poll_interval_s", default))
+        active_cfgs = get_active_live_configs(monitor.db)
+        intervals: list[int] = []
+        for cfg_dict in active_cfgs:
+            cfg = LiveConfig.from_dict(cfg_dict)
+            raw = cfg.live_overrides.get("poll_interval_s")
+            if raw is None:
+                continue
+            try:
+                value = int(raw)
+            except (TypeError, ValueError):
+                continue
+            if value > 0:
+                intervals.append(value)
+        if intervals:
+            return min(intervals)
     except Exception:
         pass
     return default
@@ -1532,8 +1564,8 @@ def live_monitoring_loop(
     The periodic save_all here just writes clean summary JSON files for
     convenience — not needed for safety.
 
-    Poll interval can be overridden via live_overrides["poll_interval_s"]
-    in the active LiveConfig (re-read each cycle).
+    Poll interval can be overridden via live_overrides["poll_interval_s"].
+    If multiple active configs set it, the smallest interval is used.
     """
     log.info("Live exit monitor started (default interval=%ds)", interval_s)
     last_summary_save = time.monotonic()

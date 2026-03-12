@@ -79,6 +79,104 @@ _in_flight_lock = threading.Lock()
 _live_collector: Any = None   # VolumeDeltaCollector
 _live_market: Any = None      # MarketDataService (for streaming)
 _broker_pool: Any = None      # AlpacaBrokerPool (multi-account order execution)
+_runtime_bus: Any = None      # EventBus (for runtime sync notifications)
+_alpaca_streams: dict[str, Any] = {}  # account_id -> AlpacaTradeStream
+
+
+def sync_alpaca_trade_streams(
+    *,
+    db: Database,
+    bus: EventBus | None = None,
+    reason: str = "manual",
+) -> dict[str, Any]:
+    """Sync Alpaca trade streams to match active linked configs.
+
+    Starts streams for linked active accounts missing a stream, and stops
+    streams for accounts no longer linked to any active config.
+    """
+    from trader.db.database import get_active_live_configs
+
+    global _runtime_bus
+    if bus is not None:
+        _runtime_bus = bus
+    sync_bus = bus or _runtime_bus
+
+    linked_accounts = {
+        c["alpaca_account_id"]
+        for c in get_active_live_configs(db)
+        if c.get("alpaca_account_id")
+    }
+    started: list[str] = []
+    stopped: list[str] = []
+    missing_accounts: list[str] = []
+    errors: list[str] = []
+
+    # Stop streams for accounts no longer linked to an active config.
+    for acct_id in list(_alpaca_streams.keys()):
+        if acct_id in linked_accounts:
+            continue
+        stream = _alpaca_streams.pop(acct_id, None)
+        if stream is None:
+            continue
+        try:
+            stream.stop()
+            stopped.append(acct_id)
+        except Exception as exc:
+            errors.append(f"stop {acct_id}: {exc}")
+
+    # Start streams for newly linked accounts.
+    if _broker_pool and getattr(_broker_pool, "registry", None):
+        from trader.market.alpaca_stream import AlpacaTradeStream
+
+        for acct_id in sorted(linked_accounts):
+            if acct_id in _alpaca_streams:
+                continue
+            acct_creds = _broker_pool.registry.get(acct_id)
+            if not acct_creds:
+                missing_accounts.append(acct_id)
+                continue
+            try:
+                stream = AlpacaTradeStream(
+                    db=db,
+                    bus=sync_bus,
+                    api_key=acct_creds.api_key,
+                    secret_key=acct_creds.secret_key,
+                    paper=acct_creds.paper,
+                    account_label=acct_creds.name,
+                    account_id=acct_id,
+                )
+                stream.start()
+                _alpaca_streams[acct_id] = stream
+                started.append(acct_id)
+            except Exception as exc:
+                errors.append(f"start {acct_id}: {exc}")
+    elif linked_accounts:
+        missing_accounts.extend(sorted(linked_accounts))
+
+    if sync_bus and (started or stopped):
+        try:
+            sync_bus.publish(
+                PipelineEvent(
+                    type="alpaca_streams_synced",
+                    payload={
+                        "reason": reason,
+                        "linked_accounts": sorted(linked_accounts),
+                        "started": started,
+                        "stopped": stopped,
+                    },
+                )
+            )
+        except Exception:
+            pass
+
+    return {
+        "linked_accounts": sorted(linked_accounts),
+        "active_streams": sorted(_alpaca_streams.keys()),
+        "started": started,
+        "stopped": stopped,
+        "missing_accounts": missing_accounts,
+        "errors": errors,
+    }
 
 
 def _describe_api_error(e: Exception) -> str:
@@ -644,11 +742,11 @@ def _run_single_exploration_body(
     print(f"LIVE-DEBUG: watch_enabled={settings.watch_enabled} signal={_sig_dir} conf={_sig_conf} symbol={symbol}")
     if settings.watch_enabled and signal is not None and signal.direction != "neutral":
         try:
-            from trader.db.database import get_active_live_config
-            active_cfg = get_active_live_config(db)
-            print(f"LIVE-DEBUG: active_cfg={'YES' if active_cfg else 'NO'}")
+            from trader.db.database import get_active_live_configs
+            active_cfgs = get_active_live_configs(db)
+            print(f"LIVE-DEBUG: active_cfgs={len(active_cfgs)}")
 
-            if active_cfg:
+            if active_cfgs:
                 # Live trading mode: use LivePortfolioManager
                 from trader.online.live_monitor import LivePortfolioManager
                 pm = LivePortfolioManager(
@@ -1266,7 +1364,8 @@ def run_watch_loop(
     # Live exit monitor thread (mechanical exit strategies, same as backtest)
     # Also sets up the shadow collector for real-time volume delta tracking,
     # and optionally the Alpaca broker + trade stream for order execution.
-    global _live_collector, _live_market, _broker_pool
+    global _live_collector, _live_market, _broker_pool, _runtime_bus
+    _runtime_bus = bus
     if settings.watch_enabled:
         from trader.online.live_monitor import LiveExitMonitor, live_monitoring_loop
 
@@ -1297,7 +1396,6 @@ def run_watch_loop(
                                    if c.get("alpaca_account_id")}
 
                 from trader.market.alpaca_reconcile import reconcile, ensure_stops
-                from trader.market.alpaca_stream import AlpacaTradeStream
 
                 for acct_id in linked_accounts:
                     broker = _broker_pool.get(acct_id)
@@ -1323,18 +1421,8 @@ def run_watch_loop(
                                          live_config_id=_cfg.config_id,
                                          guard_stop_pct=_cfg.guard_stop_pct)
 
-                        # Start trade stream for this account
-                        acct_creds = _broker_pool.registry.get(acct_id)
-                        if acct_creds:
-                            stream = AlpacaTradeStream(
-                                db=db, bus=bus,
-                                api_key=acct_creds.api_key,
-                                secret_key=acct_creds.secret_key,
-                                paper=acct_creds.paper,
-                                account_label=acct_creds.name,
-                                account_id=acct_id,
-                            )
-                            stream.start()
+                # Ensure stream runtime matches current active linked accounts.
+                sync_alpaca_trade_streams(db=db, bus=bus, reason="startup")
 
                 if linked_accounts:
                     bus.publish(PipelineEvent(type="alpaca_connected", payload={

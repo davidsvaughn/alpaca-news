@@ -203,7 +203,7 @@
     <button class="btn btn-sm btn-outline-danger py-0 px-1"
             hx-delete="/api/live/config/{{ p.config.config_id }}"
             hx-swap="none"
-            hx-confirm="Delete '{{ p.config.config_id }}'? This cannot be undone."
+            hx-confirm="{% if p.config.alpaca_account_id %}Delete '{{ p.config.config_id }}'? This will liquidate ALL positions in Alpaca account {{ p.config.alpaca_account_id }} first, then delete the portfolio. This cannot be undone.{% else %}Delete '{{ p.config.config_id }}'? This cannot be undone.{% endif %}"
             onclick="setTimeout(() => location.reload(), 500)"
             style="font-size: 0.7rem;">Delete</button>
     {% endif %}

@@ -22,6 +22,7 @@ from trader.db.database import (
     Database,
     count_active_follow_ups,
     count_all_watches,
+    count_holding_watches,
     count_snapshots,
     count_snapshots_today,
     count_watches_by_status,
@@ -33,7 +34,6 @@ from trader.db.database import (
     get_all_live_configs,
     get_all_snapshots,
     get_all_watches,
-    get_active_live_config,
     get_daily_cost_history,
     get_daily_cost_today,
     get_daily_cost_today_by_provider,
@@ -550,8 +550,6 @@ def create_app(
             context={
                 "active_page": "positions",
                 "live_configs": [_DictObj(c) for c in active_cfgs],
-                # backward compat: first active config
-                "live_config": _DictObj(active_cfgs[0]) if active_cfgs else None,
             },
         )
 
@@ -1634,9 +1632,20 @@ def create_app(
 
     @app.get("/api/live/config")
     async def api_live_config_active():
-        """Get the currently active live config (or null)."""
-        cfg = get_active_live_config(db)
-        return cfg or JSONResponse(None, status_code=200)
+        """Get the active live config when exactly one is active (legacy endpoint)."""
+        active_cfgs = get_active_live_configs(db)
+        if not active_cfgs:
+            return JSONResponse(None, status_code=200)
+        if len(active_cfgs) > 1:
+            return JSONResponse(
+                {
+                    "error": "multiple_active_configs",
+                    "count": len(active_cfgs),
+                    "message": "Use /api/live/configs for multi-portfolio mode.",
+                },
+                status_code=409,
+            )
+        return active_cfgs[0]
 
     @app.get("/api/live/config/{config_id}")
     async def api_live_config_get(config_id: str):
@@ -1770,10 +1779,15 @@ def create_app(
 
     @app.post("/api/live/config/{config_id}/activate")
     async def api_live_config_activate(config_id: str):
-        """Activate a live config (deactivates all others)."""
+        """Activate a live config."""
         ok = activate_live_config(db, config_id)
         if not ok:
             return JSONResponse({"error": "not_found"}, status_code=404)
+        try:
+            from trader.online import orchestrator as _orch
+            _orch.sync_alpaca_trade_streams(db=db, bus=bus, reason=f"activate:{config_id}")
+        except Exception:
+            pass
         return {"status": "activated", "config_id": config_id}
 
     @app.post("/api/live/config/{config_id}/deactivate")
@@ -1782,6 +1796,11 @@ def create_app(
         ok = deactivate_live_config(db, config_id)
         if not ok:
             return JSONResponse({"error": "not_found"}, status_code=404)
+        try:
+            from trader.online import orchestrator as _orch
+            _orch.sync_alpaca_trade_streams(db=db, bus=bus, reason=f"deactivate:{config_id}")
+        except Exception:
+            pass
         return {"status": "deactivated", "config_id": config_id}
 
     @app.post("/api/live/config/{config_id}/pause")
@@ -1798,11 +1817,128 @@ def create_app(
 
     @app.delete("/api/live/config/{config_id}")
     async def api_live_config_delete(config_id: str):
-        """Delete a live config."""
+        """Delete a live config.
+
+        For Alpaca-linked configs, this endpoint first liquidates all current
+        Alpaca positions in the linked account, then reconciles watches, then
+        deletes the config.
+        """
+        cfg_dict = get_live_config(db, config_id)
+        if not cfg_dict:
+            return JSONResponse({"error": "not_found"}, status_code=404)
+
+        liquidation: dict[str, Any] = {
+            "attempted": 0,
+            "submitted": 0,
+            "failed": [],
+        }
+        alpaca_id = cfg_dict.get("alpaca_account_id")
+        if alpaca_id:
+            try:
+                from trader.market.alpaca_broker import AlpacaAccountRegistry, AlpacaBroker
+                from trader.market.alpaca_reconcile import reconcile
+                from trader.models.live_config import LiveConfig
+
+                # Safety: do not flatten an account used by another active config.
+                for other in get_active_live_configs(db):
+                    if (other.get("config_id") != config_id
+                            and other.get("alpaca_account_id") == alpaca_id):
+                        return JSONResponse(
+                            {
+                                "error": (
+                                    "account_in_use_by_active_config: cannot delete "
+                                    f"{config_id} because Alpaca account {alpaca_id} is "
+                                    f"active in {other.get('config_id')}"
+                                )
+                            },
+                            status_code=409,
+                        )
+
+                registry = AlpacaAccountRegistry()
+                creds = registry.get(alpaca_id)
+                if not creds:
+                    return JSONResponse(
+                        {"error": f"Alpaca account {alpaca_id} not found"},
+                        status_code=404,
+                    )
+
+                broker = AlpacaBroker(
+                    api_key=creds.api_key,
+                    secret_key=creds.secret_key,
+                    paper=creds.paper,
+                    account_id=alpaca_id,
+                    name=creds.name,
+                )
+
+                # Flatten the entire linked Alpaca account before delete.
+                positions = broker.get_positions()
+                liquidation["attempted"] = len(positions)
+                for pos in positions:
+                    try:
+                        result = broker.close_position_and_confirm(pos.symbol)
+                        if result is not None:
+                            liquidation["submitted"] += 1
+                    except Exception as e:
+                        liquidation["failed"].append({
+                            "symbol": pos.symbol,
+                            "error": str(e),
+                        })
+
+                if liquidation["failed"]:
+                    return JSONResponse(
+                        {
+                            "error": "liquidation_failed",
+                            "config_id": config_id,
+                            "alpaca_account_id": alpaca_id,
+                            "liquidation": liquidation,
+                        },
+                        status_code=409,
+                    )
+
+                # Sync watch state to confirmed sells before deleting config.
+                cfg = LiveConfig.from_dict(cfg_dict)
+                reconcile(
+                    broker=broker,
+                    db=db,
+                    live_config_id=config_id,
+                    live_config=cfg,
+                )
+            except Exception as e:
+                return JSONResponse(
+                    {"error": f"liquidation_error: {e}"},
+                    status_code=500,
+                )
+
+        # Safety gate: after liquidation+reconcile there should be no holdings.
+        holding_count = count_holding_watches(db, live_config_id=config_id)
+        if holding_count > 0:
+            return JSONResponse(
+                {
+                    "error": (
+                        f"cannot_delete_with_holdings: config {config_id} still has "
+                        f"{holding_count} holding watch(es) after liquidation."
+                    ),
+                    "config_id": config_id,
+                    "alpaca_account_id": alpaca_id,
+                    "liquidation": liquidation,
+                },
+                status_code=409,
+            )
+
         ok = delete_live_config(db, config_id)
         if not ok:
             return JSONResponse({"error": "not_found"}, status_code=404)
-        return {"status": "deleted", "config_id": config_id}
+        try:
+            from trader.online import orchestrator as _orch
+            _orch.sync_alpaca_trade_streams(db=db, bus=bus, reason=f"delete:{config_id}")
+        except Exception:
+            pass
+        return {
+            "status": "deleted",
+            "config_id": config_id,
+            "alpaca_account_id": alpaca_id,
+            "liquidation": liquidation,
+        }
 
     @app.get("/api/portfolio/{config_id}/equity-history")
     async def api_equity_history(config_id: str, since: str | None = None, until: str | None = None):
