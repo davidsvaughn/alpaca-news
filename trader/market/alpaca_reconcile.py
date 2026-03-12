@@ -464,7 +464,13 @@ def ensure_stops(
     from trader.models.watch import WatchBuilder
 
     account_id = getattr(broker, "account_id", None) or "unknown"
-    summary: dict[str, Any] = {"submitted": [], "already_open": [], "no_stop_price": [], "errors": []}
+    summary: dict[str, Any] = {
+        "submitted": [],
+        "already_open": [],
+        "skipped_open_sell": [],
+        "no_stop_price": [],
+        "errors": [],
+    }
 
     alpaca_positions = {p.symbol: p for p in broker.get_positions()}
     all_watches = get_active_watches(db)
@@ -480,9 +486,13 @@ def ensure_stops(
     all_open_orders = broker.get_open_orders()
     # Build symbol → open stop order mapping
     open_stops_by_symbol: dict[str, Any] = {}
+    open_non_stop_sells: set[str] = set()
     for o in all_open_orders:
-        if o.side == "sell" and o.stop_price is not None:
-            open_stops_by_symbol[o.symbol] = o
+        if o.side == "sell":
+            if o.stop_price is not None:
+                open_stops_by_symbol[o.symbol] = o
+            else:
+                open_non_stop_sells.add(o.symbol)
 
     for watch in holding_watches:
         symbol = watch["symbol"]
@@ -520,6 +530,13 @@ def ensure_stops(
                     expected_status="holding",
                 )
             summary["already_open"].append(symbol)
+            continue
+
+        # Active close/replacement sell order is already holding shares.
+        # Do not submit a stop; retry on next ensure cycle.
+        if symbol in open_non_stop_sells:
+            summary["skipped_open_sell"].append(symbol)
+            log.info("ENSURE-STOPS: %s skipped (open non-stop sell order present)", symbol)
             continue
 
         # Submit stop order
@@ -571,11 +588,12 @@ def ensure_stops(
 
     n_submitted = len(summary["submitted"])
     n_open = len(summary["already_open"])
+    n_skipped_sell = len(summary["skipped_open_sell"])
     n_errors = len(summary["errors"])
     n_no_price = len(summary["no_stop_price"])
-    if n_submitted or n_errors or n_no_price:
-        log.info("ENSURE-STOPS: %d submitted, %d already open, %d errors, %d no stop price",
-                 n_submitted, n_open, n_errors, n_no_price)
+    if n_submitted or n_errors or n_no_price or n_skipped_sell:
+        log.info("ENSURE-STOPS: %d submitted, %d already open, %d skipped (open sell), %d errors, %d no stop price",
+                 n_submitted, n_open, n_skipped_sell, n_errors, n_no_price)
     elif n_open:
         log.info("ENSURE-STOPS: all %d stops active", n_open)
 

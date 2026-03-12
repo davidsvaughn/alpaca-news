@@ -1171,11 +1171,20 @@ class LivePortfolioManager:
                 log.exception("REPLACE SELL FAILED for %s — aborting replacement", symbol)
                 return False
         else:
-            # Shadow portfolio: use Alpaca position price if available, else entry
+            # Shadow portfolio: use Alpaca position price if available, else fresh quote
             if broker:
                 pos = broker.get_position(symbol)
                 if pos:
                     exit_price = pos.current_price
+            elif self.market:
+                try:
+                    quotes = self.market.get_quotes([symbol])
+                    q = (quotes or {}).get(symbol.upper()) or (quotes or {}).get(symbol) or {}
+                    fresh = q.get("lastPrice") or q.get("last_price")
+                    if fresh and float(fresh) > 0:
+                        exit_price = float(fresh)
+                except Exception:
+                    log.warning("Could not fetch exit price for %s — using entry price", symbol)
 
         builder.record_exit(price=exit_price, reason="replaced")
         log.info("REPLACE EXIT: %s %s — exit_price=%.2f", symbol, watch_id, exit_price)

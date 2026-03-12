@@ -155,3 +155,38 @@ Repeated re-entry into exit logic before prior order lifecycle fully settles can
 - Buy-side behavior in the reported examples is mostly expected extended-hours liquidity behavior.
 - The sell-side path has genuine logic gaps (timeout handling asymmetry) that can misclassify eventual fills as failures.
 - The stop-maintenance race is real but mostly a coordination/ordering issue, not an Alpaca API anomaly.
+
+---
+
+## Implemented Fixes (Applied 2026-03-12)
+
+The following code changes were implemented:
+
+1. Session-aware timeout resolution is now shared across buy/sell confirms.
+- Added `_resolve_fill_timeout(timeout_s)` in `trader/market/alpaca_broker.py`.
+- `buy_and_confirm()` now uses this helper (behavior unchanged, code deduplicated).
+- `close_position_and_confirm()` now also uses session-aware timeout when `timeout_s` is not explicitly provided.
+
+2. Duplicate extended-hours sell churn is reduced by reusing open close orders.
+- Added `_get_open_non_stop_sell_order(symbol)` in `trader/market/alpaca_broker.py`.
+- `close_position_and_confirm()` now checks for an existing open non-stop sell and reuses it instead of submitting another close order.
+
+3. Sell timeout handling is safer and more explicit.
+- In `close_position_and_confirm()`, a timeout now performs one final `get_order()` check.
+- If already filled at that point, it is treated as success.
+- If still unfilled, it logs `sell_failed` with status `timeout_open` and raises timeout while intentionally leaving the working order open.
+
+4. `ensure_stops()` now avoids racing active close orders.
+- In `trader/market/alpaca_reconcile.py`, `ensure_stops()` now detects open non-stop sell orders and skips stop submission for those symbols.
+- Added `skipped_open_sell` to summary output and log totals.
+
+5. Regression tests were added for these behaviors.
+- `tests/test_alpaca_broker.py`:
+  - reuse existing open sell order in `close_position_and_confirm()`
+  - timeout path logs `timeout_open` when order remains working
+- `tests/test_alpaca_reconcile.py`:
+  - `ensure_stops()` skips stop placement when a non-stop sell is already open
+
+Validation run:
+- `pytest -q tests/test_alpaca_broker.py tests/test_alpaca_reconcile.py`
+- Result: `5 passed`

@@ -751,6 +751,22 @@ class AlpacaBroker:
             results = [r for r in results if r.symbol == symbol.upper()]
         return results
 
+    def _get_open_non_stop_sell_order(self, symbol: str) -> OrderResult | None:
+        """Return an open SELL order that is not a stop order, if any.
+
+        Used to prevent duplicate close-position submits when a prior
+        close order is still working in thin extended-hours liquidity.
+        """
+        try:
+            open_orders = self.get_open_orders(symbol)
+        except Exception:
+            return None
+        for order in open_orders:
+            side = (order.side or "").lower()
+            if side == "sell" and order.stop_price is None:
+                return order
+        return None
+
     def get_recent_sells(self, symbol: str, limit: int = 5) -> list[OrderResult]:
         """Get recent closed sell orders for a symbol (filled, cancelled, etc.)."""
         from alpaca.trading.requests import GetOrdersRequest
@@ -802,6 +818,15 @@ class AlpacaBroker:
             f"Order {order_id} not filled after {timeout_s}s (status={result.status if result else 'unknown'})"
         )
 
+    def _resolve_fill_timeout(self, timeout_s: float | None) -> float:
+        """Resolve fill timeout based on session when not explicitly provided."""
+        if timeout_s is not None:
+            return timeout_s
+        from trader.market.market_hours import in_extended_only, ALPACA_EXTENDED_HOURS
+        if ALPACA_EXTENDED_HOURS and in_extended_only():
+            return ALPACA_EXTENDED_FILL_TIMEOUT
+        return ALPACA_FILL_TIMEOUT
+
     def buy_and_confirm(
         self,
         symbol: str,
@@ -815,13 +840,7 @@ class AlpacaBroker:
         Returns OrderResult with actual filled_avg_price and filled_qty.
         Raises on rejection, cancellation, or timeout.
         """
-        # Use longer timeout for extended hours (limit orders, thin liquidity)
-        if timeout_s is None:
-            from trader.market.market_hours import in_extended_only, ALPACA_EXTENDED_HOURS
-            if ALPACA_EXTENDED_HOURS and in_extended_only():
-                timeout_s = ALPACA_EXTENDED_FILL_TIMEOUT
-            else:
-                timeout_s = ALPACA_FILL_TIMEOUT
+        timeout_s = self._resolve_fill_timeout(timeout_s)
 
         result = self.buy(symbol, notional=notional, qty=qty)
         try:
@@ -855,17 +874,54 @@ class AlpacaBroker:
     def close_position_and_confirm(
         self,
         symbol: str,
-        timeout_s: float = ALPACA_FILL_TIMEOUT,
+        timeout_s: float | None = None,
     ) -> OrderResult | None:
         """Close a position and wait for sell fill confirmation.
 
         Returns OrderResult with actual exit price, or None if no position.
         """
-        result = self.close_position(symbol)
+        timeout_s = self._resolve_fill_timeout(timeout_s)
+
+        # If a prior close order is still open, reuse it instead of
+        # submitting a fresh sell (prevents duplicate order churn).
+        existing_sell = self._get_open_non_stop_sell_order(symbol)
+        result = existing_sell or self.close_position(symbol)
         if result is None:
             return None
+
+        if existing_sell is not None:
+            log.info(
+                "CLOSE %s: reusing open sell order %s (status=%s)",
+                symbol, result.order_id, result.status,
+            )
+
         try:
             confirmed = self.wait_for_fill(result.order_id, timeout_s=timeout_s)
+        except TimeoutError:
+            # Final check: order may have filled right at timeout.
+            final = self.get_order(result.order_id)
+            if final and final.status.lower() == "filled":
+                confirmed = final
+            else:
+                last_status = final.status if final else "unknown"
+                log.warning(
+                    "Sell order %s for %s timed out after %.1fs (status=%s) — leaving order open",
+                    result.order_id, symbol, timeout_s, last_status,
+                )
+                self._log_tx(
+                    "sell_failed",
+                    symbol.upper(),
+                    order_id=result.order_id,
+                    status="timeout_open",
+                    detail={
+                        "timeout_s": timeout_s,
+                        "last_status": last_status,
+                        "reused_open_order": existing_sell is not None,
+                    },
+                )
+                raise TimeoutError(
+                    f"Order {result.order_id} not filled after {timeout_s}s (status={last_status})"
+                )
         except Exception as e:
             self._log_tx("sell_failed", symbol.upper(), order_id=result.order_id, status="timeout_or_error",
                          detail={"error": str(e)})
