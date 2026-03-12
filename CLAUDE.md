@@ -21,6 +21,17 @@ Reference papers are in `docs/refs/`. Archived older docs in `docs/archive/`.
 
 - **`docs/skills/`** — **Agent knowledge base**: operational guides for debugging, Alpaca operations, and codebase navigation. **Read [docs/skills/README.md](docs/skills/README.md) first** when investigating issues or working in unfamiliar areas.
 
+## Market Data Source Priority
+
+**Schwab is the PRIMARY market data source. yfinance is ONLY a fallback.**
+
+When writing ANY code that fetches stock prices, candles, quotes, or market data:
+1. Use `SchwabMarketClient` (`trader/market/schwab_client.py`) or `MarketDataService` (`trader/market/data_service.py`) as the default
+2. yfinance is ONLY a fallback when Schwab is unavailable or fails for a specific symbol
+3. This applies to scripts, tools, analysis code — everything
+4. See `docs/src/SCHWABDEV.md` for full API documentation
+5. Key env vars: `SCHWAB_APP_KEY`, `SCHWAB_APP_SECRET`, `SCHWAB_DISABLED` (optional)
+
 ## Debugging Issues
 
 **When debugging, read `docs/skills/DIAGNOSTICS.md` first** — it lists all data sources ranked by usefulness and explains common diagnostic workflows.

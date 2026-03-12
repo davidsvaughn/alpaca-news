@@ -407,6 +407,81 @@ The issue: Reuters earnings summaries trigger investigations for every earnings 
 
 ---
 
+## Part 8: Rigorous Archive-Based Skip Pattern Study (2026-03-12)
+
+### Correction: Parts 6-7 Were Based on Survivorship-Biased Data
+
+**Important**: The skip pattern recommendations in Parts 6-7 above were derived from analyzing only trades that *survived* all pre-filters and resulted in buys. This is survivorship bias — we were only looking at articles that passed triage, got investigated, received a bullish prediction, and were bought. The proper way to evaluate skip patterns is to search the **full news article archive**, match headlines against patterns, and measure subsequent stock price movements for ALL matching articles regardless of whether our pipeline acted on them.
+
+### Methodology
+
+Script: `scripts/skip_pattern_study.py`
+
+1. **Article source**: Full insight_sentry archive (`data/news/archive/insight_sentry/`) — 39,945 articles over 12 days
+2. **Symbol filtering**: US exchange prefixes only (NASDAQ, NYSE, AMEX, ARCA, NYSEARCA, BATS) → validated against Alpaca's tradeable asset list (12,632 symbols) → **18,071 article-symbol pairs** from **3,406 unique symbols**
+3. **Price data**: 5-min bars from **Schwab** (`get_candles_by_date_range`, `frequency=5`, regular hours only). 3,401/3,406 symbols fetched successfully (99.85%). 5 delisted symbols failed.
+4. **Entry price**: Open of first 5-min bar at or after article `published_at` timestamp
+5. **Windows**: 1h, 2h, 4h, 8h, 1d (24 clock hours), 2d (48 clock hours) — calendar time, not trading hours
+6. **Metrics per window**: `max_gain = (highest High - entry) / entry` and `max_drawdown = (lowest Low - entry) / entry`
+7. **17,247 records** with computed returns (824 skipped due to insufficient price data near window edges)
+
+### Results: Pattern Performance vs Baseline
+
+Baseline (ALL 17,247 article-symbol pairs, 1d window): **avg_gain=3.84%, med_gain=2.08%**
+
+| Pattern | n | 1d avg_gain | 1d med_gain | 1d pct>=2% | vs Baseline | Verdict |
+|---------|---|------------|------------|-----------|-------------|---------|
+| `FDA_phase_trial` | 193 | **7.69%** | **4.22%** | **68.7%** | **+100% above** | Top performer |
+| `reports_results_quarter` | 326 | **5.95%** | **4.40%** | **72.3%** | **+55% above** | Strong performer |
+| `stock_rallies_surges` | 74 | **5.09%** | **2.64%** | **51.4%** | **+33% above** | Above baseline |
+| `guidance_outlook` | 288 | **4.87%** | **3.23%** | **63.4%** | **+27% above** | Above baseline |
+| `buyback_repurchase` | 197 | **4.81%** | **3.42%** | **62.6%** | **+25% above** | Above baseline |
+| `contract_order_win` | 7 | 4.54% | 4.35% | 71.4% | +18% above | Small sample |
+| `shares_rise_jump_surge` | 96 | **4.03%** | **2.60%** | **63.2%** | +5% above | At baseline |
+| `acquisition_merger` | 594 | 3.51% | 1.80% | 45.7% | -9% below | Slightly below |
+| `earnings_beat` | 48 | 3.31% | 1.56% | 45.8% | -14% below | Below baseline |
+| `raised_to_from` | 113 | 3.27% | 1.92% | 46.9% | -15% below | Below baseline |
+| `shares_trading_lower` | 11 | 2.15% | 1.91% | 45.5% | -44% below | Small sample |
+
+### Key Finding: Don't Add New Skip Patterns
+
+**None of the tested patterns underperform badly enough to justify adding as skip patterns.** Even the weakest (`shares_trading_lower` at n=11) has too small a sample to draw conclusions.
+
+More importantly, several patterns that the survivorship-biased analysis in Part 6 recommended skipping are actually **top performers** in the full archive:
+
+| Pattern | Part 6 Recommendation | Archive Reality |
+|---------|----------------------|-----------------|
+| `reports_results_quarter` | Skip it (-2.64% avg, 18% win) | **5.95% avg gain, 72.3% hit rate** |
+| `buyback_repurchase` | Skip it (-0.61%, 35.7% win) | **4.81% avg gain, 62.6% hit rate** |
+| `shares_rise_jump_surge` | Skip it (0% win rate) | **4.03% avg gain, 63.2% hit rate** |
+| `stock_rallies_surges` | Skip it (-3.94%, 0% win) | **5.09% avg gain, 51.4% hit rate** |
+| `raised_to_from` | Skip it (-1.31%, 38% win) | 3.27% avg gain, close to baseline |
+| `guidance_outlook` | Skip it (-2.46%, 21% win) | **4.87% avg gain, 63.4% hit rate** |
+
+**The trade-only analysis was systematically wrong** because it only saw the articles that our pipeline chose to buy — a tiny, non-representative subset. The full archive shows that articles matching these patterns have *above-average* subsequent price performance.
+
+### What This Means for the Skip Pattern List
+
+The existing `skip_patterns.jsonc` is **well-calibrated as-is**. The patterns it skips (analyst reiterations, technical signals, recap articles, etc.) are genuinely low-signal. The patterns we were considering adding should **NOT** be added — they represent high-quality news categories.
+
+The reason our *trades* on these patterns performed poorly is likely a pipeline issue (e.g., buying too late after the move, or the LLM overreacting to headline keywords) — not a problem with the underlying news quality.
+
+### Recommendations (Revised)
+
+1. **Do NOT add** `raised_to_from`, `stock_rallies_surges`, `shares_rise_jump_surge`, `buyback_repurchase`, `reports_results_quarter`, or `guidance_outlook` to skip patterns
+2. **Existing active patterns are fine** — keep them as-is
+3. **The commented-out patterns** (`shares_trading_higher`, `What's Going On With`) can stay commented out — samples too small to evaluate
+4. **Focus on pipeline quality instead**: The gap between full-archive returns (strong) and our actual trade returns (weak) suggests the problem is in *how* we act on these articles, not *which* articles we see
+5. **Re-run this study periodically** (weekly/monthly) as the archive grows — 12 days is a decent start but more data will sharpen the signal
+
+### Data Files
+
+- Raw results: `data/skip_pattern_study.csv` (17,247 rows)
+- Summary: `data/skip_pattern_summary.csv`
+- Script: `scripts/skip_pattern_study.py` — run with `uv run python scripts/skip_pattern_study.py --days 12`
+
+---
+
 ## Appendix: Methodology Note
 
-The skill file at [docs/skills/TRADE-ANALYSIS.md](docs/skills/TRADE-ANALYSIS.md) documents the full process, SQL queries, and methodology used for this analysis so it can be repeated periodically. All queries are reproducible against `data/trader.db`.
+The skill file at [docs/skills/TRADE-ANALYSIS.md](docs/skills/TRADE-ANALYSIS.md) documents the full process, SQL queries, and methodology used for this analysis so it can be repeated periodically. All queries are reproducible against `data/trader.db`. The archive-based skip pattern study (Part 8) uses `scripts/skip_pattern_study.py` and Schwab price data.

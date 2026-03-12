@@ -356,12 +356,57 @@ Look for recurring headline patterns among losers that could be added to `skip_p
 #### 4D. Evaluate commented-out patterns
 Check if re-enabling commented-out patterns would prevent losses without blocking winners.
 
-### Phase 5: Write-up
+### Phase 5: Archive-based skip pattern study
+
+**This is the rigorous way to evaluate skip patterns.** Do NOT draw conclusions about skip patterns from trade-only data (survivorship bias). Instead, scan the full news archive.
+
+#### Script: `scripts/skip_pattern_study.py`
+
+```bash
+uv run python scripts/skip_pattern_study.py --days 12 --workers 10
+```
+
+**What it does:**
+1. Loads all articles from `data/news/archive/insight_sentry/` (zip files) + `data/news/incoming/insight_sentry/`
+2. Filters symbols to US-traded equities: keeps only `NASDAQ:`, `NYSE:`, `AMEX:`, `ARCA:`, `NYSEARCA:`, `BATS:` prefixes, then validates against Alpaca's tradeable asset list
+3. Matches headlines against configurable regex patterns (both current skip patterns and proposed new ones)
+4. Fetches 5-min price bars from **Schwab** (`get_candles_by_date_range`), yfinance as fallback
+5. For each article-symbol pair, computes `max_gain` and `max_drawdown` over 6 windows (1h, 2h, 4h, 8h, 1d, 2d) relative to the entry price (Open of first bar after article timestamp)
+6. Aggregates by pattern, compares each pattern's performance to the baseline (all articles)
+
+**Output files:**
+- `data/skip_pattern_study.csv` — raw per-article returns (one row per article-symbol-pair)
+- `data/skip_pattern_summary.csv` — aggregated stats per pattern
+
+**To add new patterns to test**, edit the `PATTERNS` dict in the script. Each entry is a name → compiled regex.
+
+**Key constraints:**
+- Schwab intraday data available for ~14 trading days back (date-range API)
+- Windows are calendar time, not trading hours (a "1d" window = 24 clock hours, crossing overnight)
+- Bars are regular hours only (`extended_hours=False`)
+- Minimum 5 matches required before a pattern appears in the summary
+
+**Interpreting results:**
+- Compare each pattern's avg/median gain to `_BASELINE_ALL` (all articles regardless of pattern)
+- A pattern is only a skip candidate if it **consistently underperforms** baseline with a large sample (n >= 50)
+- Patterns that perform AT or ABOVE baseline should NOT be skipped, even if our *trades* on them lost money (that's a pipeline issue, not a news quality issue)
+
+**Baseline results (2026-03-12, n=17,247):**
+
+| Window | avg_gain | med_gain | pct>=2% gain |
+|--------|----------|----------|-------------|
+| 1h | 1.32% | 0.64% | 17.5% |
+| 4h | 2.62% | 1.29% | 37.2% |
+| 1d | 3.84% | 2.08% | 50.9% |
+| 2d | 4.62% | 2.46% | 55.8% |
+
+### Phase 6: Write-up
 
 Append all new findings to `docs/TRADE-ANALYSIS-DEEP-DIVE.md` in a new dated section. Include:
 - Updated statistics (compare to previous run)
 - New patterns discovered
 - Skip pattern changes made (or recommended)
+- Archive study results (always run Phase 5 before making skip pattern recommendations)
 - Any filter/exit strategy recommendations
 - Bearish/shorting updates
 
@@ -378,17 +423,22 @@ Append all new findings to `docs/TRADE-ANALYSIS-DEEP-DIVE.md` in a new dated sec
 | Stop-loss trades | 76 (14.8%) |
 | Skip rate | 83% |
 | Bearish signal accuracy | 76% |
+| Archive study baseline (1d avg_gain) | 3.84% (n=17,247) |
+| Archive study symbols fetched | 3,401/3,406 (99.85%) |
 
 Update this table each run for trend tracking.
 
 ## Gotchas
 
+- **Survivorship bias in trade-only analysis**: NEVER evaluate skip patterns using only trades that resulted in buys. This is a biased subset. Always run the full archive study (Phase 5) first. The 2026-03-12 analysis showed trade-only data recommended skipping patterns that actually perform +25-100% above baseline in the full archive.
 - **Reconcile-adopted watches**: Some watches have `snapshot_id = 'reconcile_adopted'` — these don't link to real snapshots. Join queries will miss them. Filter or handle separately.
 - **Duplicate watches per snapshot**: Multiple portfolios can buy the same snapshot, creating duplicate watch entries. Use `DISTINCT` on snapshot_id when counting unique trades.
 - **Hold time <30 min = 0% win rate**: Every trade that exited in under 30 minutes was a loser (as of 2026-03-11). This is not a small-sample fluke — it's 30 trades.
 - **Confidence is not predictive**: Don't assume higher LLM confidence = better trade. The data shows slight inverse correlation.
 - **Source matters more than confidence**: News source is the strongest single predictor of trade outcome.
 - **Gemini never dissents**: The synthesis agent has never pushed back on a bullish thesis in any examined snapshot. This is a pipeline design flaw, not a feature.
+- **Schwab for price data**: Always use Schwab (`SchwabMarketClient`) for price fetching in analysis scripts, not yfinance. yfinance is only a fallback. See `docs/src/SCHWABDEV.md`.
+- **insight_sentry symbols have exchange prefixes**: ALL symbols in the archive use prefixes like `NASDAQ:AAPL`, `NYSE:GE`. Filter by prefix to get US equities, then validate against Alpaca's asset list for tradeability.
 
 ## Cross-references
 
