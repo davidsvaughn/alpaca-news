@@ -608,3 +608,80 @@ class TestLiveExitMonitor:
         assert len(watches) == 1
         assert watches[0]["status"] == "cooling_off"
         assert watches[0]["cooling_off_until"] is not None
+
+    def test_get_broker_for_watch_uses_watch_config_account(self, db):
+        from trader.online.live_monitor import LiveExitMonitor
+
+        cfg1 = LiveConfig.create(
+            name="Cfg 1", filters={}, allocation="none", allocation_params={},
+            starting_capital=100000.0, exit_strategy="volume_delta_divergence",
+            exit_params={"lookback": 80}, alpaca_account_id="PA_ACCOUNT_1",
+        )
+        cfg2 = LiveConfig.create(
+            name="Cfg 2", filters={}, allocation="none", allocation_params={},
+            starting_capital=100000.0, exit_strategy="volume_delta_divergence",
+            exit_params={"lookback": 80}, alpaca_account_id="PA_ACCOUNT_2",
+        )
+        insert_live_config(db, config=cfg1.to_dict())
+        insert_live_config(db, config=cfg2.to_dict())
+        activate_live_config(db, cfg1.config_id)
+        activate_live_config(db, cfg2.config_id)
+
+        class _Pool:
+            def __init__(self):
+                self.calls: list[str] = []
+
+            def get(self, account_id: str):
+                self.calls.append(account_id)
+                return {"account_id": account_id}
+
+        pool = _Pool()
+        monitor = LiveExitMonitor(db=db, broker_pool=pool)
+        broker = monitor._get_broker_for_watch({"live_config_id": cfg2.config_id})
+
+        assert broker == {"account_id": "PA_ACCOUNT_2"}
+        assert pool.calls == ["PA_ACCOUNT_2"]
+
+    def test_transition_to_cooling_off_uses_watch_config(self, db, monkeypatch):
+        from trader.online.live_monitor import LiveExitMonitor
+        import trader.online.live_monitor as lm
+
+        cfg1 = LiveConfig.create(
+            name="Cfg 1", filters={}, allocation="none", allocation_params={},
+            starting_capital=100000.0, exit_strategy="volume_delta_divergence",
+            exit_params={"lookback": 80}, cooling_off_market_hours=24.0,
+        )
+        cfg2 = LiveConfig.create(
+            name="Cfg 2", filters={}, allocation="none", allocation_params={},
+            starting_capital=100000.0, exit_strategy="volume_delta_divergence",
+            exit_params={"lookback": 80}, cooling_off_market_hours=3.0,
+        )
+        insert_live_config(db, config=cfg1.to_dict())
+        insert_live_config(db, config=cfg2.to_dict())
+        activate_live_config(db, cfg1.config_id)
+        activate_live_config(db, cfg2.config_id)
+
+        wb = WatchBuilder.create_from_live_config(
+            snapshot_id="snap_1", symbol="AAPL", entry_price=150.0,
+            confidence=0.9, direction="bullish",
+            live_config_id=cfg2.config_id, exit_strategy="vdd", exit_params={},
+        )
+        wb.record_exit(price=155.0, reason="signal")
+        watch = wb.to_watch()
+        insert_watch(db, watch=watch.to_dict())
+
+        seen_hours: dict[str, float] = {}
+
+        def _fake_add_market_hours(now, hours):
+            seen_hours["value"] = hours
+            return now + timedelta(hours=hours)
+
+        monkeypatch.setattr(lm, "add_market_hours", _fake_add_market_hours)
+
+        monitor = LiveExitMonitor(db=db)
+        monitor._transition_to_cooling_off(watch.to_dict())
+
+        assert seen_hours["value"] == 3.0
+        watches = get_active_watches(db)
+        assert len(watches) == 1
+        assert watches[0]["status"] == "cooling_off"

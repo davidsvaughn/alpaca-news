@@ -576,9 +576,10 @@ class AlpacaBroker:
         """Close position with a market order (regular hours)."""
         # Cancel any open orders first (stops hold shares and can block a market close).
         self._cancel_open_orders(symbol)
+        self._wait_for_sell_orders_clear(symbol, timeout_s=5.0)
 
         last_error: Exception | None = None
-        for attempt in (1, 2):
+        for attempt in (1, 2, 3):
             try:
                 order = self._client.close_position(symbol.upper())
                 result = self._to_result(order)
@@ -593,12 +594,12 @@ class AlpacaBroker:
                     self._log_tx("sell_failed", symbol.upper(), status="no_position",
                                  detail={"error": str(e)})
                     return None
-                # Cancels can take a moment to release held shares; retry once.
-                if "insufficient qty available" in msg and attempt == 1:
-                    log.warning("CLOSE %s blocked by held shares; retrying after cancel settle", symbol)
-                    import time
-                    time.sleep(1.0)
+                # Cancels can take time to release held shares; wait and retry.
+                if "insufficient qty available" in msg and attempt < 3:
+                    log.warning("CLOSE %s blocked by held shares; waiting for cancel settle (attempt %d)",
+                                symbol, attempt)
                     self._cancel_open_orders(symbol)
+                    self._wait_for_sell_orders_clear(symbol, timeout_s=5.0)
                     continue
                 break
 
@@ -617,6 +618,30 @@ class AlpacaBroker:
             log.info("Cancelled %d open orders for %s before sell", cancelled, symbol)
             import time; time.sleep(0.5)  # brief pause for cancellations to settle
         return cancelled
+
+    def _wait_for_sell_orders_clear(
+        self,
+        symbol: str,
+        timeout_s: float = 5.0,
+        poll_interval_s: float = 0.25,
+    ) -> bool:
+        """Wait until no open SELL orders remain for the symbol."""
+        import time
+
+        deadline = time.monotonic() + timeout_s
+        while time.monotonic() < deadline:
+            try:
+                open_orders = self.get_open_orders(symbol)
+            except Exception:
+                # If order query fails transiently, keep trying until timeout.
+                time.sleep(poll_interval_s)
+                continue
+
+            blocking = [o for o in open_orders if (o.side or "").lower() == "sell"]
+            if not blocking:
+                return True
+            time.sleep(poll_interval_s)
+        return False
 
     def _close_position_extended(
         self,
@@ -694,6 +719,13 @@ class AlpacaBroker:
             self._log_tx("stop_cancel", "", order_id=order_id, status="cancelled")
             return True
         except Exception as e:
+            msg = str(e).lower()
+            if "pending cancel" in msg:
+                # Alpaca accepted a prior cancel request; treat this as in-progress success.
+                log.info("Order %s already pending cancel", order_id)
+                self._log_tx("stop_cancel", "", order_id=order_id, status="pending_cancel",
+                             detail={"error": str(e)})
+                return True
             log.warning("Could not cancel order %s: %s", order_id, e)
             self._log_tx("stop_cancel", "", order_id=order_id, status="failed",
                          detail={"error": str(e)})

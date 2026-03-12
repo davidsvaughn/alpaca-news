@@ -111,29 +111,16 @@ A new signal replaces the weakest position only if its confidence is strictly hi
 Unlike unrealized P&L, this comparison is between two meaningful values, so replacement
 happens whenever the new signal is more confident than the least-confident open position.
 
-### Composite (`composite`)
-
-Blends confidence and unrealized P&L using z-score normalization:
-
-```
-score = weight * Z(confidence) + (1 - weight) * Z(unrealized_pnl)
-```
-
-- `composite_weight` controls the blend (0 = pure unrealized P&L, 1 = pure confidence).
-- Requires at least 2 open positions to compute z-scores; falls back to unrealized P&L otherwise.
-- The incoming signal's composite score uses its confidence component only (unrealized P&L = 0).
-
 ---
 
-## Limitations of Current Ranking Methods
+## Limitations of Legacy Ranking Methods
 
-The existing methods don't answer the right question:
+The legacy methods don't answer the right question:
 
 | Method | Problem |
 |--------|---------|
 | **Unrealized P&L** | Backward-looking — "how has this done so far?" is sunk cost thinking. A stock down 5% might be bottoming (good to hold); a stock up 3% might be topping (bad to hold). |
 | **Signal Confidence** | Stale — the LLM's opinion at entry time doesn't update. Conditions may have changed drastically since entry. |
-| **Composite** | Inherits both problems. Also, the incoming signal gets scored asymmetrically (confidence only, unrealized P&L = 0). |
 
 What we really want: **"which position has the best prospects going forward from right now?"**
 
@@ -271,9 +258,10 @@ score = w1 * norm(trailing_slope) + w2 * norm(ad_slope) + w3 * norm(inverted_rsi
 get replaced by marginally better signals in rapid succession.
 
 - **Parameter:** `replace_min_margin` (default 0.0, range 0–1)
-- **Effect:** `new_score > worst_score + replace_min_margin` (must exceed by margin)
+- **Effect:** All scores are normalized to 0–1 (min-max across holdings + new signal), then: `normalized_new > normalized_worst + margin`
 - Available in both `max_positions` and `ranking_realloc` allocation params
-- A value of 0.05 means the new signal must score at least 0.05 better than the worst position
+- The 0–1 normalization means the margin works uniformly across all ranking methods
+- A value of 0.10 means the new signal must be noticeably better than the worst position
 
 **Origin:** Discovered 2026-03-12 when comparing two parallel portfolios. The Alpaca portfolio
 churned through 12 replacement exits totaling -$745, while the non-Alpaca portfolio (which
@@ -324,6 +312,7 @@ service is running. The live scoring path follows this priority:
 
 ## See Also
 
+- [RANKING-METHODS-GUIDE.md](RANKING-METHODS-GUIDE.md) — User guide: how to choose and configure ranking methods
 - [BACKTEST-ARCHITECTURE.md](BACKTEST-ARCHITECTURE.md) — System overview, job flow, frontend state
 - [BACKTEST-STRATEGIES.md](BACKTEST-STRATEGIES.md) — Exit strategies (what triggers position close)
 - [BACKTEST-METRICS.md](BACKTEST-METRICS.md) — Performance metrics and portfolio simulation

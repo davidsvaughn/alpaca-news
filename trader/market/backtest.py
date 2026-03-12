@@ -271,14 +271,13 @@ STRATEGIES: dict[str, StrategyDef] = {
 
 RANK_METHOD_CONFIDENCE = "confidence"
 RANK_METHOD_UNREAL_PL = "unreal_pl"
-RANK_METHOD_COMPOSITE = "composite"
 RANK_METHOD_TRAILING_SLOPE = "trailing_slope"
 RANK_METHOD_VOLUME_TREND = "volume_trend"
 RANK_METHOD_RSI_CURRENT = "rsi_current"
 RANK_METHOD_TECH_SCORE = "tech_score"
 
 _ALL_RANK_METHODS = {
-    RANK_METHOD_CONFIDENCE, RANK_METHOD_UNREAL_PL, RANK_METHOD_COMPOSITE,
+    RANK_METHOD_CONFIDENCE, RANK_METHOD_UNREAL_PL,
     RANK_METHOD_TRAILING_SLOPE, RANK_METHOD_VOLUME_TREND,
     RANK_METHOD_RSI_CURRENT, RANK_METHOD_TECH_SCORE,
 }
@@ -301,7 +300,6 @@ def normalize_rank_method(method: str | None) -> str:
 _RANK_OPTIONS = [
     {"value": RANK_METHOD_CONFIDENCE, "label": "Signal Confidence"},
     {"value": RANK_METHOD_UNREAL_PL, "label": "Unrealized P&L"},
-    {"value": RANK_METHOD_COMPOSITE, "label": "Composite"},
     {"value": RANK_METHOD_TRAILING_SLOPE, "label": "Price Momentum (Slope)"},
     {"value": RANK_METHOD_VOLUME_TREND, "label": "Accumulation/Distribution"},
     {"value": RANK_METHOD_RSI_CURRENT, "label": "RSI Exhaustion"},
@@ -341,7 +339,6 @@ ALLOCATIONS: dict[str, AllocationDef] = {
             "max_pos": ParamDef("int", 10, "Max Positions", 1, 50, 1),
             "when_full": ParamDef("select", "skip", "When Full", options=_WHEN_FULL_OPTIONS),
             "rank_method": ParamDef("select", RANK_METHOD_UNREAL_PL, "Rank By", options=_RANK_OPTIONS),
-            "composite_weight": ParamDef("float", 0.5, "Confidence Weight", 0, 1, 0.1),
             "replace_min_margin": ParamDef("float", 0.0, "Min Margin to Replace", 0, 1, 0.01),
         },
     ),
@@ -353,7 +350,6 @@ ALLOCATIONS: dict[str, AllocationDef] = {
         params={
             "alloc_pct": ParamDef("float", 5.0, "Allocation %", 1, 50, 1),
             "rank_method": ParamDef("select", RANK_METHOD_UNREAL_PL, "Rank By", options=_RANK_OPTIONS),
-            "composite_weight": ParamDef("float", 0.5, "Confidence Weight", 0, 1, 0.1),
             "replace_min_margin": ParamDef("float", 0.0, "Min Margin to Replace", 0, 1, 0.01),
         },
     ),
@@ -586,38 +582,6 @@ def _rank_unreal_pl(
     return scores
 
 
-def _rank_composite(
-    open_positions: dict[str, BacktestResult],
-    entry_confidence: dict[str, float],
-    target_iso: str,
-    weight: float = 0.5,
-) -> dict[str, float]:
-    """Composite score: w * Z(confidence) + (1-w) * Z(unrealized_pnl).
-
-    *weight* controls confidence vs unrealized P&L (0 = pure unrealized P&L,
-    1 = pure confidence).
-    """
-    conf = _rank_confidence(open_positions, entry_confidence, target_iso)
-    pnl = _rank_unreal_pl(open_positions, entry_confidence, target_iso)
-    sids = list(open_positions.keys())
-    if len(sids) < 2:
-        # Can't z-score with < 2 values; fall back to unrealized P&L
-        return pnl
-
-    def _z(vals: list[float]) -> list[float]:
-        m = sum(vals) / len(vals)
-        v = sum((x - m) ** 2 for x in vals) / (len(vals) - 1)
-        s = math.sqrt(v) if v > 0 else 1.0
-        return [(x - m) / s for x in vals]
-
-    z_conf = _z([conf[s] for s in sids])
-    z_pnl = _z([pnl[s] for s in sids])
-    return {
-        sid: weight * zc + (1 - weight) * zp
-        for sid, zc, zp in zip(sids, z_conf, z_pnl)
-    }
-
-
 def _features_at_time(result: BacktestResult, target_iso: str) -> dict[str, float] | None:
     """Look up ranking features at *target_iso* from ranking_features.
 
@@ -717,14 +681,11 @@ def _compute_scores(
     open_positions: dict[str, BacktestResult],
     entry_confidence: dict[str, float],
     target_iso: str,
-    composite_weight: float = 0.5,
 ) -> dict[str, float]:
     """Dispatch to the appropriate ranking function."""
     method = normalize_rank_method(method)
     if method == RANK_METHOD_CONFIDENCE:
         return _rank_confidence(open_positions, entry_confidence, target_iso)
-    if method == RANK_METHOD_COMPOSITE:
-        return _rank_composite(open_positions, entry_confidence, target_iso, composite_weight)
     if method == RANK_METHOD_TRAILING_SLOPE:
         return _rank_trailing_slope(open_positions, entry_confidence, target_iso)
     if method == RANK_METHOD_VOLUME_TREND:
@@ -740,15 +701,12 @@ def _score_new_signal(
     rank_method: str,
     new_confidence: float,
     new_features: dict[str, float] | None,
-    composite_weight: float,
 ) -> float:
-    """Compute the score for an incoming signal using the same method as holdings."""
+    """Compute the raw score for an incoming signal using the same method as holdings."""
     if rank_method == RANK_METHOD_CONFIDENCE:
         return new_confidence
     if rank_method == RANK_METHOD_UNREAL_PL:
         return 0.0  # just entered — no unrealised P&L yet
-    if rank_method == RANK_METHOD_COMPOSITE:
-        return composite_weight * new_confidence
     # Forward-looking methods: use the signal's own features (symmetric scoring)
     if rank_method in _FEATURE_BASED_METHODS and new_features:
         if rank_method == RANK_METHOD_TRAILING_SLOPE:
@@ -758,9 +716,73 @@ def _score_new_signal(
         if rank_method == RANK_METHOD_RSI_CURRENT:
             return 100.0 - new_features.get("rsi", 50.0)
         if rank_method == RANK_METHOD_TECH_SCORE:
-            # Can't z-score a single value against holdings; use slope as proxy
-            return new_features.get("slope", 0.0)
+            return new_features.get("slope", 0.0)  # proxy; normalized below
     return 0.0
+
+
+def _normalize_scores_0_1(scores: dict[str, float], new_score: float) -> tuple[dict[str, float], float]:
+    """Normalize all scores (holdings + new signal) to the 0–1 range.
+
+    Uses min-max over the full set so that ``replace_min_margin`` is
+    uniformly meaningful across all ranking methods.  When all scores are
+    equal the function returns 0.5 for everything (no replacement possible
+    with any positive margin).
+    """
+    all_vals = list(scores.values()) + [new_score]
+    lo = min(all_vals)
+    hi = max(all_vals)
+    span = hi - lo
+    if span == 0:
+        normed = {k: 0.5 for k in scores}
+        return normed, 0.5
+    normed = {k: (v - lo) / span for k, v in scores.items()}
+    new_normed = (new_score - lo) / span
+    return normed, new_normed
+
+
+def _compute_tech_score_with_new(
+    open_positions: dict[str, BacktestResult],
+    entry_confidence: dict[str, float],
+    target_iso: str,
+    new_features: dict[str, float],
+    weights: tuple[float, float, float] = (0.4, 0.3, 0.3),
+) -> tuple[dict[str, float], float]:
+    """Compute tech_score for holdings AND new signal in one z-score pass.
+
+    Returns (holding_scores, new_signal_score) — all z-scored together so
+    the new signal gets a proper composite score instead of a raw slope proxy.
+    """
+    # Collect features for all holdings + new signal
+    all_features: dict[str, dict[str, float]] = {}
+    for sid, r in open_positions.items():
+        feat = _features_at_time(r, target_iso)
+        all_features[sid] = feat or {"slope": 0.0, "rsi": 50.0, "ad_slope": 0.0}
+    new_key = "__new_signal__"
+    all_features[new_key] = new_features
+
+    sids = list(all_features.keys())
+    if len(sids) < 3:  # need at least 2 holdings + 1 new for meaningful z-scores
+        # Fall back to slope for everyone
+        holding_scores = {s: all_features[s]["slope"] for s in open_positions}
+        return holding_scores, new_features.get("slope", 0.0)
+
+    def _z(vals: list[float]) -> list[float]:
+        m = sum(vals) / len(vals)
+        v = sum((x - m) ** 2 for x in vals) / (len(vals) - 1)
+        s = math.sqrt(v) if v > 0 else 1.0
+        return [(x - m) / s for x in vals]
+
+    w1, w2, w3 = weights
+    z_slope = _z([all_features[s]["slope"] for s in sids])
+    z_ad = _z([all_features[s]["ad_slope"] for s in sids])
+    z_rsi = _z([100.0 - all_features[s]["rsi"] for s in sids])
+
+    all_scores = {
+        sid: w1 * zs + w2 * za + w3 * zr
+        for sid, zs, za, zr in zip(sids, z_slope, z_ad, z_rsi)
+    }
+    holding_scores = {s: all_scores[s] for s in open_positions}
+    return holding_scores, all_scores[new_key]
 
 
 def _try_replace(
@@ -770,19 +792,32 @@ def _try_replace(
     entry_confidence: dict[str, float],
     target_iso: str,
     rank_method: str,
-    composite_weight: float,
     new_features: dict[str, float] | None = None,
     min_margin: float = 0.0,
 ) -> str | None:
     """If the new signal outranks the weakest open position, return the
-    snapshot_id of the position to replace.  Otherwise return None."""
+    snapshot_id of the position to replace.  Otherwise return None.
+
+    All scores are normalized to 0–1 before comparison so that
+    ``min_margin`` is uniformly meaningful regardless of ranking method.
+    """
     if not open_positions:
         return None
     rank_method = normalize_rank_method(rank_method)
-    scores = _compute_scores(
-        rank_method, open_positions, entry_confidence, target_iso, composite_weight,
-    )
-    new_score = _score_new_signal(rank_method, new_confidence, new_features, composite_weight)
+
+    # For tech_score: include new signal in z-score computation (symmetric)
+    if (rank_method == RANK_METHOD_TECH_SCORE
+            and new_features and len(open_positions) >= 2):
+        raw_scores, raw_new = _compute_tech_score_with_new(
+            open_positions, entry_confidence, target_iso, new_features,
+        )
+    else:
+        raw_scores = _compute_scores(
+            rank_method, open_positions, entry_confidence, target_iso,
+        )
+        raw_new = _score_new_signal(rank_method, new_confidence, new_features)
+
+    scores, new_score = _normalize_scores_0_1(raw_scores, raw_new)
     worst_sid = min(scores, key=scores.get)  # type: ignore[arg-type]
     if new_score > scores[worst_sid] + min_margin:
         return worst_sid
@@ -837,7 +872,6 @@ def apply_allocation(
         return results, {"taken": len(results), "skipped": 0, "replaced": 0}
 
     rank_method = normalize_rank_method(str(alloc_params.get("rank_method", RANK_METHOD_UNREAL_PL)))
-    composite_weight = float(alloc_params.get("composite_weight", 0.5))
     replace_min_margin = float(alloc_params.get("replace_min_margin", 0.0))
 
     # Walk forward chronologically
@@ -875,7 +909,7 @@ def apply_allocation(
             # Try to replace weakest
             victim_sid = _try_replace(
                 sid, new_confidence, open_positions, entry_confidence,
-                new_entry_time, rank_method, composite_weight,
+                new_entry_time, rank_method,
                 new_features=result.entry_features,
                 min_margin=replace_min_margin,
             )

@@ -30,16 +30,17 @@ from trader.db.database import (
     Database,
     count_holding_watches,
     get_active_live_config,
+    get_live_config,
     get_active_watches,
     insert_watch,
     update_watch_if_current_status,
 )
 from trader.market.backtest import (
     normalize_rank_method,
-    RANK_METHOD_CONFIDENCE, RANK_METHOD_UNREAL_PL, RANK_METHOD_COMPOSITE,
+    RANK_METHOD_CONFIDENCE, RANK_METHOD_UNREAL_PL,
     RANK_METHOD_TRAILING_SLOPE, RANK_METHOD_VOLUME_TREND,
     RANK_METHOD_RSI_CURRENT, RANK_METHOD_TECH_SCORE,
-    _FEATURE_BASED_METHODS, _score_new_signal,
+    _FEATURE_BASED_METHODS, _score_new_signal, _normalize_scores_0_1,
     compute_ranking_features, compute_ranking_features_from_tick,
 )
 from trader.market.market_hours import ET, add_market_hours, is_market_open, is_trading_session_open
@@ -82,16 +83,22 @@ class LiveExitMonitor:
         """Look up the Alpaca broker for a watch's LiveConfig. Returns None if not linked."""
         if not self.broker_pool:
             return None
-        config_id = watch_dict.get("live_config_id")
-        if not config_id:
-            return None
-        config_dict = get_active_live_config(self.db)
+        config_dict = self._get_config_for_watch(watch_dict)
         if not config_dict:
             return None
         acct_id = config_dict.get("alpaca_account_id")
         if not acct_id:
             return None
         return self.broker_pool.get(acct_id)
+
+    def _get_config_for_watch(self, watch_dict: dict[str, Any]) -> dict[str, Any] | None:
+        """Resolve the watch's own config (fallback: first active config for legacy watches)."""
+        config_id = watch_dict.get("live_config_id")
+        if config_id:
+            cfg = get_live_config(self.db, str(config_id))
+            if cfg:
+                return cfg
+        return get_active_live_config(self.db)
 
     def run_cycle(self) -> None:
         """Run one check cycle across all active watches."""
@@ -179,8 +186,9 @@ class LiveExitMonitor:
         market_close: str | None = "16:00"
         live_overrides: dict[str, Any] = {}
 
-        # If watch has a live_config_id, load config for guards/timing
-        config_dict = get_active_live_config(self.db)
+        # If watch has a live_config_id, load THAT config for guards/timing.
+        # Fallback to single active config for legacy watches without config_id.
+        config_dict = self._get_config_for_watch(watch_dict)
         if config_dict:
             cfg = LiveConfig.from_dict(config_dict)
             if not strategy_key:
@@ -363,7 +371,7 @@ class LiveExitMonitor:
 
         # Determine cooling_off duration from config
         cooling_hours = 24.0  # default
-        config_dict = get_active_live_config(self.db)
+        config_dict = self._get_config_for_watch(watch_dict)
         if config_dict:
             cooling_hours = config_dict.get("cooling_off_market_hours", 24.0)
 
@@ -889,7 +897,6 @@ class LivePortfolioManager:
         self,
         holdings: list[dict[str, Any]],
         rank_method: str,
-        composite_weight: float,
         broker: Any | None,
     ) -> dict[str, float]:
         """Score each holding watch. Returns {watch_id: score}.
@@ -910,10 +917,8 @@ class LivePortfolioManager:
             except Exception:
                 log.warning("Could not fetch Alpaca positions for ranking")
 
-        # If no broker, fetch fresh quotes for unreal_pl/composite scoring
-        if not alpaca_prices and self.market and rank_method in (
-            RANK_METHOD_UNREAL_PL, RANK_METHOD_COMPOSITE,
-        ):
+        # If no broker, fetch fresh quotes for unreal_pl scoring
+        if not alpaca_prices and self.market and rank_method == RANK_METHOD_UNREAL_PL:
             syms = [w.get("symbol", "").upper() for w in holdings if w.get("symbol")]
             if syms:
                 try:
@@ -984,29 +989,56 @@ class LivePortfolioManager:
             scores = confidences
         elif rank_method == RANK_METHOD_UNREAL_PL:
             scores = pnl_scores
-        elif rank_method == RANK_METHOD_COMPOSITE:
-            wids = list(confidences.keys())
-            if len(wids) < 2:
-                scores = pnl_scores
-            else:
-                import math
-
-                def _z(vals: list[float]) -> list[float]:
-                    m = sum(vals) / len(vals)
-                    v = sum((x - m) ** 2 for x in vals) / (len(vals) - 1)
-                    s = math.sqrt(v) if v > 0 else 1.0
-                    return [(x - m) / s for x in vals]
-
-                z_conf = _z([confidences[w] for w in wids])
-                z_pnl = _z([pnl_scores[w] for w in wids])
-                scores = {
-                    wid: composite_weight * zc + (1 - composite_weight) * zp
-                    for wid, zc, zp in zip(wids, z_conf, z_pnl)
-                }
         else:
             scores = pnl_scores
 
         return scores
+
+    def _score_new_in_tech_score(
+        self,
+        holdings: list[dict[str, Any]],
+        new_features: dict[str, float],
+        broker: Any | None,
+        weights: tuple[float, float, float] = (0.4, 0.3, 0.3),
+    ) -> float:
+        """Score new signal in tech_score by including it in the z-score set.
+
+        Fetches features for all holdings, adds the new signal's features,
+        and z-scores everything together — giving the new signal a proper
+        composite score instead of a raw slope proxy.
+        """
+        import math
+
+        # Collect features for all holdings + new signal
+        all_features: dict[str, dict[str, float]] = {}
+        for w in holdings:
+            wid = w["watch_id"]
+            sym = w.get("symbol", "").upper()
+            feat = self._fetch_ranking_features_for_symbol(sym)
+            all_features[wid] = feat or {"slope": 0.0, "rsi": 50.0, "ad_slope": 0.0}
+        new_key = "__new_signal__"
+        all_features[new_key] = new_features
+
+        sids = list(all_features.keys())
+        if len(sids) < 3:
+            return new_features.get("slope", 0.0)
+
+        def _z(vals: list[float]) -> list[float]:
+            m = sum(vals) / len(vals)
+            v = sum((x - m) ** 2 for x in vals) / (len(vals) - 1)
+            s = math.sqrt(v) if v > 0 else 1.0
+            return [(x - m) / s for x in vals]
+
+        w1, w2, w3 = weights
+        z_slope = _z([all_features[s]["slope"] for s in sids])
+        z_ad = _z([all_features[s]["ad_slope"] for s in sids])
+        z_rsi = _z([100.0 - all_features[s]["rsi"] for s in sids])
+
+        all_scores = {
+            sid: w1 * zs + w2 * za + w3 * zr
+            for sid, zs, za, zr in zip(sids, z_slope, z_ad, z_rsi)
+        }
+        return all_scores[new_key]
 
     def _find_replacement_victim(
         self,
@@ -1024,7 +1056,6 @@ class LivePortfolioManager:
         rank_method = normalize_rank_method(
             str(alloc_params.get("rank_method", RANK_METHOD_UNREAL_PL))
         )
-        composite_weight = float(alloc_params.get("composite_weight", 0.5))
         replace_min_margin = float(alloc_params.get("replace_min_margin", 0.0))
 
         # Get all holding watches for this config
@@ -1041,8 +1072,8 @@ class LivePortfolioManager:
         broker = (self.broker_pool.get(cfg.alpaca_account_id)
                   if self.broker_pool and cfg.alpaca_account_id else None)
 
-        scores = self._score_holding_watches(holdings, rank_method, composite_weight, broker)
-        if not scores:
+        raw_scores = self._score_holding_watches(holdings, rank_method, broker)
+        if not raw_scores:
             return None
 
         # Score the incoming signal (symmetric for forward-looking methods)
@@ -1050,7 +1081,15 @@ class LivePortfolioManager:
         if rank_method in _FEATURE_BASED_METHODS:
             new_features = self._fetch_ranking_features_for_symbol(new_symbol)
 
-        new_score = _score_new_signal(rank_method, new_confidence, new_features, composite_weight)
+        # For tech_score: include new signal in z-score computation
+        if (rank_method == RANK_METHOD_TECH_SCORE
+                and new_features and len(holdings) >= 2):
+            raw_new = self._score_new_in_tech_score(holdings, new_features, broker)
+        else:
+            raw_new = _score_new_signal(rank_method, new_confidence, new_features)
+
+        # Normalize all scores to 0-1 so replace_min_margin is uniform
+        scores, new_score = _normalize_scores_0_1(raw_scores, raw_new)
 
         # Find weakest
         worst_wid = min(scores, key=scores.get)  # type: ignore[arg-type]
@@ -1059,7 +1098,7 @@ class LivePortfolioManager:
         if new_score <= worst_score + replace_min_margin:
             print(f"LIVE-EVAL: {new_symbol} new_score={new_score:.4f} <= "
                   f"worst_score={worst_score:.4f}+margin={replace_min_margin} "
-                  f"({worst_wid}) — no replacement")
+                  f"({worst_wid}) — no replacement [normalized 0-1]")
             return None
 
         # Find the watch dict for the victim
@@ -1067,7 +1106,7 @@ class LivePortfolioManager:
             if w["watch_id"] == worst_wid:
                 print(f"LIVE-EVAL: {new_symbol} new_score={new_score:.4f} > "
                       f"worst={w['symbol']} score={worst_score:.4f} "
-                      f"(margin={replace_min_margin}) — replacing")
+                      f"(margin={replace_min_margin}) — replacing [normalized 0-1]")
                 return w
         return None
 

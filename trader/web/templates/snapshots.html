@@ -1095,8 +1095,6 @@ function _applyParamVisibility(container, defKey) {
     var show = true;
     // rank_method: only visible when when_full=replace (for max_positions)
     if (pk === 'rank_method' && vals['when_full'] === 'skip') show = false;
-    // composite_weight: only visible when rank_method=composite
-    if (pk === 'composite_weight' && vals['rank_method'] !== 'composite') show = false;
     field.style.display = show ? '' : 'none';
   });
 }

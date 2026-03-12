@@ -26,31 +26,49 @@ If you use **None (Unlimited)** or **Fixed Dollar** allocation, or **Max Positio
 |--------|-----|---------------------|-------------|------------|
 | Signal Confidence | `confidence` | "How confident was the LLM at entry?" | LLM score (static) | No |
 | Unrealized P&L | `unreal_pl` | "How much has this position gained/lost?" | Current price vs entry | No |
-| Composite | `composite` | Blend of confidence + P&L | Both above | No |
 | **Price Momentum** | `trailing_slope` | "Is the price trending up or down right now?" | Recent 5-min closes | **Yes** |
 | **Accumulation/Distribution** | `volume_trend` | "Is money flowing in or out?" | OHLCV + volume | **Yes** |
 | **RSI Exhaustion** | `rsi_current` | "How much gas is left in the tank?" | Recent closes (RSI-14) | **Yes** |
 | **Technical Composite** | `tech_score` | Blend of slope + A/D + RSI | All above | **Yes** |
 
-**Symmetric** means the incoming signal and existing holdings are scored with the exact same computation. The first three methods (legacy) are asymmetric — the incoming signal gets a proxy score (0.0 for P&L, its own confidence for confidence).
+**Symmetric** means the incoming signal and existing holdings are scored with the exact same computation. The legacy methods are asymmetric — the incoming signal gets a proxy score (0.0 for P&L, its own confidence for confidence).
 
 ---
 
-## Typical Score Ranges
+## Raw Score Ranges (Before Normalization)
 
-Understanding the scale of each method is critical for setting `replace_min_margin` and interpreting backtest results.
+Each method produces scores on a wildly different scale. The system normalizes these to 0–1 before comparing (see [Score Normalization](#score-normalization)), but understanding the raw scales helps with debugging and interpretation.
 
-| Method | Typical Range | Units | Example Scores |
-|--------|--------------|-------|----------------|
+| Method | Raw Range | Units | Example Scores |
+|--------|----------|-------|----------------|
 | `confidence` | 0.5 – 0.95 | Probability (0–1) | Strong signal: 0.85, Weak: 0.55 |
 | `unreal_pl` | -0.05 – +0.05 | Fraction (not %) | +2% gain = 0.02, -3% loss = -0.03 |
-| `composite` | -2.0 – +2.0 | z-score blend | Depends on weight param |
 | `trailing_slope` | -0.005 – +0.005 | % per 5-min bar | Strong uptrend: +0.003, Flat: ~0.0 |
 | `volume_trend` | -1,000 – +1,000 | A/D slope (raw) | Heavy accumulation: +500, Distribution: -300 |
 | `rsi_current` | 0 – 100 | Inverted RSI points | Oversold (room to run): 70, Overbought: 25 |
 | `tech_score` | -2.0 – +2.0 | z-score blend | Above average: +0.8, Below: -0.5 |
 
-**Warning**: Because these scales differ wildly, a single `replace_min_margin` value (e.g., 0.05) means completely different things for each method. See [Anti-Churn Guard](#anti-churn-guard-replace_min_margin) below.
+---
+
+## Score Normalization
+
+All scores are **normalized to the 0–1 range** before comparing the new signal against holdings. This uses min-max normalization across the full set (all holdings + the incoming signal):
+
+```
+normalized = (raw_score - min) / (max - min)
+```
+
+This means `replace_min_margin` is always on a 0–1 scale regardless of which ranking method you use:
+
+| Margin | Meaning |
+|--------|---------|
+| 0.00 | Any improvement triggers replacement (most aggressive) |
+| 0.05 | New signal must be noticeably better than the worst |
+| 0.10 | Moderate anti-churn — needs a clear edge |
+| 0.20 | Conservative — only replaces when significantly better |
+| 0.50 | Very conservative — new signal must be in top half of range |
+
+**Edge case:** When all scores are identical, everything normalizes to 0.5 — no replacement is possible with any positive margin.
 
 ---
 
@@ -96,31 +114,6 @@ Understanding the scale of each method is critical for setting `replace_min_marg
 
 ---
 
-### Composite (`composite`)
-
-**How it works:** Blends confidence and unrealized P&L using z-score normalization:
-
-```
-score = weight * Z(confidence) + (1 - weight) * Z(unrealized_pnl)
-```
-
-The `composite_weight` parameter (0–1) controls the blend:
-- `weight = 1.0` → pure confidence
-- `weight = 0.0` → pure unrealized P&L
-- `weight = 0.5` → equal blend (default)
-
-**Strengths:**
-- More nuanced than either component alone
-
-**Weaknesses:**
-- Inherits both components' problems (stale confidence + backward-looking P&L)
-- Needs at least 2 open positions to compute z-scores (falls back to P&L otherwise)
-- Incoming signal is scored asymmetrically (confidence component only, P&L = 0)
-
-**Best for:** When you want to consider both signal quality and current performance.
-
----
-
 ### Price Momentum / Trailing Slope (`trailing_slope`)
 
 **How it works:** Fits a linear regression to the last 30 five-minute closing prices. The slope is normalized by the mean price, giving a "% change per bar" score.
@@ -129,7 +122,7 @@ The `composite_weight` parameter (0–1) controls the blend:
 score = linreg_slope(last 30 closes) / mean(last 30 closes)
 ```
 
-**Interpreting scores:**
+**Interpreting raw scores:**
 
 | Score | Meaning | What Happens |
 |-------|---------|--------------|
@@ -180,8 +173,7 @@ Close near the high → MFM near +1 (buying pressure). Close near the low → MF
 - Distribution under stable prices = early warning of weakness
 
 **Weaknesses:**
-- Scores are in raw A/D slope units (can be ±thousands) — not intuitive
-- Requires volume data (always available from our data sources)
+- Raw scores are in A/D slope units (can be ±thousands) — not intuitive without normalization
 - High-volume stocks naturally produce larger A/D values
 
 **Best for:** Identifying hidden strength/weakness. Pairs well with price momentum — a stock rising on increasing volume scores better than one rising on thin volume.
@@ -227,9 +219,9 @@ Close near the high → MFM near +1 (buying pressure). Close near the low → MF
 score = 0.4 * Z(trailing_slope) + 0.3 * Z(ad_slope) + 0.3 * Z(inverted_rsi)
 ```
 
-Each component is z-scored across all currently open positions, so scores represent "how many standard deviations above/below the average holding."
+Each component is z-scored across all currently open positions **plus the incoming signal**, so scores represent "how many standard deviations above/below the group average."
 
-**Interpreting scores:**
+**Interpreting raw scores:**
 
 | Score | Meaning |
 |-------|---------|
@@ -250,11 +242,11 @@ Each component is z-scored across all currently open positions, so scores repres
 **Strengths:**
 - More robust than any single indicator — one noisy signal gets diluted
 - Z-score normalization makes components comparable despite different scales
+- **Fully symmetric**: incoming signal is included in the z-score computation alongside holdings
 - Captures momentum, volume, and exhaustion simultaneously
 
 **Weaknesses:**
 - Requires at least 2 open positions to compute z-scores (falls back to trailing_slope if only 1)
-- Incoming signals can't be z-scored against holdings (uses raw slope as proxy) — slight asymmetry
 - Harder to interpret why a specific position scored high or low
 
 **Best for:** General-purpose ranking when you don't have a strong prior about which signal matters most. Good default choice.
@@ -271,37 +263,27 @@ Without a margin, any score difference — no matter how tiny — triggers a rep
 
 ### How It Works
 
+After all scores are normalized to 0–1:
+
 ```
-Replace only if: new_score > worst_score + replace_min_margin
+Replace only if: normalized_new_score > normalized_worst_score + replace_min_margin
 ```
 
-A margin of 0.0 (default) means any improvement triggers replacement. Higher values require the new signal to be meaningfully better.
+### Setting the Margin
 
-### The Scale Problem
+Since scores are normalized to 0–1, the margin is always on the same scale:
 
-**The margin is a raw additive number**, but each method produces scores on different scales:
+| Margin | Effect | When to Use |
+|--------|--------|-------------|
+| 0.00 | Any improvement triggers replacement | Testing / max signal sensitivity |
+| 0.05 | Small but meaningful gap required | Light anti-churn, most replacements still happen |
+| 0.10 | Moderate gap required | Balanced anti-churn (recommended starting point) |
+| 0.20 | Significant gap required | Conservative, reduces turnover substantially |
+| 0.30+ | Very conservative | Only replaces when new signal is dramatically better |
 
-| Method | Margin = 0.05 means... | Effect |
-|--------|----------------------|--------|
-| `confidence` | 5% confidence gap | Reasonable — moderate anti-churn |
-| `unreal_pl` | 5 percentage points of P&L | Huge — almost never replaces |
-| `trailing_slope` | 0.05 in %/bar units | Unreachable — scores are ±0.005 |
-| `volume_trend` | 0.05 in A/D slope units | Trivial — scores are ±1000 |
-| `rsi_current` | 0.05 on a 100-point scale | Essentially zero — always replaces |
-| `tech_score` | 0.05 z-score gap | Reasonable — small but meaningful |
+### Origin
 
-**Practical guidance for setting margin by method:**
-
-| Method | Gentle | Moderate | Aggressive Anti-Churn |
-|--------|--------|----------|-----------------------|
-| `confidence` | 0.02 | 0.05 | 0.10 |
-| `unreal_pl` | 0.005 | 0.01 | 0.02 |
-| `trailing_slope` | 0.0005 | 0.001 | 0.002 |
-| `volume_trend` | 50 | 200 | 500 |
-| `rsi_current` | 3 | 8 | 15 |
-| `tech_score` | 0.1 | 0.3 | 0.5 |
-
-> **Note:** A future update may normalize all scores to a common 0–1 scale so that a single margin value works uniformly across methods.
+Discovered 2026-03-12 when comparing two parallel portfolios. The Alpaca portfolio churned through 12 replacement exits totaling -$745, while the non-Alpaca portfolio (which accidentally had replacements disabled due to a scoring bug) gained +1.1%. See [PORTFOLIO-DIVERGENCE.md](skills/PORTFOLIO-DIVERGENCE.md) for the full analysis.
 
 ---
 
@@ -313,8 +295,6 @@ A margin of 0.0 (default) means any improvement triggers replacement. Higher val
 Do you trust the LLM confidence scores?
 ├── Yes, and conditions don't change much after entry
 │   └── Use: confidence
-├── Somewhat, but I also want to cut losers
-│   └── Use: composite (adjust weight to taste)
 └── No / I want current market data to decide
     ├── I care most about price direction
     │   └── Use: trailing_slope
@@ -328,16 +308,16 @@ Do you trust the LLM confidence scores?
 
 ### Comparison Table
 
-| Factor | confidence | unreal_pl | composite | trailing_slope | volume_trend | rsi_current | tech_score |
-|--------|-----------|-----------|-----------|---------------|-------------|-------------|------------|
-| Uses current market data | No | Yes (price only) | Partially | Yes | Yes | Yes | Yes |
-| Symmetric scoring | No | No | No | Yes | Yes | Yes | Mostly |
-| Works with 1 position | Yes | Yes | Falls back | Yes | Yes | Yes | Falls back |
-| Captures momentum | No | Indirectly | Indirectly | **Yes** | Partially | Partially | **Yes** |
-| Captures volume | No | No | No | No | **Yes** | No | **Yes** |
-| Captures exhaustion | No | No | No | No | No | **Yes** | **Yes** |
-| Computation cost | None | Low | Low | Medium | Medium | Medium | High |
-| Interpretability | High | High | Medium | High | Low | High | Low |
+| Factor | confidence | unreal_pl | trailing_slope | volume_trend | rsi_current | tech_score |
+|--------|-----------|-----------|---------------|-------------|-------------|------------|
+| Uses current market data | No | Yes (price only) | Yes | Yes | Yes | Yes |
+| Symmetric scoring | No | No | Yes | Yes | Yes | **Yes** |
+| Works with 1 position | Yes | Yes | Yes | Yes | Yes | Falls back |
+| Captures momentum | No | Indirectly | **Yes** | Partially | Partially | **Yes** |
+| Captures volume | No | No | No | **Yes** | No | **Yes** |
+| Captures exhaustion | No | No | No | No | **Yes** | **Yes** |
+| Computation cost | None | Low | Medium | Medium | Medium | High |
+| Interpretability | High | High | High | Low | High | Low |
 
 ### When Each Method Shines
 
