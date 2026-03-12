@@ -1563,7 +1563,17 @@
     "KOF",
     "CRMT",
     "GNRC",
-    "IPSC"
+    "IPSC",
+    "VMC",
+    "ITRN",
+    "AVR",
+    "WAVE",
+    "VSAT",
+    "CPPKF",
+    "ROCK",
+    "GLW",
+    "SAGT",
+    "FUN"
   ],
   "crypto": [],
   "rejected": [
@@ -1742,5 +1752,5 @@
     "DHER",
     "PLPL3"
   ],
-  "last_updated": "2026-03-12T14:55:04.047382+00:00"
+  "last_updated": "2026-03-12T15:34:06.593813+00:00"
 }

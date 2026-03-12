@@ -997,7 +997,7 @@ def create_app(
         min_hold = body.get("min_hold", 5)
         guard_stop_pct = body.get("guard_stop_pct", 0)
         guard_target_pct = body.get("guard_target_pct", 0)
-        cost_bps = body.get("cost_bps", 10)
+        guard_trail_pct = body.get("guard_trail_pct", 0)
         trace_enabled = bool(body.get("trace", False))
         allocation_key = body.get("allocation", "none")
         allocation_params = body.get("allocation_params", {})
@@ -1100,23 +1100,10 @@ def create_app(
                 t_engine = time.perf_counter()
                 results = await asyncio.to_thread(
                     run_backtest, strategy_key, params, entries, market_close, min_hold,
-                    guard_stop_pct, guard_target_pct, price_delay_minutes,
-                    res_min, engine_trace,
+                    guard_stop_pct, guard_target_pct, guard_trail_pct,
+                    price_delay_minutes, res_min, engine_trace,
                 )
                 _mark("run_backtest", t_engine)
-
-                # Apply transaction cost deduction
-                t_cost = time.perf_counter()
-                if cost_bps > 0:
-                    cost_pct = cost_bps / 100
-                    cost_frac = cost_bps / 10000
-                    for r in results:
-                        if r.pnl_pct is not None:
-                            r.pnl_pct -= cost_pct
-                            r.pnl_pct = round(r.pnl_pct, 4)
-                        if r.entry_price and r.entry_price > 0:
-                            r.entry_price *= 1 + cost_frac
-                _mark("apply_cost", t_cost)
 
                 # Apply allocation filtering
                 t_alloc = time.perf_counter()
@@ -1766,6 +1753,7 @@ def create_app(
                 exit_params=body.get("exit_params", {}),
                 guard_stop_pct=float(body.get("guard_stop_pct", 0)),
                 guard_target_pct=float(body.get("guard_target_pct", 0)),
+                guard_trail_pct=float(body.get("guard_trail_pct", 0)),
                 min_hold=int(body.get("min_hold", 5)),
                 price_delay_minutes=int(body.get("price_delay_minutes", 10)),
                 market_close=body.get("market_close", "16:00"),

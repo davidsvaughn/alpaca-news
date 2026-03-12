@@ -435,9 +435,9 @@
                    class="form-control form-control-sm bt-short-input" onchange="saveBtSettings()">
           </div>
           <div class="bt-inline-field">
-            <label class="bt-control-label mb-0" for="bt-cost-bps"
-                   title="Round-trip transaction cost in basis points">Cost (bps)</label>
-            <input type="number" id="bt-cost-bps" value="0.3" min="0" max="100" step="0.1"
+            <label class="bt-control-label mb-0" for="bt-guard-trail"
+                   title="Trailing stop loss: sell if price drops this % from peak">Trail %</label>
+            <input type="number" id="bt-guard-trail" value="0" min="0" max="50" step="0.5"
                    class="form-control form-control-sm bt-short-input" onchange="saveBtSettings()">
           </div>
         </div>
@@ -867,10 +867,10 @@ function saveBtSettings() {
   var minHold = parseInt(document.getElementById('bt-min-hold').value) || 5;
   var guardStop = parseFloat(document.getElementById('bt-guard-stop').value) || 0;
   var guardTarget = parseFloat(document.getElementById('bt-guard-target').value) || 0;
-  var costBps = parseFloat(document.getElementById('bt-cost-bps').value) || 0;
+  var guardTrail = parseFloat(document.getElementById('bt-guard-trail').value) || 0;
   var simStart = parseFloat(document.getElementById('bt-sim-start').value) || 10000;
   var simDelay = parseInt(document.getElementById('bt-sim-delay').value) || 1;
-  localStorage.setItem(_BT_SETTINGS_KEY, JSON.stringify({extHours: ext, closeTime: closeTime, minHold: minHold, guardStop: guardStop, guardTarget: guardTarget, costBps: costBps, simStart: simStart, simDelay: simDelay}));
+  localStorage.setItem(_BT_SETTINGS_KEY, JSON.stringify({extHours: ext, closeTime: closeTime, minHold: minHold, guardStop: guardStop, guardTarget: guardTarget, guardTrail: guardTrail, simStart: simStart, simDelay: simDelay}));
 }
 
 function loadBtSettings() {
@@ -893,8 +893,8 @@ function loadBtSettings() {
     if (s.guardTarget != null) {
       document.getElementById('bt-guard-target').value = s.guardTarget;
     }
-    if (s.costBps != null) {
-      document.getElementById('bt-cost-bps').value = s.costBps;
+    if (s.guardTrail != null) {
+      document.getElementById('bt-guard-trail').value = s.guardTrail;
     }
     if (s.simStart != null) {
       document.getElementById('bt-sim-start').value = s.simStart;
@@ -1193,13 +1193,13 @@ function runBacktest() {
   var minHold = parseInt(document.getElementById('bt-min-hold').value) || 5;
   var guardStop = parseFloat(document.getElementById('bt-guard-stop').value) || 0;
   var guardTarget = parseFloat(document.getElementById('bt-guard-target').value) || 0;
-  var costBps = parseFloat(document.getElementById('bt-cost-bps').value) || 0;
+  var guardTrail = parseFloat(document.getElementById('bt-guard-trail').value) || 0;
   var simStart = parseFloat(document.getElementById('bt-sim-start').value) || 0;
   var simDelay = parseInt(document.getElementById('bt-sim-delay').value) || 1;
   fetch('/api/strategies/backtest', {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({strategy: strategy, params: params, allocation: _btCurrentAllocation, allocation_params: allocParams, filters: filters, market_close: marketClose, min_hold: minHold, guard_stop_pct: guardStop, guard_target_pct: guardTarget, cost_bps: costBps, starting_amount: simStart, reinvest_delay_minutes: simDelay}),
+    body: JSON.stringify({strategy: strategy, params: params, allocation: _btCurrentAllocation, allocation_params: allocParams, filters: filters, market_close: marketClose, min_hold: minHold, guard_stop_pct: guardStop, guard_target_pct: guardTarget, guard_trail_pct: guardTrail, starting_amount: simStart, reinvest_delay_minutes: simDelay}),
   })
   .then(function(r) { return r.json(); })
   .then(function(data) {
@@ -1233,6 +1233,7 @@ function goLive() {
   var minHold = parseInt(document.getElementById('bt-min-hold').value) || 5;
   var guardStop = parseFloat(document.getElementById('bt-guard-stop').value) || 0;
   var guardTarget = parseFloat(document.getElementById('bt-guard-target').value) || 0;
+  var guardTrail = parseFloat(document.getElementById('bt-guard-trail').value) || 0;
   var simStart = parseFloat(document.getElementById('bt-sim-start').value) || 100000;
   var priceDelay = parseInt(document.getElementById('bt-sim-delay').value) || 10;
 
@@ -1248,6 +1249,7 @@ function goLive() {
     live_overrides: _collectLiveOverrides(),
     guard_stop_pct: guardStop,
     guard_target_pct: guardTarget,
+    guard_trail_pct: guardTrail,
     min_hold: minHold,
     price_delay_minutes: priceDelay,
     market_close: marketClose,

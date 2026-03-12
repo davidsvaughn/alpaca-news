@@ -167,6 +167,7 @@ class LiveExitMonitor:
         exit_params = watch_dict.get("exit_params") or {}
         guard_stop_pct = 0.0
         guard_target_pct = 0.0
+        guard_trail_pct = 0.0
         min_hold = 5
         market_close: str | None = "16:00"
         live_overrides: dict[str, Any] = {}
@@ -180,6 +181,7 @@ class LiveExitMonitor:
                 exit_params = cfg.exit_params
             guard_stop_pct = cfg.guard_stop_pct
             guard_target_pct = cfg.guard_target_pct
+            guard_trail_pct = cfg.guard_trail_pct
             min_hold = cfg.min_hold
             market_close = cfg.market_close
             live_overrides = cfg.live_overrides
@@ -252,6 +254,7 @@ class LiveExitMonitor:
             entry_price=entry_price,
             guard_stop_pct=guard_stop_pct,
             guard_target_pct=guard_target_pct,
+            guard_trail_pct=guard_trail_pct,
             min_hold=min_hold,
             indicator_cache=cache,
         )
@@ -700,8 +703,36 @@ class LivePortfolioManager:
             # Submit market buy and WAIT for fill confirmation
             try:
                 buy_confirmed = broker.buy_and_confirm(symbol, notional=position_size)
-            except Exception:
+            except Exception as exc:
                 log.exception("ALPACA BUY FAILED for %s — skipping (no watch created)", symbol)
+                from trader.notifications import notify
+                if victim_watch is not None:
+                    # Victim was already sold but replacement buy failed — alert operator
+                    victim_sym = victim_watch.get("symbol", "?")
+                    notify(
+                        subject=f"Buy failed after replacement sell: {symbol}",
+                        body=(
+                            f"Replacement buy FAILED for {symbol} after selling victim {victim_sym}.\n"
+                            f"Account: {cfg.alpaca_account_id or 'N/A'}\n"
+                            f"Config: {cfg.name}\n"
+                            f"Position size: ${position_size:.2f}\n"
+                            f"Error: {exc}\n\n"
+                            f"The victim position ({victim_sym}) has been exited but the "
+                            f"replacement was not opened. Portfolio is temporarily under-allocated "
+                            f"by one slot."
+                        ),
+                    )
+                else:
+                    notify(
+                        subject=f"Buy failed: {symbol}",
+                        body=(
+                            f"Buy FAILED for {symbol}.\n"
+                            f"Account: {cfg.alpaca_account_id or 'N/A'}\n"
+                            f"Config: {cfg.name}\n"
+                            f"Position size: ${position_size:.2f}\n"
+                            f"Error: {exc}"
+                        ),
+                    )
                 return False
 
             wb.alpaca_buy_order_id = buy_confirmed.order_id

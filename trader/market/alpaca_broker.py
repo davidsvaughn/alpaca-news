@@ -354,13 +354,76 @@ class AlpacaBroker:
         else:
             raise ValueError("Must provide either notional or qty")
 
-        order = self._client.submit_order(order_data=MarketOrderRequest(**kwargs))
+        try:
+            order = self._client.submit_order(order_data=MarketOrderRequest(**kwargs))
+        except Exception as exc:
+            if "trading halt" in str(exc).lower():
+                log.warning("BUY %s: market order rejected (trading halt) — falling back to limit order", symbol)
+                return self._buy_limit_halt(symbol, notional=notional, qty=qty)
+            raise
+
         result = self._to_result(order)
         log.info("BUY order submitted: %s %s notional=%s qty=%s -> %s",
                  symbol, order.id, notional, qty, result.status)
         self._log_tx("buy_submit", symbol.upper(), order_id=result.order_id, status=result.status,
                      detail={"notional": notional, "qty": qty, "kwargs_qty": kwargs.get("qty"),
                              "kwargs_notional": kwargs.get("notional"), "fractionable": "qty" not in kwargs or qty is not None})
+        return result
+
+    def _buy_limit_halt(
+        self,
+        symbol: str,
+        *,
+        notional: float | None = None,
+        qty: float | None = None,
+        slippage_pct: float = 0.02,
+    ) -> OrderResult:
+        """Fallback limit buy when a market order is rejected due to trading halt.
+
+        Uses the same logic as extended-hours limit orders: ask price + buffer,
+        whole-share qty, DAY time-in-force.
+        """
+        from alpaca.trading.requests import LimitOrderRequest
+        from alpaca.trading.enums import OrderSide, TimeInForce
+
+        ask_price = self._get_latest_ask_price(symbol)
+        trade_price = self._get_latest_price(symbol)
+        price = ask_price or trade_price
+        if not price or price <= 0:
+            raise ValueError(f"{symbol}: cannot get price for halt limit order")
+
+        effective_slippage = slippage_pct if ask_price else slippage_pct * 2
+        limit_price = round(price * (1 + effective_slippage), 2)
+        log.info("BUY HALT-LIMIT %s: ask=%.2f trade=%.2f -> limit=%.2f (slippage=%.1f%%)",
+                 symbol, ask_price or 0, trade_price or 0, limit_price, effective_slippage * 100)
+
+        if qty is not None:
+            buy_qty = int(qty) if qty == int(qty) else int(qty)
+        elif notional is not None:
+            buy_qty = int(notional / price)
+        else:
+            raise ValueError("Must provide either notional or qty")
+
+        if buy_qty < 1:
+            raise ValueError(
+                f"{symbol}: notional ${notional:.2f} < 1 share @ ${price:.2f} (halt limit)"
+            )
+
+        order = self._client.submit_order(
+            order_data=LimitOrderRequest(
+                symbol=symbol.upper(),
+                qty=buy_qty,
+                side=OrderSide.BUY,
+                time_in_force=TimeInForce.DAY,
+                limit_price=limit_price,
+            )
+        )
+        result = self._to_result(order)
+        log.info("BUY HALT-LIMIT submitted: %s %s qty=%d limit=%.2f -> %s",
+                 symbol, order.id, buy_qty, limit_price, result.status)
+        self._log_tx("buy_submit", symbol.upper(), order_id=result.order_id, status=result.status,
+                     detail={"notional": notional, "qty": buy_qty, "limit_price": limit_price,
+                             "halt_fallback": True})
         return result
 
     def _buy_extended(

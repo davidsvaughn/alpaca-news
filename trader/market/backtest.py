@@ -1419,6 +1419,32 @@ def _first_guard_hit(
     return best_idx, best_price, best_reason
 
 
+def _first_trail_guard_hit(
+    highs: np.ndarray,
+    lows: np.ndarray,
+    start: int,
+    entry_price: float,
+    trail_pct: float,
+) -> tuple[int, float, str] | None:
+    """Return (rel_idx, price, 'guard_trail') for first trailing-stop hit.
+
+    Tracks the running max (high-water mark) from entry and triggers when
+    the bar low falls to ``peak * (1 - trail_pct / 100)``.
+    Fully vectorised via cumulative-max.
+    """
+    if start >= len(highs):
+        return None
+    high_slice = highs[start:]
+    low_slice = lows[start:]
+    # Cumulative max starting from entry_price
+    cummax = np.maximum.accumulate(np.maximum(high_slice, entry_price))
+    trail_stops = cummax * (1 - trail_pct / 100)
+    idx = _first_true(low_slice <= trail_stops)
+    if idx is None:
+        return None
+    return idx, float(trail_stops[idx]), "guard_trail"
+
+
 def _check_guards(
     bar: pd.Series,
     guard_stop: float | None,
@@ -2035,6 +2061,7 @@ def evaluate_exit(
     entry_price: float,
     guard_stop_pct: float = 0,
     guard_target_pct: float = 0,
+    guard_trail_pct: float = 0,
     min_hold: int = 5,
     indicator_cache: dict[tuple[Any, ...], Any] | None = None,
 ) -> ExitResult:
@@ -2053,6 +2080,8 @@ def evaluate_exit(
         entry_price: Position entry price.
         guard_stop_pct: Guard stop-loss % (0 = disabled).
         guard_target_pct: Guard take-profit % (0 = disabled).
+        guard_trail_pct: Trailing stop guard % (0 = disabled). Sells if price
+                         drops this % from peak since entry.
         min_hold: Minimum bars before exit checks begin.
         indicator_cache: Optional dict for caching indicators across calls
                          for the same symbol. Reuse across cycles to avoid
@@ -2086,6 +2115,32 @@ def evaluate_exit(
 
     # Adjust bars_held to include min_hold period
     bars_held = bars_held + (run_idx - entry_idx)
+
+    # Check trailing stop guard independently (computed after min_hold)
+    if guard_trail_pct > 0:
+        highs = bars["High"].to_numpy(dtype=float, copy=False)
+        lows = bars["Low"].to_numpy(dtype=float, copy=False)
+        trail_hit = _first_trail_guard_hit(
+            highs, lows, run_idx, entry_price, guard_trail_pct,
+        )
+        if trail_hit is not None:
+            trail_rel, trail_price, trail_reason = trail_hit
+            trail_abs = run_idx + trail_rel
+            trail_bars = trail_rel + 1 + (run_idx - entry_idx)
+            # If strategy also fired, pick whichever is earlier
+            if exit_price is not None:
+                # Convert strategy exit_time to bar index for comparison
+                strat_abs = entry_idx + bars_held - 1
+                if trail_abs <= strat_abs:
+                    exit_price = trail_price
+                    exit_time = _fmt_ts(bars.index, trail_abs)
+                    reason = trail_reason
+                    bars_held = trail_bars
+            else:
+                exit_price = trail_price
+                exit_time = _fmt_ts(bars.index, trail_abs)
+                reason = trail_reason
+                bars_held = trail_bars
 
     if exit_price is not None:
         return ExitResult(
@@ -2195,6 +2250,7 @@ def run_backtest(
     min_hold: int = 5,
     guard_stop_pct: float = 0,
     guard_target_pct: float = 0,
+    guard_trail_pct: float = 0,
     price_delay_minutes: int = 10,
     stats_resolution_minutes: int = 60,
     trace: dict[str, Any] | None = None,
@@ -2211,6 +2267,7 @@ def run_backtest(
         min_hold: Minimum bars to hold before exit checks begin (default 5).
         guard_stop_pct: Guard stop-loss % (0 = disabled).
         guard_target_pct: Guard take-profit % (0 = disabled).
+        guard_trail_pct: Trailing stop guard % (0 = disabled).
 
     Returns:
         List of BacktestResult, one per entry.
@@ -2374,6 +2431,23 @@ def run_backtest(
             _mark("strategy_eval", t_run)
             # Adjust bars_held to include the min_hold period
             bars_held = bars_held + (run_idx - entry_idx)
+
+            # Trailing stop guard (independent of strategy)
+            if guard_trail_pct > 0:
+                highs = df["High"].to_numpy(dtype=float, copy=False)
+                lows = df["Low"].to_numpy(dtype=float, copy=False)
+                trail_hit = _first_trail_guard_hit(
+                    highs, lows, run_idx, entry_price, guard_trail_pct,
+                )
+                if trail_hit is not None:
+                    trail_rel, trail_price, trail_reason = trail_hit
+                    trail_abs = run_idx + trail_rel
+                    trail_bars = trail_rel + 1 + (run_idx - entry_idx)
+                    if exit_price is None or trail_abs <= (entry_idx + bars_held - 1):
+                        exit_price = trail_price
+                        exit_time = _fmt_ts(df.index, trail_abs)
+                        reason = trail_reason
+                        bars_held = trail_bars
 
             # Ensure native Python types (not numpy)
             t_post = time.perf_counter()

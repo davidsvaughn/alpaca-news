@@ -46,6 +46,7 @@ class LiveConfig:
     # Guards
     guard_stop_pct: float = 0.0      # hard stop loss % (0 = disabled)
     guard_target_pct: float = 0.0    # hard take profit % (0 = disabled)
+    guard_trail_pct: float = 0.0     # trailing stop loss % from peak (0 = disabled)
 
     # Timing
     min_hold: int = 5                # minimum bars before exit checks

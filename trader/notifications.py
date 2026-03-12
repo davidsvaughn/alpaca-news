@@ -1,6 +1,10 @@
-"""Simple email notifications via SMTP.
+"""Notifications: file-based log + optional email via SMTP.
 
-Configured via env vars:
+File notifications (always active):
+    Appends timestamped entries to logs/notifications.md.
+    No configuration needed.
+
+Email notifications (optional):
     NOTIFY_EMAIL_TO       — recipient address
     NOTIFY_EMAIL_FROM     — sender address (defaults to NOTIFY_EMAIL_TO)
     NOTIFY_SMTP_HOST      — SMTP server (default: smtp.gmail.com)
@@ -18,9 +22,30 @@ import logging
 import os
 import smtplib
 import threading
+from datetime import datetime, timezone
 from email.mime.text import MIMEText
+from pathlib import Path
 
 log = logging.getLogger(__name__)
+
+NOTIFY_LOG = Path(__file__).resolve().parent.parent / "logs" / "notifications.md"
+
+
+def notify(subject: str, body: str) -> None:
+    """Append a notification to logs/notifications.md (and optionally email)."""
+    _append_to_log(subject, body)
+    send_email(subject, body)
+
+
+def _append_to_log(subject: str, body: str) -> None:
+    try:
+        NOTIFY_LOG.parent.mkdir(parents=True, exist_ok=True)
+        ts = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+        entry = f"## [{ts}] {subject}\n\n{body}\n\n---\n\n"
+        with open(NOTIFY_LOG, "a") as f:
+            f.write(entry)
+    except Exception:
+        log.exception("Failed to write notification to %s", NOTIFY_LOG)
 
 
 def send_email(subject: str, body: str) -> None:

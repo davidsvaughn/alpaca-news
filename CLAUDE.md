@@ -32,6 +32,37 @@ When writing ANY code that fetches stock prices, candles, quotes, or market data
 4. See `docs/src/SCHWABDEV.md` for full API documentation
 5. Key env vars: `SCHWAB_APP_KEY`, `SCHWAB_APP_SECRET`, `SCHWAB_DISABLED` (optional)
 
+## Operator Notifications
+
+**Use `notify()` to alert the operator about errors that shouldn't be missed, or to verify that a code fix works in production.**
+
+```python
+from trader.notifications import notify
+notify(subject="Short title", body="Details about what happened...")
+```
+
+- Appends a timestamped entry to `logs/notifications.md` (always active, no config needed)
+- Also sends email if `NOTIFY_EMAIL_TO` + `NOTIFY_SMTP_PASSWORD` env vars are set
+- See `trader/notifications.py` for full API
+
+**When to use:**
+1. **Buy/sell failures** — especially when a replacement sell succeeded but the replacement buy didn't
+2. **Safety checks for new fixes** — when a fix can't be tested until a rare code path triggers again, add a `notify()` call so the operator knows whether it worked or needs attention
+3. **Any error the operator shouldn't have to discover by tailing logs**
+
+**Pattern for "verify fix works" notifications:**
+```python
+try:
+    # new fix
+    ...
+except Exception as exc:
+    notify(
+        subject=f"Fix did not work: {short_description}",
+        body=f"The fallback for X failed.\nError: {exc}\n\nContext: ..."
+    )
+    raise  # or return False, depending on flow
+```
+
 ## Debugging Issues
 
 **When debugging, read `docs/skills/DIAGNOSTICS.md` first** — it lists all data sources ranked by usefulness and explains common diagnostic workflows.

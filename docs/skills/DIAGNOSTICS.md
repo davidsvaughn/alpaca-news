@@ -7,6 +7,7 @@
 | What you need | Where to look | How |
 |---------------|---------------|-----|
 | All order activity (buys, sells, fills, failures) | `alpaca_transactions` table | [SQL query](#alpaca-transactions-query) |
+| Operator alerts (buy failures, fix verifications) | `logs/notifications.md` | `cat logs/notifications.md` |
 | Errors, tracebacks, warnings | `logs/trader.log` | `cat logs/trader.log` |
 | Real-time console output | Terminal running `trader.main` | Prefixed lines (see [Console prefixes](#console-output-prefixes)) |
 | Position lifecycle (hold/exit/seal) | `watches` table | [SQL query](#watches-query) |
@@ -79,7 +80,23 @@ WHERE account_id = 'PA31OTPTIYRB' AND created_at >= '2026-03-11'
 | `reconcile_fractional_liquidated` | Sub-1-share remainder sold |
 | `reconcile_price_updated` / `reconcile_qty_updated` | Watch synced to Alpaca |
 
-### 2. Trader log file (WARNING+ only)
+### 2. Notification log (operator alerts)
+
+**Path:** `logs/notifications.md`
+**Purpose:** High-priority alerts that the operator shouldn't have to discover by tailing logs. Timestamped markdown entries appended by `notify()`.
+
+```bash
+cat logs/notifications.md    # check for alerts
+```
+
+**When to add `notify()` calls:**
+- Buy/sell failures (especially during replacements where a victim was already sold)
+- Safety checks for new fixes — when a fix targets a rare code path, add a `notify()` so the operator knows if the fallback triggered and whether it worked
+- Any error that requires operator awareness beyond what `trader.log` provides
+
+**API:** `from trader.notifications import notify` — see [notifications.py](../../trader/notifications.py)
+
+### 3. Trader log file (WARNING+ only)
 
 **Path:** `logs/trader.log`
 **Level:** WARNING and above (errors, tracebacks, failed orders, timeouts)
@@ -94,7 +111,7 @@ grep "SYMBOL" logs/trader.log  # filter by symbol
 **Env vars:** `LOG_FILE`, `LOG_LEVEL` (default: `WARNING`), `LOG_KEEP_DAYS` (default: `14`)
 **Config:** [logging_config.py](../../trader/logging_config.py)
 
-### 3. Console output (INFO+, not persisted)
+### 4. Console output (INFO+, not persisted)
 
 The terminal running the trader shows INFO-level output. This is **more verbose** than `trader.log` but is **not persisted** — if the process restarts, it's gone.
 
@@ -114,7 +131,7 @@ The terminal running the trader shows INFO-level output. This is **more verbose*
 | `SKIP (already processed):` | orchestrator.py | Duplicate news event |
 | `TRIAGE TIMEOUT:` | orchestrator.py | Triage agent timed out |
 
-### 4. SQLite watches table
+### 5. SQLite watches table
 
 #### Watches query
 
@@ -130,7 +147,7 @@ with db.engine.connect() as conn:
 
 **Watch statuses:** `holding` → `exited` → `cooling_off` → `sealed`
 
-### 5. SQLite snapshots table
+### 6. SQLite snapshots table
 
 #### Snapshots query
 
@@ -144,7 +161,7 @@ with db.engine.connect() as conn:
     )).fetchall()
 ```
 
-### 6. Dashboard API endpoints
+### 7. Dashboard API endpoints
 
 | Endpoint | Returns |
 |----------|---------|

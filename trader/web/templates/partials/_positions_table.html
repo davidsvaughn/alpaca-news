@@ -276,7 +276,7 @@
       <span class="_toggle-arrow" aria-hidden="true">&#9654;</span>
     </a>
     {% endif %}
-    <span>{{ _strategy_short.get(p.config.exit_strategy, p.config.exit_strategy) }}{% if p.config.live_overrides is defined and p.config.live_overrides.get('vdd_tick') %}<span class="badge bg-info text-dark ms-1" style="font-size:.6rem">Tick</span>{% endif %} | Stop: {{ p.config.guard_stop_pct }}% | {{ alloc_summary }}</span>
+    <span>{{ _strategy_short.get(p.config.exit_strategy, p.config.exit_strategy) }}{% if p.config.live_overrides is defined and p.config.live_overrides.get('vdd_tick') %}<span class="badge bg-info text-dark ms-1" style="font-size:.6rem">Tick</span>{% endif %} | Stop: {{ p.config.guard_stop_pct }}%{% if p.config.guard_trail_pct|default(0) > 0 %} | Trail: {{ p.config.guard_trail_pct }}%{% endif %} | {{ alloc_summary }}</span>
   </div>
 
   {% if p.config.exit_strategy is defined %}
@@ -315,6 +315,7 @@
           <strong>Guards</strong><br>
           <span class="text-muted">Stop:</span> {{ p.config.guard_stop_pct|default(0) }}%
           <br><span class="text-muted">Target:</span> {{ p.config.guard_target_pct|default(0) }}%
+          <br><span class="text-muted">Trail:</span> {{ p.config.guard_trail_pct|default(0) }}%
         </div>
         {% if af %}
         <div class="col-auto">

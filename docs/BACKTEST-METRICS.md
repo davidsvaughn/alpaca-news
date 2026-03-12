@@ -223,9 +223,7 @@ All summary values are `null` when insufficient data exists for computation.
 
 3. **Short sample windows** — With only a few trading days of data, volatility estimates are unreliable and Sharpe ratios are unstable. More data = more meaningful metrics.
 
-4. **Transaction costs** — A configurable `cost_bps` parameter (default 10 bps = 0.10%) deducts round-trip transaction costs from each trade before computing summary stats. This adjusts `pnl_pct` and `entry_price` so both Method A and Method B reflect costs. Set to 0 for raw results. Note: this is a flat per-trade deduction — it does not model variable spreads, market impact, or slippage.
-
-5. **No capital constraint in Method A** — Method A assumes you can invest independently in every trade simultaneously. Real capital is finite.
+4. **No capital constraint in Method A** — Method A assumes you can invest independently in every trade simultaneously. Real capital is finite.
 
 ---
 
