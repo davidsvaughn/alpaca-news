@@ -349,23 +349,24 @@ LRMR received 5 snapshots. ALL were skipped by different mechanisms:
 
 LYV case: bought on an oil spike article, then 10 consecutive snapshots about LYV's DOJ settlement were ALL blocked by cooldown. The DOJ settlement is a completely different, arguably more significant catalyst.
 
-### Skip Pattern Changes — Recommended
+### Skip Pattern Changes — ~~Recommended~~ CORRECTED (see Part 8)
 
-#### Patterns to ADD (new)
+> **Warning**: The recommendations below were based on trade-only data (survivorship bias). The rigorous archive study in Part 8 showed these recommendations were **wrong**. They are preserved here struck-through for the record, with corrections inline.
 
-| Pattern | Rationale | Trade Data |
-|---------|-----------|------------|
-| `"Raised to .* From .* by"` | Analyst upgrades consistently lose money | 29 trades, -1.31% avg, 38% win |
-| `"stock (rallies\|surges\|jumps)"` | Momentum-chasing headlines | 6 trades, -3.94% avg, **0% win** |
-| `"retail (sees\|cheers)"` | Retail hype validation | 5 trades, -4.00% avg, **0% win** |
-| `"(stocks slump\|wall street.*(mixed\|tumble))"` | Broad market commentary, not stock-specific | 10 trades, -2.17% avg |
+#### ~~Patterns to ADD (new)~~ — DO NOT ADD
 
-#### Patterns to UNCOMMENT (enable)
+~~These patterns were recommended for skipping based on trade-only analysis:~~
 
-| Pattern | Rationale |
-|---------|-----------|
-| `"shares are trading higher"` | Reactive commentary. 56 snapshots investigated, 1 trade = max loss. |
-| `"What's Going On With .* Stock"` | Low-signal Benzinga explainer articles |
+| Pattern | Trade-Only Data | Archive Study (Part 8) | Verdict |
+|---------|----------------|----------------------|---------|
+| `"Raised to .* From .* by"` | ~~29 trades, -1.31% avg~~ | 113 articles, **3.27% avg gain** (near baseline) | **Do NOT skip** |
+| `"stock (rallies\|surges\|jumps)"` | ~~6 trades, 0% win~~ | 74 articles, **5.09% avg gain** (+33% above baseline) | **Do NOT skip** |
+| `"retail (sees\|cheers)"` | ~~5 trades, -4.00% avg~~ | 4 articles (too few to evaluate) | Insufficient data |
+| `"(stocks slump\|wall street.*(mixed\|tumble))"` | ~~10 trades, -2.17% avg~~ | Not tested in archive study | Insufficient data |
+
+#### ~~Patterns to UNCOMMENT~~ — Insufficient Evidence
+
+The commented-out patterns (`"shares are trading higher"`, `"What's Going On With .* Stock"`) had too few matches in the archive study to evaluate rigorously. Leave them commented out until more data is available.
 
 #### Patterns to KEEP (confirmed good)
 
@@ -374,36 +375,34 @@ All current active patterns are validated. Specifically:
 - `"shares are trading lower"` — reactive commentary, correctly skipped
 - `"reiterates"` / `"reiterated"` — analyst reiterations, correctly skipped
 
-#### Pattern CONFLICTS to Resolve
+#### Pipeline Issues to Resolve (still valid)
 
-The system needs to distinguish:
-- **"Raised to Buy FROM Hold"** (upgrade — currently investigated, performs poorly) vs **"Maintained at Buy"** (reiteration — correctly skipped)
-- **"Shares are trading higher after Phase 3 data"** (valid catalyst wrapped in bad headline format) vs **"Shares are trading higher"** (pure momentum commentary)
+These are **not skip pattern problems** — they are pipeline logic issues that cause the system to miss valid opportunities:
 
-**Recommendation**: For "shares are trading higher/lower after [X]" headlines, extract [X] and evaluate the catalyst independently. High-priority catalyst keywords (FDA, Phase 3, earnings beat, acquisition, contract) should override the retrospective framing.
+1. **"Shares are trading higher after [CATALYST]" format**: Headlines wrapping top-tier catalysts (FDA data, earnings beats) in reactive framing get killed by skip patterns. **Recommendation**: For "shares are trading higher/lower after [X]" headlines, extract [X] and evaluate the catalyst independently. High-priority catalyst keywords (FDA, Phase 3, earnings beat, acquisition, contract) should override the retrospective framing.
+
+2. **Upgrade vs reiteration conflation**: The system cannot distinguish "Upgraded to Buy from Hold" (material) from "Maintained at Buy" (noise). Consider a pre-filter that parses for upgrade/downgrade language before applying the reiteration skip pattern.
 
 ### Patterns for `sources_to_skip` (currently empty)
 
-Based on trade performance data, these sources have abysmal results:
+Based on trade performance data, these sources have poor results — but sample sizes are very small (5-11 trades each). **Do not act on these without larger samples or archive-level validation.**
 
-| Source | Trades | Avg P&L | Win Rate | Recommendation |
-|--------|--------|---------|----------|----------------|
-| Benzinga | 5 | -3.09% | 0% | Add to `sources_to_skip` |
-| GlobeNewswire | 6 | -1.74% | 0% | Add to `sources_to_skip` |
-| Stock Story | 7 | -0.33% | 14.3% | Add to `sources_to_skip` |
-| Barchart | 11 | -1.30% | 36.4% | Monitor (borderline) |
-
-**Caveat**: The "shares are trading higher after" problem means Benzinga headlines occasionally wrap valid catalysts. If we block Benzinga entirely at the source level, we need another feed for those catalysts. If the same event is also reported by Dow Jones or Reuters (which it usually is), source-blocking Benzinga is safe.
+| Source | Trades | Avg P&L | Win Rate | Status |
+|--------|--------|---------|----------|--------|
+| Benzinga | 5 | -3.09% | 0% | Monitor — also wraps valid catalysts |
+| GlobeNewswire | 6 | -1.74% | 0% | Monitor — mostly press releases |
+| Stock Story | 7 | -0.33% | 14.3% | Monitor — retrospective articles |
+| Barchart | 11 | -1.30% | 36.4% | Monitor |
 
 ---
 
-## Part 7: Reuters Earnings Summary Problem (2026-03-12)
+## Part 7: ~~Reuters Earnings Summary Problem~~ CORRECTED (2026-03-12)
 
-A specific finding worth highlighting: **Reuters "reports results for the quarter" earnings summaries** have 28 trades with -2.64% average P&L and only 5 winners (18% win rate). This is the single worst-performing headline pattern that's NOT currently filtered.
+~~A specific finding worth highlighting: Reuters "reports results for the quarter" earnings summaries have 28 trades with -2.64% average P&L and only 5 winners (18% win rate).~~
 
-The issue: Reuters earnings summaries trigger investigations for every earnings report, regardless of whether the results are actually good or bad. The triage sees "beat on EPS and revenue" in the Reuters format and investigates — but many of these are marginal beats or the stock has already moved.
+**Correction (Part 8 archive study)**: The `reports_results_quarter` pattern was tested against the full article archive (326 articles, not just 28 trades). Result: **5.95% avg gain, 4.40% median gain, 72.3% hit rate** — one of the **strongest-performing patterns**, well above baseline. The poor trade results were due to survivorship bias and pipeline execution issues, NOT the underlying news quality.
 
-**Recommendation**: Consider adding `"reports results for the quarter ended .* - Earnings Summary"` to skip patterns, OR require the triage to check whether the stock has already moved >5% before investigating Reuters earnings summaries.
+**Do NOT add this to skip patterns.** The real issue may be that our pipeline buys too late after earnings articles, or that triage doesn't distinguish strong beats from marginal ones. This is a pipeline quality problem, not a filtering problem.
 
 ---
 

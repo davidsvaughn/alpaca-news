@@ -201,8 +201,21 @@ class KnowledgeStore:
                 _write_json(path, content)
 
     def load_skip_patterns(self) -> dict[str, Any]:
+        """Load skip patterns, merging long-only bearish patterns when shorting is disabled."""
+        import os
         self.ensure_defaults()
-        return _read_jsonc(self.knowledge_dir / "skip_patterns.jsonc")
+        data = _read_jsonc(self.knowledge_dir / "skip_patterns.jsonc")
+        shorting_enabled = os.getenv("ENABLE_SHORTING", "").lower() in ("true", "1")
+        if not shorting_enabled:
+            long_only = data.get("long_only_skip_keywords", [])
+            if long_only:
+                keywords = data.get("headline_keywords", [])
+                existing = set(str(x).lower() for x in keywords)
+                for kw in long_only:
+                    if str(kw).lower() not in existing:
+                        keywords.append(kw)
+                data["headline_keywords"] = keywords
+        return data
 
     def load_investigate_patterns(self) -> dict[str, Any]:
         self.ensure_defaults()

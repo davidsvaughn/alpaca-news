@@ -29,13 +29,13 @@
     "maintains (price target|outperform|in-line|buy)",
     "reiterates (outperform|sector perform|buy|neutral)",
     "reiterated.*(rating|overweight|sector perform|neutral)",
-    "initiat.* coverage",
+    // "initiat.* coverage",  // REMOVED: coverage initiation is a real catalyst (new analyst coverage can move stocks 5-10%)
     "analyst color",
     "Best Stocks list",
     "portfolio edition",
     "Deal Dispatch",
     "(New|Updates From|Off) The Block",
-    "death cross",
+    // "death cross",  // MOVED to long_only_skip_keywords
     "Power Inflow (signal|alert)",
     "key trading signal",
     "testing support",
@@ -54,7 +54,7 @@
     "filed a new trademark",
     "mixed shelf offering",
     "Amounts Not Disclosed",
-    "Option Alert:",
+    // "Option Alert:",  // REMOVED: unusual options activity can precede major moves
     // "Unusual options activity",
     "What Is Everyone Watching",
     "what's moving markets",
@@ -64,7 +64,7 @@
     "omnibus amendment convertible notes",
     "repayment commencement deferred",
     "renews credit facilities",
-    "pilot (initiative|program|transportation)",
+    // "pilot (initiative|program|transportation)",  // REMOVED: pilot programs can be real business catalysts
     "stocks are soaring",
     "\\d+ stocks lead the rally",
     "top gainers following",
@@ -76,10 +76,10 @@
     "What's Driving The Action",
     "Russell 1000.*(Gainers|Losers)",
     // "shares are trading higher",
-    "shares are trading lower",
+    // "shares are trading lower",  // MOVED to long_only_skip_keywords
     // "shares are up",
-    "shares are down",
-    "lowers the price target",
+    // "shares are down",  // MOVED to long_only_skip_keywords
+    // "lowers the price target",  // MOVED to long_only_skip_keywords
     "midway through trading",
     "Nasdaq Gains Over .*%;",
     "investment philosophy",
@@ -91,6 +91,14 @@
     "Benzinga Edge (scorecard|signal|rankings)",
     "Technical Momentum Signals",
     "Key facts:"
+  ],
+  // Bearish patterns — only skip these when shorting is disabled (long-only mode).
+  // When shorting is enabled, these should NOT be skipped since they're potential short catalysts.
+  "long_only_skip_keywords": [
+    "shares are trading lower",
+    "shares are down",
+    "lowers the price target",
+    "death cross"
   ],
   "sources_to_skip": [],
   "symbol_contexts": {},
