@@ -17,6 +17,7 @@ This folder contains **operational knowledge for AI agents** working on this cod
 | [TRADE-ANALYSIS.md](TRADE-ANALYSIS.md) | Performance analysis | SQL queries, snapshot deep dive process, skip pattern audit, bearish signals |
 | [BACKTEST-LIVE-PIPELINE.md](BACKTEST-LIVE-PIPELINE.md) | Feature pipeline | Step-by-step guide to adding guards, strategies, or params to backtest→live flow |
 | [PORTFOLIO-DIVERGENCE.md](PORTFOLIO-DIVERGENCE.md) | Portfolio comparison | How to diagnose why two parallel portfolios diverged, find root cause bugs |
+| [ALPACA-LIQUIDATE.md](ALPACA-LIQUIDATE.md) | Account liquidation | Cancel all orders, close all positions, handle stuck `pending_cancel` orders |
 
 ### Planned files
 

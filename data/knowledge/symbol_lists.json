@@ -1589,7 +1589,12 @@
     "AGL",
     "CBK",
     "ARL",
-    "UPXI"
+    "UPXI",
+    "TCI",
+    "QGAI",
+    "IOR",
+    "MUX",
+    "ZCAR"
   ],
   "crypto": [],
   "rejected": [
@@ -1771,7 +1776,9 @@
     "ZAL",
     "HNR1",
     "RWE",
-    "DBK"
+    "DBK",
+    "FRM",
+    "SANP"
   ],
-  "last_updated": "2026-03-12T17:56:08.008089+00:00"
+  "last_updated": "2026-03-12T18:33:36.198975+00:00"
 }
