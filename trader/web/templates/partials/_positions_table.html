@@ -349,8 +349,10 @@
   <!-- Right column: equity chart fills available space -->
   <div class="flex-grow-1" style="position:relative; min-height:150px; height:clamp(150px, 20vh, 210px); min-width:200px;">
     <div id="equity-chart-{{ p.config.config_id }}" data-config-id="{{ p.config.config_id }}"
+         data-starting-capital="{{ p.config.starting_capital if p.config.starting_capital is defined else '' }}"
          data-sim-ending="{{ p.sim.sim_ending if p.sim and p.sim.sim_ending else '' }}"
          style="position:absolute; top:0; left:0; width:100%; height:100%;"></div>
+    <script type="application/json" id="equity-data-{{ p.config.config_id }}">{{ p.equity_history|to_json|safe }}</script>
   </div>
   </div><!-- end two-column layout -->
 
@@ -649,119 +651,135 @@
   setTimeout(function() {
   if (window._equityChartGen !== _myGen) return;
 
+  function renderEquityChart(container, data) {
+    if (!container || !data) return;
+    var snaps = data.snapshots || [];
+    if (snaps.length < 2) {
+      container.style.display = 'none';
+      return;
+    }
+
+    container.style.display = '';
+    container.innerHTML = '';
+
+    // Build data — Lightweight Charts requires unique ascending times
+    var chartData = [];
+    var lastT = 0;
+    snaps.forEach(function(s) {
+      var t = Math.floor(new Date(s.timestamp).getTime() / 1000);
+      if (t <= lastT) t = lastT + 1;
+      lastT = t;
+      chartData.push({ time: t, value: s.equity });
+    });
+    var starting = data.starting_capital || parseFloat(container.dataset.startingCapital) || chartData[0].value;
+
+    // Append live sim value if available
+    var simEnding = parseFloat(container.dataset.simEnding);
+    if (simEnding && simEnding > 0) {
+      var nowTs = Math.floor(Date.now() / 1000);
+      if (nowTs <= lastT) nowTs = lastT + 1;
+      chartData.push({ time: nowTs, value: simEnding });
+    }
+
+    var latest = chartData[chartData.length - 1].value;
+    var pnlPct = ((latest - starting) / starting * 100).toFixed(2);
+    var isPositive = latest >= starting;
+    var lineColor = isPositive ? '#198754' : '#dc3545';
+    var topColor = isPositive ? 'rgba(25,135,84,0.3)' : 'rgba(220,53,69,0.3)';
+    var bottomColor = isPositive ? 'rgba(25,135,84,0.02)' : 'rgba(220,53,69,0.02)';
+
+    var titleDiv = document.createElement('div');
+    titleDiv.style.cssText = 'text-align:center; font-size:11px; color:' + lineColor + '; padding:0 0 2px 0;';
+    titleDiv.textContent = '$' + starting.toLocaleString() + '  \u2192  $' + latest.toLocaleString(undefined, {minimumFractionDigits:2, maximumFractionDigits:2}) + '  (' + (pnlPct >= 0 ? '+' : '') + pnlPct + '%)';
+    container.appendChild(titleDiv);
+
+    var chartDiv = document.createElement('div');
+    chartDiv.style.cssText = 'position:absolute; left:0; right:0; top:' + titleDiv.offsetHeight + 'px; bottom:0;';
+    container.appendChild(chartDiv);
+
+    chartDiv.style.overflow = 'hidden';
+    var style = document.createElement('style');
+    style.textContent = 'div[id^="equity-chart-"] a[href*="tradingview"] { display: none !important; }';
+    if (!document.querySelector('style[data-eq-brand]')) { style.setAttribute('data-eq-brand','1'); document.head.appendChild(style); }
+
+    var w = chartDiv.offsetWidth;
+    var h = chartDiv.offsetHeight;
+    if (w < 10 || h < 10) return;
+
+    function _fmtLocalTime(ts) {
+      var d = new Date(ts * 1000);
+      return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
+        + ' ' + d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+    }
+
+    var chart = LightweightCharts.createChart(chartDiv, {
+      autoSize: true,
+      layout: {
+        background: { type: 'solid', color: 'transparent' },
+        textColor: '#999',
+        fontSize: 9,
+      },
+      grid: {
+        vertLines: { visible: false },
+        horzLines: { color: 'rgba(0,0,0,0.05)' },
+      },
+      rightPriceScale: {
+        borderVisible: false,
+        scaleMargins: { top: 0.05, bottom: 0.05 },
+      },
+      timeScale: {
+        borderVisible: false,
+        timeVisible: true,
+        secondsVisible: false,
+        tickMarkFormatter: function(t) { return _fmtLocalTime(t); },
+      },
+      localization: {
+        timeFormatter: function(t) { return _fmtLocalTime(t); },
+      },
+      crosshair: {
+        horzLine: { visible: true, labelVisible: true },
+        vertLine: { labelVisible: true },
+      },
+      handleScroll: false,
+      handleScale: false,
+    });
+
+    var series = chart.addSeries(LightweightCharts.AreaSeries, {
+      lineColor: lineColor,
+      lineWidth: 2,
+      topColor: topColor,
+      bottomColor: bottomColor,
+      crosshairMarkerVisible: true,
+      crosshairMarkerRadius: 3,
+      priceFormat: { type: 'custom', formatter: function(p) { return '$' + p.toLocaleString(undefined, {minimumFractionDigits:0, maximumFractionDigits:0}); } },
+    });
+
+    series.setData(chartData);
+    chart.timeScale().fitContent();
+    window._equityCharts[container.dataset.configId] = chart;
+  }
+
   document.querySelectorAll('div[id^="equity-chart-"]').forEach(function(container) {
     var configId = container.dataset.configId;
     if (!configId) return;
+    var dataEl = document.getElementById('equity-data-' + configId);
+    if (dataEl && dataEl.textContent) {
+      try {
+        renderEquityChart(container, {
+          starting_capital: parseFloat(container.dataset.startingCapital) || 0,
+          snapshots: JSON.parse(dataEl.textContent),
+        });
+        return;
+      } catch (err) {
+        console.warn('Embedded equity chart data parse failed for ' + configId, err);
+      }
+    }
 
     fetch('/api/portfolio/' + configId + '/equity-history?_ts=' + Date.now(), { cache: 'no-store' })
       .then(function(r) { return r.json(); })
       .then(function(data) {
-        // Skip if a newer script execution has started (HTMX double-exec guard)
         if (window._equityChartGen !== _myGen) return;
-        var snaps = data.snapshots || [];
-        if (snaps.length < 2) {
-          container.style.display = 'none';
-          return;
-        }
-
-        // Build data — Lightweight Charts requires unique ascending times
-        var chartData = [];
-        var lastT = 0;
-        snaps.forEach(function(s) {
-          var t = Math.floor(new Date(s.timestamp).getTime() / 1000);
-          if (t <= lastT) t = lastT + 1;
-          lastT = t;
-          chartData.push({ time: t, value: s.equity });
-        });
-        var starting = data.starting_capital || chartData[0].value;
-
-        // Append live sim value if available
-        var simEnding = parseFloat(container.dataset.simEnding);
-        if (simEnding && simEnding > 0) {
-          var nowTs = Math.floor(Date.now() / 1000);
-          if (nowTs <= lastT) nowTs = lastT + 1;
-          chartData.push({ time: nowTs, value: simEnding });
-        }
-
-        var latest = chartData[chartData.length - 1].value;
-        var pnlPct = ((latest - starting) / starting * 100).toFixed(2);
-        var isPositive = latest >= starting;
-        var lineColor = isPositive ? '#198754' : '#dc3545';
-        var topColor = isPositive ? 'rgba(25,135,84,0.3)' : 'rgba(220,53,69,0.3)';
-        var bottomColor = isPositive ? 'rgba(25,135,84,0.02)' : 'rgba(220,53,69,0.02)';
-
-        // Title element above chart
-        var titleDiv = document.createElement('div');
-        titleDiv.style.cssText = 'text-align:center; font-size:11px; color:' + lineColor + '; padding:0 0 2px 0;';
-        titleDiv.textContent = '$' + starting.toLocaleString() + '  \u2192  $' + latest.toLocaleString(undefined, {minimumFractionDigits:2, maximumFractionDigits:2}) + '  (' + (pnlPct >= 0 ? '+' : '') + pnlPct + '%)';
-        container.appendChild(titleDiv);
-
-        // Chart container (fills remaining height)
-        var chartDiv = document.createElement('div');
-        chartDiv.style.cssText = 'position:absolute; left:0; right:0; top:' + titleDiv.offsetHeight + 'px; bottom:0;';
-        container.appendChild(chartDiv);
-
-        // Hide TradingView branding watermark
-        chartDiv.style.overflow = 'hidden';
-        var style = document.createElement('style');
-        style.textContent = 'div[id^="equity-chart-"] a[href*="tradingview"] { display: none !important; }';
-        if (!document.querySelector('style[data-eq-brand]')) { style.setAttribute('data-eq-brand','1'); document.head.appendChild(style); }
-
-        var w = chartDiv.offsetWidth;
-        var h = chartDiv.offsetHeight;
-        if (w < 10 || h < 10) return;
-
-        function _fmtLocalTime(ts) {
-          var d = new Date(ts * 1000);
-          return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
-            + ' ' + d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
-        }
-
-        var chart = LightweightCharts.createChart(chartDiv, {
-          autoSize: true,
-          layout: {
-            background: { type: 'solid', color: 'transparent' },
-            textColor: '#999',
-            fontSize: 9,
-          },
-          grid: {
-            vertLines: { visible: false },
-            horzLines: { color: 'rgba(0,0,0,0.05)' },
-          },
-          rightPriceScale: {
-            borderVisible: false,
-            scaleMargins: { top: 0.05, bottom: 0.05 },
-          },
-          timeScale: {
-            borderVisible: false,
-            timeVisible: true,
-            secondsVisible: false,
-            tickMarkFormatter: function(t) { return _fmtLocalTime(t); },
-          },
-          localization: {
-            timeFormatter: function(t) { return _fmtLocalTime(t); },
-          },
-          crosshair: {
-            horzLine: { visible: true, labelVisible: true },
-            vertLine: { labelVisible: true },
-          },
-          handleScroll: false,
-          handleScale: false,
-        });
-
-        var series = chart.addSeries(LightweightCharts.AreaSeries, {
-          lineColor: lineColor,
-          lineWidth: 2,
-          topColor: topColor,
-          bottomColor: bottomColor,
-          crosshairMarkerVisible: true,
-          crosshairMarkerRadius: 3,
-          priceFormat: { type: 'custom', formatter: function(p) { return '$' + p.toLocaleString(undefined, {minimumFractionDigits:0, maximumFractionDigits:0}); } },
-        });
-
-        series.setData(chartData);
-        chart.timeScale().fitContent();
-        window._equityCharts[configId] = chart;
+        renderEquityChart(container, data);
       })
       .catch(function(err) {
         console.warn('Equity chart load failed for ' + configId, err);

@@ -1727,7 +1727,17 @@
     "AXR",
     "AEYE",
     "PCSC",
-    "TNXP"
+    "TNXP",
+    "FNWB",
+    "WMK",
+    "NESRF",
+    "FDMIF",
+    "TNL",
+    "CLMT",
+    "LABZF",
+    "TECK",
+    "ACLS",
+    "PRKS"
   ],
   "crypto": [],
   "rejected": [
@@ -1916,7 +1926,9 @@
     "RWOD",
     "FL",
     "HEAR",
-    "ARCI"
+    "ARCI",
+    "0316.HK",
+    "LABZ"
   ],
-  "last_updated": "2026-03-12T21:30:27.929528+00:00"
+  "last_updated": "2026-03-12T22:58:33.153106+00:00"
 }

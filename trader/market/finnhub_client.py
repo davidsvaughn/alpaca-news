@@ -1,6 +1,7 @@
 """FinnHub API client — free tier endpoints.
 
 Free endpoints used (60 req/min rate limit):
+- /quote — real-time quote snapshot
 - /company-news — company news articles
 - /stock/earnings — historical earnings surprises
 - /calendar/earnings — upcoming/recent earnings dates
@@ -287,6 +288,62 @@ _TX_CODE_MAP: dict[str, str] = {
     "C": "Conversion",
     "D": "Disposition",
 }
+
+
+def get_quote(
+    symbol: str,
+    *,
+    api_key: str | None = None,
+) -> dict[str, Any]:
+    """Fetch a real-time quote snapshot from Finnhub.
+
+    Returns a normalized dict (last_price/open/high/low/close/net_change/net_pct_change)
+    or an empty dict on failure/missing API key.
+    """
+    key = api_key or os.getenv("FINNHUB_API_KEY")
+    if not key:
+        return {}
+    try:
+        resp = _get(
+            f"{_BASE_URL}/quote",
+            params={"symbol": symbol.upper(), "token": key},
+        )
+        data = resp.json()
+        if not isinstance(data, dict):
+            return {}
+
+        # Finnhub quote fields:
+        # c=current, o=open, h=high, l=low, pc=prevClose, t=epoch sec
+        current = data.get("c")
+        if current in (None, 0):
+            return {}
+        current_f = float(current)
+        prev_close = data.get("pc")
+        prev_close_f = float(prev_close) if prev_close not in (None, 0) else None
+
+        net_change = (
+            (current_f - prev_close_f) if prev_close_f is not None else None
+        )
+        net_pct_change = (
+            ((net_change / prev_close_f) * 100.0)
+            if prev_close_f not in (None, 0) and net_change is not None
+            else None
+        )
+
+        return {
+            "symbol": symbol.upper(),
+            "last_price": current_f,
+            "open_price": float(data["o"]) if data.get("o") is not None else None,
+            "high": float(data["h"]) if data.get("h") is not None else None,
+            "low": float(data["l"]) if data.get("l") is not None else None,
+            "close_price": prev_close_f,
+            "net_change": net_change,
+            "net_pct_change": net_pct_change,
+            "timestamp": data.get("t"),
+            "source": "finnhub",
+        }
+    except Exception:
+        return {}
 
 
 def get_insider_transactions(

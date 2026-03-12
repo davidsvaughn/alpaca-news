@@ -1,27 +1,31 @@
 #!/usr/bin/env python3
-"""Recalculate equity snapshots with both realized AND unrealized PnL.
+"""Recalculate equity snapshots with realized + unrealized PnL from watch history.
 
-For each equity snapshot timestamp:
-1. Replay watch entry/exit events to get realized PnL and current holdings
-2. Look up each holding's price at that timestamp from Schwab 1-min bars
-3. Compute unrealized PnL from (current_price - entry_price) for each holding
-4. Update the equity snapshot
+For each stored equity snapshot timestamp:
+1. Replay watch entry/exit events to derive holdings + realized PnL
+2. Look up each open holding's latest 1-minute price at-or-before that timestamp
+3. Compute unrealized PnL from (current - entry) * fixed position size
+4. Update portfolio_equity_snapshots in place
 
 Usage:
     uv run python scripts/backfill_equity_full.py [--dry-run] [--config-id lc_xxx]
-    uv run python scripts/backfill_equity_full.py --all  # both sim portfolios
+    uv run python scripts/backfill_equity_full.py --all
 """
 
 import argparse
 import json
 import sqlite3
 import sys
-import time
 from bisect import bisect_right
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+from typing import Any
 
+from dotenv import load_dotenv
+
+load_dotenv(".env", override=False)
 sys.path.insert(0, ".")
-from trader.market.data_service import MarketDataService
+from trader.market.schwab_client import SchwabMarketClient
+from trader.valuation import compute_pct_pnl, position_size_for_config
 
 DB_PATH = "data/trader.db"
 
@@ -33,37 +37,42 @@ def parse_iso(s: str) -> datetime:
     return dt.astimezone(timezone.utc)
 
 
-def build_price_index(bars: list[dict]) -> tuple[list[float], list[float]]:
-    """Convert bars to sorted (timestamp_seconds, close_price) arrays for bisect lookup."""
+def build_price_index_from_candles(
+    candles,
+) -> tuple[list[float], list[float]]:
+    """Convert candles to sorted arrays for binary-search lookups."""
     timestamps = []
     prices = []
-    for bar in bars:
-        bar_dt = parse_iso(bar["date"]) if isinstance(bar["date"], str) else bar["date"]
-        if bar_dt.tzinfo is None:
-            bar_dt = bar_dt.replace(tzinfo=timezone.utc)
-        timestamps.append(bar_dt.timestamp())
-        prices.append(float(bar["c"]))
+    for c in candles:
+        c_dt = parse_iso(c.t) if isinstance(c.t, str) else c.t
+        if c_dt.tzinfo is None:
+            c_dt = c_dt.replace(tzinfo=timezone.utc)
+        timestamps.append(c_dt.timestamp())
+        prices.append(float(c.c))
     return timestamps, prices
 
 
-def lookup_price(timestamps: list[float], prices: list[float], target_ts: float) -> float | None:
-    """Find the closest bar price to target timestamp."""
+def lookup_price_at_or_before(
+    timestamps: list[float],
+    prices: list[float],
+    target_ts: float,
+) -> tuple[float | None, float | None]:
+    """Find the latest bar at-or-before target timestamp."""
     if not timestamps:
-        return None
-    idx = bisect_right(timestamps, target_ts)
-    # Check both neighbors
-    candidates = []
-    if idx > 0:
-        candidates.append((abs(timestamps[idx - 1] - target_ts), prices[idx - 1]))
-    if idx < len(timestamps):
-        candidates.append((abs(timestamps[idx] - target_ts), prices[idx]))
-    if not candidates:
-        return None
-    candidates.sort()
-    return candidates[0][1]
+        return None, None
+    idx = bisect_right(timestamps, target_ts) - 1
+    if idx < 0:
+        return None, None
+    return prices[idx], timestamps[idx]
 
 
-def process_config(conn, market, config_id: str, price_cache: dict, dry_run: bool):
+def process_config(
+    conn: sqlite3.Connection,
+    schwab: SchwabMarketClient,
+    config_id: str,
+    price_cache: dict[str, tuple[list[float], list[float]]],
+    dry_run: bool,
+) -> None:
     """Process one config's equity snapshots."""
     cfg_row = conn.execute(
         "SELECT config_json FROM live_configs WHERE config_id = ?",
@@ -74,10 +83,12 @@ def process_config(conn, market, config_id: str, price_cache: dict, dry_run: boo
         return
     cfg = json.loads(cfg_row["config_json"])
     starting = cfg["starting_capital"]
-    max_pos = cfg["allocation_params"].get("max_pos", 20)
-    pos_size = starting / max_pos
+    pos_size = position_size_for_config(cfg)
+    if not pos_size or pos_size <= 0:
+        print(f"  Invalid position sizing for {config_id}")
+        return
 
-    # Get all watches
+    # Load all watches for this config
     watches = conn.execute(
         """
         SELECT watch_id, symbol, status, watch_json
@@ -88,39 +99,31 @@ def process_config(conn, market, config_id: str, price_cache: dict, dry_run: boo
         (config_id,),
     ).fetchall()
 
-    # Build event timeline: (timestamp, event_type, symbol, entry_price, pnl_pct)
+    if not watches:
+        print("  No watches found")
+        return
+
+    # Build event timeline:
+    # (event_dt, order, event_type, watch_id, symbol, entry_price, pnl_pct)
+    # order enforces entry before exit when timestamps tie.
     events = []
+    watch_meta: dict[str, dict[str, Any]] = {}
     for w in watches:
         wj = json.loads(w["watch_json"])
+        watch_meta[w["watch_id"]] = wj
         entry_time = parse_iso(wj["entry"]["time"])
         entry_price = float(wj["entry"]["price"])
         symbol = w["symbol"]
-        events.append((entry_time, "entry", symbol, entry_price, 0.0))
+        watch_id = w["watch_id"]
+        events.append((entry_time, 0, "entry", watch_id, symbol, entry_price, 0.0))
 
         if wj.get("exit") and wj["exit"].get("time"):
             exit_time = parse_iso(wj["exit"]["time"])
             pnl_pct = wj["exit"].get("realized_pnl_pct", 0.0) or 0.0
-            events.append((exit_time, "exit", symbol, entry_price, pnl_pct))
-    events.sort(key=lambda x: x[0])
+            events.append((exit_time, 1, "exit", watch_id, symbol, entry_price, pnl_pct))
+    events.sort(key=lambda x: (x[0], x[1]))
 
-    # Collect all symbols we need prices for
-    all_symbols = sorted(set(w["symbol"] for w in watches))
-    new_symbols = [s for s in all_symbols if s not in price_cache]
-    if new_symbols:
-        print(f"  Fetching bars for {len(new_symbols)} new symbols...")
-        for i, sym in enumerate(new_symbols):
-            try:
-                result = market.get_price_history(sym, period="5d", interval="1m")
-                bars = result.get("bars", [])
-                price_cache[sym] = build_price_index(bars)
-                if (i + 1) % 20 == 0:
-                    print(f"    {i + 1}/{len(new_symbols)} fetched...")
-            except Exception as e:
-                print(f"    {sym}: FAILED — {e}")
-                price_cache[sym] = ([], [])
-        print(f"    Done. {len(new_symbols)} symbols fetched.")
-
-    # Get equity snapshots
+    # Load snapshots to rebuild
     snapshots = conn.execute(
         """
         SELECT id, timestamp, equity, realized_pnl, unrealized_pnl, position_count, cash
@@ -131,32 +134,77 @@ def process_config(conn, market, config_id: str, price_cache: dict, dry_run: boo
         (config_id,),
     ).fetchall()
 
+    if not snapshots:
+        print("  No snapshots found")
+        return
+
+    snap_times = [parse_iso(s["timestamp"]) for s in snapshots]
+    min_ts = min(snap_times)
+    max_ts = max(snap_times)
+
+    # Fetch 1-minute candles once per symbol over exact snapshot range.
+    all_symbols = sorted(set(w["symbol"] for w in watches))
+    new_symbols = [s for s in all_symbols if s not in price_cache]
+    if new_symbols:
+        start = min_ts - timedelta(hours=2)
+        end = max_ts + timedelta(minutes=5)
+        print(
+            f"  Fetching 1m Schwab candles for {len(new_symbols)} symbols "
+            f"from {start.isoformat()} to {end.isoformat()}...",
+        )
+        for i, sym in enumerate(new_symbols, 1):
+            try:
+                candles = schwab.get_candles_by_date_range(
+                    sym,
+                    start=start,
+                    end=end,
+                    frequency=1,
+                    extended_hours=True,
+                )
+                price_cache[sym] = build_price_index_from_candles(candles)
+            except Exception as e:
+                print(f"    {sym}: FAILED — {e}")
+                price_cache[sym] = ([], [])
+            if i % 20 == 0 or i == len(new_symbols):
+                print(f"    {i}/{len(new_symbols)} fetched...")
+
     print(f"  {len(snapshots)} snapshots to process")
 
+    # Replay events incrementally while walking snapshots in time.
+    evt_idx = 0
+    realized_dollar = 0.0
+    holdings: dict[str, tuple[str, float, str]] = {}  # watch_id -> (symbol, entry_price, direction)
+
     updated = 0
+    missing_price_total = 0
+    stale_price_total = 0
     for snap in snapshots:
         snap_dt = parse_iso(snap["timestamp"])
         snap_ts = snap_dt.timestamp()
 
-        # Replay events to get holdings and realized PnL at this timestamp
-        holdings = {}  # symbol -> entry_price
-        realized_dollar = 0.0
-        for evt_time, evt_type, symbol, entry_price, pnl_pct in events:
-            if evt_time > snap_dt:
-                break
+        while evt_idx < len(events) and events[evt_idx][0] <= snap_dt:
+            evt_time, _order, evt_type, watch_id, symbol, entry_price, pnl_pct = events[evt_idx]
             if evt_type == "entry":
-                holdings[symbol] = entry_price
+                wj = watch_meta.get(watch_id) or {}
+                direction = str((wj.get("entry") or {}).get("direction") or "bullish")
+                holdings[watch_id] = (symbol, entry_price, direction)
             elif evt_type == "exit":
-                holdings.pop(symbol, None)
+                holdings.pop(watch_id, None)
                 realized_dollar += pos_size * pnl_pct / 100
+            evt_idx += 1
 
-        # Compute unrealized PnL from current prices
         unrealized_dollar = 0.0
-        for symbol, entry_price in holdings.items():
+        for symbol, entry_price, direction in holdings.values():
             ts_list, px_list = price_cache.get(symbol, ([], []))
-            current_price = lookup_price(ts_list, px_list, snap_ts)
-            if current_price and entry_price:
-                upnl_pct = (current_price - entry_price) / entry_price * 100
+            current_price, px_ts = lookup_price_at_or_before(ts_list, px_list, snap_ts)
+            if current_price is None or not entry_price:
+                missing_price_total += 1
+                continue
+            age_min = (snap_ts - px_ts) / 60.0
+            if age_min > 60:
+                stale_price_total += 1
+            upnl_pct = compute_pct_pnl(entry_price, current_price, direction)
+            if upnl_pct is not None:
                 unrealized_dollar += pos_size * upnl_pct / 100
 
         holding_count = len(holdings)
@@ -189,9 +237,14 @@ def process_config(conn, market, config_id: str, price_cache: dict, dry_run: boo
         conn.commit()
 
     print(f"  {'DRY RUN — ' if dry_run else ''}Updated {updated} of {len(snapshots)} snapshots\n")
+    if missing_price_total or stale_price_total:
+        print(
+            f"  Price coverage notes: missing-lookups={missing_price_total}, "
+            f"stale-lookups(>60m)={stale_price_total}\n",
+        )
 
 
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--config-id", default=None)
@@ -203,7 +256,7 @@ def main():
 
     conn = sqlite3.connect(DB_PATH, timeout=10)
     conn.row_factory = sqlite3.Row
-    market = MarketDataService()
+    schwab = SchwabMarketClient()
 
     # Shared price cache across configs
     price_cache: dict[str, tuple[list[float], list[float]]] = {}
@@ -225,7 +278,7 @@ def main():
 
     for cid in config_ids:
         print(f"=== {cid} ===")
-        process_config(conn, market, cid, price_cache, args.dry_run)
+        process_config(conn, schwab, cid, price_cache, args.dry_run)
 
     conn.close()
 

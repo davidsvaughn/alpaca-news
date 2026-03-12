@@ -15,7 +15,7 @@ For overlapping tools (fundamentals, price history), tries Schwab → yfinance.
 from __future__ import annotations
 
 import os
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 DEBUG = os.getenv("DEBUG", "false").lower() in ("true", "1")
@@ -61,6 +61,49 @@ class MarketDataService:
     # ------------------------------------------------------------------
     # Overlapping tools (Schwab → yfinance fallback)
     # ------------------------------------------------------------------
+
+    def get_latest_minute_closes(self, symbols: list[str]) -> dict[str, float]:
+        """Latest 1-minute close at-or-before now for each symbol.
+
+        Intended for canonical portfolio marking where consistency matters
+        more than quote freshness. Uses Schwab intraday candles and returns
+        only symbols with a usable close.
+        """
+        result: dict[str, float] = {}
+        if not symbols:
+            return result
+
+        if self._schwab.available:
+            # Use the most recently completed minute, not an in-progress bar.
+            end = datetime.now(tz=timezone.utc).replace(second=0, microsecond=0) - timedelta(minutes=1)
+            start = end - timedelta(minutes=5)
+            for sym in symbols:
+                try:
+                    candles = self._schwab.get_candles_by_date_range(
+                        _schwab_symbol(sym),
+                        start=start,
+                        end=end,
+                        frequency=1,
+                        extended_hours=True,
+                    )
+                    if not candles:
+                        continue
+                    # Date-range lookup is more stable than "latest intraday" for
+                    # completed-minute portfolio marks.
+                    usable = [
+                        c for c in candles
+                        if datetime.fromisoformat(c.t.replace("Z", "+00:00")) <= end
+                    ]
+                    if not usable:
+                        continue
+                    close = usable[-1].c
+                    if close is not None and float(close) > 0:
+                        result[sym.upper()] = float(close)
+                except Exception:
+                    if DEBUG:
+                        raise
+
+        return result
 
     def get_fundamentals(self, symbol: str) -> dict[str, Any]:
         """Get company fundamentals. Tries Schwab, falls back to yfinance.
@@ -271,7 +314,7 @@ class MarketDataService:
     # ------------------------------------------------------------------
 
     def get_quote(self, symbol: str) -> dict[str, Any]:
-        """Real-time quote snapshot. Tries Schwab, falls back to yfinance."""
+        """Real-time quote snapshot. Tries Schwab, then yfinance, then Finnhub."""
         if self._schwab.available:
             try:
                 quote = self._schwab.get_quote(_schwab_symbol(symbol))
@@ -283,10 +326,24 @@ class MarketDataService:
                 if DEBUG:
                     raise
         # Fallback to yfinance
-        return self._yfinance.get_quote(_yfinance_symbol(symbol))
+        yf_q = self._yfinance.get_quote(_yfinance_symbol(symbol))
+        yf_last = yf_q.get("last_price") if isinstance(yf_q, dict) else None
+        if yf_q and "error" not in yf_q and yf_last not in (None, 0):
+            return yf_q
+
+        # Final fallback: Finnhub (if FINNHUB_API_KEY is configured)
+        try:
+            from trader.market.finnhub_client import get_quote as finnhub_get_quote
+            fh_q = finnhub_get_quote(symbol)
+            if fh_q and fh_q.get("last_price") not in (None, 0):
+                return fh_q
+        except Exception:
+            if DEBUG:
+                raise
+        return yf_q if isinstance(yf_q, dict) else {}
 
     def get_quotes(self, symbols: list[str]) -> dict[str, dict[str, Any]]:
-        """Batch real-time quotes. Tries Schwab batch, falls back to yfinance."""
+        """Batch real-time quotes. Tries Schwab batch, then yfinance, then Finnhub."""
         result: dict[str, dict[str, Any]] = {}
         if not symbols:
             return result
@@ -303,14 +360,35 @@ class MarketDataService:
             except Exception:
                 if DEBUG:
                     raise
-        # Fallback: yfinance per-symbol
+        # Fallback 1: yfinance per-symbol
+        missing: list[str] = []
         for sym in symbols:
             try:
                 q = self._yfinance.get_quote(_yfinance_symbol(sym))
-                if q and "error" not in q:
+                last = q.get("last_price") if isinstance(q, dict) else None
+                if q and "error" not in q and last not in (None, 0):
                     result[sym] = q
+                else:
+                    missing.append(sym)
             except Exception:
-                pass
+                missing.append(sym)
+
+        # Fallback 2: Finnhub for symbols still missing a usable quote
+        if missing:
+            try:
+                from trader.market.finnhub_client import get_quote as finnhub_get_quote
+
+                for sym in missing:
+                    try:
+                        q = finnhub_get_quote(sym)
+                        if q and q.get("last_price") not in (None, 0):
+                            result[sym] = q
+                    except Exception:
+                        if DEBUG:
+                            raise
+            except Exception:
+                if DEBUG:
+                    raise
         return result
 
     def get_quotes_with_fundamentals(

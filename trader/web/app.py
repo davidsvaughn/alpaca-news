@@ -37,6 +37,7 @@ from trader.db.database import (
     get_daily_cost_history,
     get_daily_cost_today,
     get_daily_cost_today_by_provider,
+    get_equity_history,
     get_follow_ups_by_snapshot,
     get_live_config,
     get_recent_events,
@@ -60,6 +61,12 @@ from trader.online.activity_tracker import ActivityTracker
 from trader.online.event_bus import EventBus, PipelineEvent
 from trader.online.online_mode import OnlineMode
 from trader.reflection.eval_record import build_eval_record, snapshot_export_to_markdown
+from trader.valuation import (
+    backfill_watch_qty,
+    compute_pct_pnl,
+    extract_quote_price,
+    summarize_sim_portfolio,
+)
 from trader.web.sse import sse_response
 
 
@@ -1372,14 +1379,15 @@ def create_app(
         if all_holding_symbols:
             try:
                 market = getattr(app.state, "market", None)
-                if market and hasattr(market, "get_quotes"):
+                if market and hasattr(market, "get_latest_minute_closes"):
+                    prices = market.get_latest_minute_closes(list(all_holding_symbols)) or {}
+                elif market and hasattr(market, "get_quotes"):
                     quotes = market.get_quotes(list(all_holding_symbols))
                     if isinstance(quotes, dict):
                         for sym, q in quotes.items():
-                            if isinstance(q, dict):
-                                p_val = q.get("lastPrice") or q.get("last_price") or q.get("mark")
-                                if p_val:
-                                    prices[sym.upper()] = float(p_val)
+                            p_val = extract_quote_price(q)
+                            if p_val is not None:
+                                prices[sym.upper()] = p_val
             except Exception:
                 pass  # prices stay empty — template handles gracefully
 
@@ -1458,13 +1466,11 @@ def create_app(
             return wall_minutes, market_minutes
 
         def _backfill_qty(w: dict, cfg: dict | None = None) -> dict:
-            entry_price = w.get("entry", {}).get("price", 0)
             # Backfill qty for older watches that don't have it
-            if not w.get("qty") and cfg and entry_price and entry_price > 0:
-                starting = cfg.get("starting_capital", 0)
-                alloc_pct = float((cfg.get("allocation_params") or {}).get("alloc_pct", 5))
-                if starting and alloc_pct:
-                    w["qty"] = (starting * alloc_pct / 100.0) / entry_price
+            if not w.get("qty") and cfg:
+                qty = backfill_watch_qty(w, cfg)
+                if qty and qty > 0:
+                    w["qty"] = qty
             return w
 
         def _enrich_exited(w: dict, cfg: dict | None = None) -> dict:
@@ -1483,11 +1489,15 @@ def create_app(
 
         def _enrich_holding(w: dict, cfg: dict | None = None) -> dict:
             sym = w.get("symbol", "").upper()
-            entry_price = w.get("entry", {}).get("price", 0)
             cur = prices.get(sym)
             w["current_price"] = cur
-            if cur and entry_price and entry_price > 0:
-                pnl = (cur - entry_price) / entry_price * 100
+            entry = w.get("entry", {}) or {}
+            pnl = compute_pct_pnl(
+                float(entry.get("price") or 0),
+                cur,
+                str(entry.get("direction") or "bullish"),
+            )
+            if pnl is not None:
                 w["unrealized_pnl"] = round(pnl, 2)
             else:
                 w["unrealized_pnl"] = None
@@ -1517,37 +1527,12 @@ def create_app(
                 ending = alpaca_equity
                 return_pct = (ending - starting) / starting * 100 if starting > 0 else 0.0
             else:
-                # Fallback: sim calculation for virtual-only portfolios
-                alloc = cfg.get("allocation", "") if isinstance(cfg, dict) else getattr(cfg, "allocation", "")
-                alloc_params = cfg.get("allocation_params", {}) if isinstance(cfg, dict) else getattr(cfg, "allocation_params", {})
-
-                if alloc == "max_positions":
-                    max_pos = int((alloc_params or {}).get("max_pos", 10))
-                elif alloc in ("fixed_dollar", "ranking_realloc"):
-                    alloc_pct = float((alloc_params or {}).get("alloc_pct", 5))
-                    max_pos = max(1, int(100 / alloc_pct))
-                else:
-                    max_pos = 20
-
-                pos_size = starting / max_pos
-                total_dollar_pnl = 0.0
-
-                for w in p.get("closed", []) + p.get("cooling", []):
-                    wd = w if isinstance(w, dict) else w.__dict__ if hasattr(w, "__dict__") else {}
-                    ex = wd.get("exit") if isinstance(wd, dict) else getattr(wd, "exit", None)
-                    if ex:
-                        ex_d = ex if isinstance(ex, dict) else getattr(ex, "__dict__", {})
-                        rpnl = ex_d.get("realized_pnl_pct")
-                        if rpnl is not None:
-                            total_dollar_pnl += pos_size * float(rpnl) / 100
-
-                for w in p.get("holding", []):
-                    wd = w if isinstance(w, dict) else w.__dict__ if hasattr(w, "__dict__") else {}
-                    upnl = wd.get("unrealized_pnl")
-                    if upnl is not None:
-                        total_dollar_pnl += pos_size * float(upnl) / 100
-
-                ending = starting + total_dollar_pnl
+                valuation = summarize_sim_portfolio(
+                    p.get("holding", []) + p.get("closed", []) + p.get("cooling", []),
+                    cfg,
+                    prices,
+                )
+                ending = valuation["equity"]
                 return_pct = (ending - starting) / starting * 100 if starting > 0 else 0.0
 
             # Daily return (CAGR-based) over trading-day span
@@ -1612,6 +1597,8 @@ def create_app(
             if acct_id and isinstance(cfg, dict):
                 cfg["alpaca_account_name"] = alpaca_name_by_account.get(acct_id, "")
             p["sim"] = _compute_sim(p, alpaca_equity=alpaca_equity)
+            cfg_id = cfg.get("config_id") if isinstance(cfg, dict) else getattr(cfg, "config_id", None)
+            p["equity_history"] = get_equity_history(db, cfg_id, limit=2000) if cfg_id else []
 
         # Wrap for Jinja
         for p in portfolios:
@@ -1872,6 +1859,10 @@ def create_app(
         For Alpaca-linked configs, this endpoint first liquidates all current
         Alpaca positions in the linked account, then reconciles watches, then
         deletes the config.
+
+        For linked accounts this is asynchronous: sell orders are submitted
+        immediately and the final reconcile/delete happens in a background
+        thread. This avoids blocking the request for minutes on thin fills.
         """
         cfg_dict = get_live_config(db, config_id)
         if not cfg_dict:
@@ -1885,6 +1876,8 @@ def create_app(
         alpaca_id = cfg_dict.get("alpaca_account_id")
         if alpaca_id:
             try:
+                import threading
+                import time as _time
                 from trader.market.alpaca_broker import AlpacaAccountRegistry, AlpacaBroker
                 from trader.market.alpaca_reconcile import reconcile
                 from trader.models.live_config import LiveConfig
@@ -1920,38 +1913,93 @@ def create_app(
                     name=creds.name,
                 )
 
-                # Flatten the entire linked Alpaca account before delete.
+                # Stop new work on this config immediately.
+                deactivate_live_config(db, config_id)
+                try:
+                    from trader.online import orchestrator as _orch
+                    _orch.sync_alpaca_trade_streams(db=db, bus=bus, reason=f"delete-start:{config_id}")
+                except Exception:
+                    pass
+
+                # Submit liquidation orders quickly; do not wait per symbol here.
                 positions = broker.get_positions()
                 liquidation["attempted"] = len(positions)
+                pending_order_ids: list[str] = []
                 for pos in positions:
                     try:
-                        result = broker.close_position_and_confirm(pos.symbol)
+                        result = broker.close_position(pos.symbol)
                         if result is not None:
                             liquidation["submitted"] += 1
+                            if result.order_id:
+                                pending_order_ids.append(result.order_id)
                     except Exception as e:
                         liquidation["failed"].append({
                             "symbol": pos.symbol,
                             "error": str(e),
                         })
 
-                if liquidation["failed"]:
-                    return JSONResponse(
-                        {
-                            "error": "liquidation_failed",
-                            "config_id": config_id,
-                            "alpaca_account_id": alpaca_id,
-                            "liquidation": liquidation,
-                        },
-                        status_code=409,
-                    )
+                def _poll_reconcile_and_delete() -> None:
+                    import logging as _logging
 
-                # Sync watch state to confirmed sells before deleting config.
-                cfg = LiveConfig.from_dict(cfg_dict)
-                reconcile(
-                    broker=broker,
-                    db=db,
-                    live_config_id=config_id,
-                    live_config=cfg,
+                    _log = _logging.getLogger(__name__)
+                    _TERMINAL = {"filled", "canceled", "expired", "rejected", "suspended"}
+                    deadline = _time.monotonic() + 300.0
+
+                    while pending_order_ids and _time.monotonic() < deadline:
+                        all_done = True
+                        for oid in pending_order_ids:
+                            r = broker.get_order(oid)
+                            if r and str(r.status).lower() not in _TERMINAL:
+                                all_done = False
+                                break
+                        if all_done:
+                            break
+                        _time.sleep(2.0)
+
+                    try:
+                        cfg = LiveConfig.from_dict(cfg_dict)
+                        reconcile(
+                            broker=broker,
+                            db=db,
+                            live_config_id=config_id,
+                            live_config=cfg,
+                        )
+                    except Exception:
+                        _log.exception("DELETE: reconcile failed for %s", config_id)
+
+                    holding_count = count_holding_watches(db, live_config_id=config_id)
+                    if holding_count > 0:
+                        _log.warning(
+                            "DELETE: %s still has %d holding watch(es) after liquidation; leaving config inactive",
+                            config_id,
+                            holding_count,
+                        )
+                        return
+
+                    ok = delete_live_config(db, config_id)
+                    if ok:
+                        _log.info("DELETE: removed config %s after background liquidation", config_id)
+                        try:
+                            from trader.online import orchestrator as _orch
+                            _orch.sync_alpaca_trade_streams(db=db, bus=bus, reason=f"delete-finish:{config_id}")
+                        except Exception:
+                            pass
+
+                t = threading.Thread(
+                    target=_poll_reconcile_and_delete,
+                    daemon=True,
+                    name=f"delete-liquidate-{config_id[:8]}",
+                )
+                t.start()
+
+                return JSONResponse(
+                    {
+                        "status": "liquidation_started",
+                        "config_id": config_id,
+                        "alpaca_account_id": alpaca_id,
+                        "liquidation": liquidation,
+                    },
+                    status_code=202,
                 )
             except Exception as e:
                 return JSONResponse(

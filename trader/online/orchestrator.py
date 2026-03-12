@@ -1374,6 +1374,7 @@ def run_watch_loop(
         # monitor won't try to attach/stream via the trader app's Schwab client.
 
         # Create shared MarketDataService (API calls only, no streaming)
+        _live_market = None
         try:
             from trader.market.data_service import MarketDataService
             _live_market = MarketDataService()
@@ -1436,6 +1437,7 @@ def run_watch_loop(
         live_monitor = LiveExitMonitor(
             db=db, bus=bus, data_dir=settings.data_dir,
             collector=_live_collector, broker_pool=_broker_pool,
+            market=_live_market,
         )
         live_monitor_thread = threading.Thread(
             target=live_monitoring_loop,

@@ -30,6 +30,7 @@ from trader.db.database import (
     Database,
     count_holding_watches,
     get_active_live_configs,
+    get_all_live_configs,
     get_live_config,
     get_active_watches,
     insert_watch,
@@ -46,6 +47,11 @@ from trader.market.backtest import (
 from trader.market.market_hours import ET, add_market_hours, is_market_open, is_trading_session_open
 from trader.models.live_config import LiveConfig
 from trader.models.watch import WatchBuilder
+from trader.valuation import (
+    extract_quote_price,
+    position_size_for_config,
+    summarize_sim_portfolio,
+)
 
 log = logging.getLogger(__name__)
 
@@ -69,15 +75,22 @@ class LiveExitMonitor:
         data_dir: str = "data",
         collector: Any = None,  # VolumeDeltaCollector (optional)
         broker_pool: Any = None,  # AlpacaBrokerPool (optional)
+        market: Any = None,     # MarketDataService (optional, for sim equity)
     ) -> None:
         self.db = db
         self.bus = bus
         self.data_dir = data_dir
         self.collector = collector
         self.broker_pool = broker_pool  # When set, exits close Alpaca positions
+        self.market = market
         # Per-symbol indicator cache (reused across cycles to avoid
         # recomputing indicators on unchanged bar history).
         self._indicator_caches: dict[str, dict[tuple[Any, ...], Any]] = {}
+
+    @staticmethod
+    def _quote_price(q: dict[str, Any] | None) -> float | None:
+        """Extract a usable price from mixed vendor quote payloads."""
+        return extract_quote_price(q)
 
     def _get_broker_for_watch(self, watch_dict: dict[str, Any]) -> Any:
         """Look up the Alpaca broker for a watch's LiveConfig. Returns None if not linked."""
@@ -117,8 +130,26 @@ class LiveExitMonitor:
         if not watches:
             return
 
+        cfg_rows = get_all_live_configs(self.db)
+        active_config_ids = {
+            str(c.get("config_id"))
+            for c in cfg_rows
+            if c.get("active")
+        }
+        known_config_ids = {
+            str(c.get("config_id"))
+            for c in cfg_rows
+            if c.get("config_id")
+        }
+
         for watch_dict in watches:
             try:
+                cfg_id = str(watch_dict.get("live_config_id") or "")
+                if cfg_id:
+                    if cfg_id not in known_config_ids:
+                        continue
+                    if cfg_id not in active_config_ids:
+                        continue
                 status = watch_dict.get("status")
                 if status == "holding":
                     self._check_holding(watch_dict)
@@ -199,13 +230,13 @@ class LiveExitMonitor:
 
         config_dict = self._get_config_for_watch(watch_dict)
         if not config_dict:
-            log.error(
+            log.debug(
                 "Watch %s (%s): cannot evaluate holding without valid config; skipping",
                 watch_id, symbol,
             )
             return
         if not config_dict.get("active", False):
-            log.error(
+            log.debug(
                 "Watch %s (%s): config %s is inactive; skipping holding evaluation",
                 watch_id, symbol, config_dict.get("config_id"),
             )
@@ -727,8 +758,7 @@ class LivePortfolioManager:
                             symbol, existing_pos.qty)
                 return False
 
-            alloc_pct = float((cfg.allocation_params or {}).get("alloc_pct", 5))
-            position_size = cfg.starting_capital * alloc_pct / 100.0
+            position_size = position_size_for_config(cfg) or 0.0
 
             # Guard: don't buy if we can't afford at least 1 whole share
             if entry_price > 0 and position_size / entry_price < 1.0:
@@ -811,9 +841,9 @@ class LivePortfolioManager:
                 try:
                     quotes = self.market.get_quotes([symbol])
                     q = (quotes or {}).get(symbol.upper()) or (quotes or {}).get(symbol) or {}
-                    fresh = q.get("lastPrice") or q.get("last_price")
-                    if fresh and float(fresh) > 0:
-                        entry_price = float(fresh)
+                    fresh = self._quote_price(q)
+                    if fresh is not None:
+                        entry_price = fresh
                         from trader.models.watch import WatchEntry
                         wb.entry = WatchEntry(
                             snapshot_id=wb.entry.snapshot_id,
@@ -828,8 +858,7 @@ class LivePortfolioManager:
                 except Exception:
                     log.warning("Could not fetch fresh price for %s — using snapshot price", symbol)
 
-            alloc_pct = float((cfg.allocation_params or {}).get("alloc_pct", 5))
-            position_size = cfg.starting_capital * alloc_pct / 100.0
+            position_size = position_size_for_config(cfg) or 0.0
             if entry_price and entry_price > 0:
                 wb.qty = position_size / entry_price
 
@@ -946,9 +975,9 @@ class LivePortfolioManager:
                     quotes = self.market.get_quotes(syms)
                     for sym in syms:
                         q = (quotes or {}).get(sym) or {}
-                        price = q.get("lastPrice") or q.get("last_price")
-                        if price and float(price) > 0:
-                            alpaca_prices[sym] = float(price)
+                        price = self._quote_price(q)
+                        if price is not None:
+                            alpaca_prices[sym] = price
                 except Exception:
                     log.warning("Could not fetch quotes for non-Alpaca ranking")
 
@@ -1180,9 +1209,9 @@ class LivePortfolioManager:
                 try:
                     quotes = self.market.get_quotes([symbol])
                     q = (quotes or {}).get(symbol.upper()) or (quotes or {}).get(symbol) or {}
-                    fresh = q.get("lastPrice") or q.get("last_price")
-                    if fresh and float(fresh) > 0:
-                        exit_price = float(fresh)
+                    fresh = self._quote_price(q)
+                    if fresh is not None:
+                        exit_price = fresh
                 except Exception:
                     log.warning("Could not fetch exit price for %s — using entry price", symbol)
 
@@ -1305,9 +1334,15 @@ class LivePortfolioManager:
         price = None
         if isinstance(quote, dict):
             q = quote.get(symbol.upper()) or quote.get(symbol) or {}
-            price = q.get("lastPrice") or q.get("last_price")
+            price = self._quote_price(q)
         if price is None:
-            price = data.get("lastPrice") or data.get("regularMarketPrice")
+            price = (
+                data.get("lastPrice")
+                or data.get("last_price")
+                or data.get("regularMarketPrice")
+                or data.get("mark")
+                or data.get("close")
+            )
 
         metrics = {
             "price": float(price) if price else None,
@@ -1487,50 +1522,54 @@ def _snapshot_equity(monitor: LiveExitMonitor, last_time: float) -> float:
                     except Exception:
                         log.debug("Alpaca equity fetch failed for %s, using sim", config_id)
 
-            # Sim calculation (same logic as _compute_sim in app.py)
+            # Sim calculation uses shared valuation helpers so app render and live snapshots
+            # answer the same question with the same math.
             watches = by_config.get(config_id, [])
-            alloc = cfg_dict.get("allocation", "")
-            alloc_params = cfg_dict.get("allocation_params") or {}
+            holding_symbols = sorted({
+                str(w.get("symbol") or "").upper()
+                for w in watches
+                if str(w.get("status") or "") == "holding" and w.get("symbol")
+            })
 
-            if alloc == "max_positions":
-                max_pos = int(alloc_params.get("max_pos", 10))
-            elif alloc in ("fixed_dollar", "ranking_realloc"):
-                alloc_pct = float(alloc_params.get("alloc_pct", 5))
-                max_pos = max(1, int(100 / alloc_pct))
-            else:
-                max_pos = 20
+            # Fetch canonical minute marks for all holdings so live rows match
+            # the same style of valuation used by backfill.
+            quote_fetch_failed = False
+            prices: dict[str, float] = {}
+            if holding_symbols and monitor.market:
+                try:
+                    if hasattr(monitor.market, "get_latest_minute_closes"):
+                        prices = monitor.market.get_latest_minute_closes(holding_symbols) or {}
+                    else:
+                        quotes = monitor.market.get_quotes(holding_symbols)
+                        for sym in holding_symbols:
+                            q = (quotes or {}).get(sym.upper()) or (quotes or {}).get(sym) or {}
+                            cp = extract_quote_price(q)
+                            if cp is not None:
+                                prices[sym] = cp
+                except Exception:
+                    quote_fetch_failed = True
+                    log.debug("Failed to fetch minute marks for sim unrealized PnL")
 
-            pos_size = starting / max_pos
-            realized_dollar = 0.0
-            unrealized_dollar = 0.0
-            holding_count = 0
-
-            for w in watches:
-                status = w.get("status", "")
-                if status in ("exited", "cooling_off", "sealed", "retrospective"):
-                    ex = w.get("exit")
-                    if ex:
-                        rpnl = ex.get("realized_pnl_pct")
-                        if rpnl is not None:
-                            realized_dollar += pos_size * float(rpnl) / 100
-                elif status == "holding":
-                    holding_count += 1
-                    upnl = w.get("unrealized_pnl")
-                    if upnl is not None:
-                        unrealized_dollar += pos_size * float(upnl) / 100
-
-            equity = starting + realized_dollar + unrealized_dollar
-            cash = starting - (holding_count * pos_size) + realized_dollar
+            # Avoid writing bad "drop to cash" points when quote data is unavailable.
+            valuation = summarize_sim_portfolio(watches, cfg_dict, prices)
+            if holding_symbols and (quote_fetch_failed or valuation["priced_holding_count"] < len(holding_symbols)):
+                log.warning(
+                    "Skipping equity snapshot for %s: usable marks for %d/%d holdings",
+                    config_id,
+                    valuation["priced_holding_count"],
+                    len(holding_symbols),
+                )
+                continue
 
             insert_equity_snapshot(
                 monitor.db,
                 config_id=config_id,
                 timestamp=ts_now,
-                equity=round(equity, 2),
-                cash=round(cash, 2),
-                unrealized_pnl=round(unrealized_dollar, 2),
-                realized_pnl=round(realized_dollar, 2),
-                position_count=holding_count,
+                equity=valuation["equity"],
+                cash=valuation["cash"],
+                unrealized_pnl=valuation["unrealized_dollar"],
+                realized_pnl=valuation["realized_dollar"],
+                position_count=valuation["holding_count"],
                 source="live",
             )
 

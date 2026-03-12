@@ -1,131 +1,238 @@
-"""One-time backfill of peak_pnl_pct / trough_pnl_pct for existing watches.
-
-Fetches 1-min bars for each watch's holding period and computes the
-highest and lowest unrealized P&L that occurred.
-
-Usage:
-    uv run python scripts/backfill_pnl_extremes.py [--dry-run]
-"""
+"""Backfill peak/trough PnL metrics for watches from 1-minute market history."""
 
 from __future__ import annotations
 
 import argparse
+import json
+import sqlite3
 import sys
-from datetime import datetime, timedelta
+from bisect import bisect_left, bisect_right
+from datetime import datetime, timedelta, timezone
+from typing import Any
 
-import pandas as pd
+from dotenv import load_dotenv
 
-from trader.db.database import get_all_watches, open_sqlite, update_watch
-from trader.market.backtest import _filter_trading_hours, _get_ohlcv_1m
-from trader.market.market_hours import ET
-from trader.models.watch import WatchBuilder
+load_dotenv(".env", override=False)
+sys.path.insert(0, ".")
+
+from trader.market.schwab_client import Candle, SchwabMarketClient
 
 
-def backfill_watch(db, watch_dict: dict, *, dry_run: bool = False) -> bool:
-    """Compute and store peak/trough P&L for one watch. Returns True if updated."""
-    entry = watch_dict.get("entry", {})
-    entry_price = entry.get("price")
-    entry_time_str = entry.get("time")
-    symbol = watch_dict.get("symbol")
-    watch_id = watch_dict.get("watch_id")
+def parse_iso(value: str) -> datetime:
+    dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
 
-    if not entry_price or not entry_time_str or not symbol:
-        return False
 
-    # Already has values?
-    if watch_dict.get("peak_pnl_pct") is not None and watch_dict.get("trough_pnl_pct") is not None:
-        return False
+def _select_watches(
+    conn: sqlite3.Connection,
+    config_ids: list[str] | None,
+) -> list[dict[str, Any]]:
+    if config_ids:
+        placeholders = ",".join(["?"] * len(config_ids))
+        rows = conn.execute(
+            f"""
+            SELECT watch_json
+            FROM watches
+            WHERE json_extract(watch_json, '$.live_config_id') IN ({placeholders})
+            ORDER BY created_at
+            """,
+            config_ids,
+        ).fetchall()
+    else:
+        rows = conn.execute("SELECT watch_json FROM watches ORDER BY created_at").fetchall()
+    out: list[dict[str, Any]] = []
+    for r in rows:
+        raw = r[0]
+        out.append(json.loads(raw) if isinstance(raw, str) else raw)
+    return out
 
-    try:
-        entry_dt = datetime.fromisoformat(entry_time_str)
-    except (ValueError, TypeError):
-        print(f"  SKIP {watch_id} ({symbol}): bad entry time")
-        return False
 
-    # Determine end time: exit time if exited, else now
-    exit_data = watch_dict.get("exit")
-    if exit_data and exit_data.get("time"):
+def _symbol_windows(watches: list[dict[str, Any]], now_utc: datetime) -> dict[str, tuple[datetime, datetime]]:
+    windows: dict[str, tuple[datetime, datetime]] = {}
+    for w in watches:
+        entry = w.get("entry") or {}
+        symbol = str(w.get("symbol") or "").upper()
+        if not symbol or not entry.get("time"):
+            continue
         try:
-            end_dt = datetime.fromisoformat(exit_data["time"])
-        except (ValueError, TypeError):
-            end_dt = datetime.now()
+            entry_dt = parse_iso(entry["time"])
+        except Exception:
+            continue
+        ex = w.get("exit") or {}
+        if ex and ex.get("time"):
+            try:
+                end_dt = parse_iso(ex["time"])
+            except Exception:
+                end_dt = now_utc
+        else:
+            end_dt = now_utc
+        start = entry_dt - timedelta(hours=2)
+        end = end_dt + timedelta(minutes=2)
+        cur = windows.get(symbol)
+        if cur is None:
+            windows[symbol] = (start, end)
+        else:
+            windows[symbol] = (min(cur[0], start), max(cur[1], end))
+    return windows
+
+
+def _fetch_series(
+    schwab: SchwabMarketClient,
+    windows: dict[str, tuple[datetime, datetime]],
+) -> dict[str, list[tuple[datetime, float]]]:
+    out: dict[str, list[tuple[datetime, float]]] = {}
+    total = len(windows)
+    for i, (sym, (start, end)) in enumerate(sorted(windows.items()), 1):
+        try:
+            candles: list[Candle] = schwab.get_candles_by_date_range(
+                sym,
+                start=start,
+                end=end,
+                frequency=1,
+                extended_hours=True,
+            )
+            pts = [(parse_iso(c.t), float(c.c)) for c in candles]
+            pts.sort(key=lambda x: x[0])
+            out[sym] = pts
+        except Exception:
+            out[sym] = []
+        if i % 20 == 0 or i == total:
+            print(f"  fetched {i}/{total} symbols")
+    return out
+
+
+def _pnl_pct(entry: float, px: float, direction: str) -> float:
+    if entry <= 0:
+        return 0.0
+    p = (px - entry) / entry * 100.0
+    if str(direction).lower() == "bearish":
+        p = -p
+    return p
+
+
+def _compute_peak_trough(
+    watch: dict[str, Any],
+    series: list[tuple[datetime, float]],
+    now_utc: datetime,
+) -> tuple[float, float] | None:
+    entry = watch.get("entry") or {}
+    ex = watch.get("exit") or {}
+    entry_price = float(entry.get("price") or 0)
+    if entry_price <= 0 or not entry.get("time"):
+        return None
+    try:
+        entry_dt = parse_iso(entry["time"])
+    except Exception:
+        return None
+
+    if ex and ex.get("time"):
+        try:
+            end_dt = parse_iso(ex["time"])
+        except Exception:
+            end_dt = now_utc
     else:
-        end_dt = datetime.now()
+        end_dt = now_utc
+    if end_dt < entry_dt:
+        end_dt = entry_dt
 
-    start_date = (entry_dt - timedelta(days=2)).strftime("%Y-%m-%d")
-    bars = _get_ohlcv_1m(symbol, start_date)
-    if bars is None or bars.empty:
-        print(f"  SKIP {watch_id} ({symbol}): no bar data")
-        return False
+    direction = str(entry.get("direction") or "bullish")
+    prices: list[float] = [entry_price]
 
-    bars = _filter_trading_hours(bars, market_close=None)
-    if bars.empty:
-        return False
+    if series:
+        times = [t for t, _ in series]
+        i0 = bisect_left(times, entry_dt)
+        i1 = bisect_right(times, end_dt)
+        for _, px in series[i0:i1]:
+            prices.append(px)
 
-    # Find entry bar
-    if entry_dt.tzinfo is not None:
-        entry_dt_et = entry_dt.astimezone(ET).replace(tzinfo=None)
-    else:
-        entry_dt_et = entry_dt
-    entry_ts = pd.Timestamp(entry_dt_et).floor("s")
-    entry_idx = bars.index.searchsorted(entry_ts)
-    # Clamp: if entry is after all bars, use last bar only
-    if entry_idx >= len(bars):
-        entry_idx = len(bars) - 1
+    exit_px = ex.get("price")
+    if exit_px is not None:
+        try:
+            prices.append(float(exit_px))
+        except Exception:
+            pass
 
-    # Find end bar
-    if end_dt.tzinfo is not None:
-        end_dt_et = end_dt.astimezone(ET).replace(tzinfo=None)
-    else:
-        end_dt_et = end_dt
-    end_ts = pd.Timestamp(end_dt_et).floor("s")
-    end_idx = bars.index.searchsorted(end_ts, side="right")
-    end_idx = min(end_idx, len(bars))
-
-    # Compute P&L at each bar's close
-    holding_bars = bars.iloc[entry_idx:end_idx]
-    if holding_bars.empty:
-        # Fallback: use last bar
-        holding_bars = bars.iloc[-1:]
-
-    closes = holding_bars["Close"].values
-    pnl_pcts = ((closes - entry_price) / entry_price) * 100.0
-
-    peak = round(float(pnl_pcts.max()), 4)
-    trough = round(float(pnl_pcts.min()), 4)
-
-    print(f"  {watch_id} ({symbol}): peak={peak:+.2f}% trough={trough:+.2f}% ({len(holding_bars)} bars)")
-
-    if not dry_run:
-        builder = WatchBuilder.from_dict(watch_dict)
-        builder.peak_pnl_pct = peak
-        builder.trough_pnl_pct = trough
-        updated = builder.to_watch()
-        update_watch(db, watch_id, updated.to_dict())
-
-    return True
+    pnl_vals = [_pnl_pct(entry_price, px, direction) for px in prices if px > 0]
+    if not pnl_vals:
+        return None
+    return round(max(pnl_vals), 4), round(min(pnl_vals), 4)
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Backfill peak/trough P&L for watches")
-    parser.add_argument("--dry-run", action="store_true", help="Preview without writing")
-    parser.add_argument("--db", default="data/trader.db", help="SQLite DB path")
+    parser = argparse.ArgumentParser(description="Backfill peak/trough watch PnL")
+    parser.add_argument("--db", default="data/trader.db")
+    parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument(
+        "--config-id",
+        action="append",
+        help="Live config ID(s) to process (repeatable). Default: all watches.",
+    )
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Recompute even if peak/trough already exist.",
+    )
     args = parser.parse_args()
 
-    db = open_sqlite(args.db)
-    watches = get_all_watches(db)
-    print(f"Found {len(watches)} watches")
+    conn = sqlite3.connect(args.db, timeout=10)
+    conn.row_factory = sqlite3.Row
+    now_utc = datetime.now(tz=timezone.utc)
+
+    watches = _select_watches(conn, args.config_id)
+    if not watches:
+        print("No watches found.")
+        return
+    print(f"Loaded {len(watches)} watches")
+
+    candidates: list[dict[str, Any]] = []
+    for w in watches:
+        if not args.force and w.get("peak_pnl_pct") is not None and w.get("trough_pnl_pct") is not None:
+            continue
+        candidates.append(w)
+    print(f"Candidates: {len(candidates)}")
+    if not candidates:
+        return
+
+    windows = _symbol_windows(candidates, now_utc)
+    print(f"Fetching Schwab ranges for {len(windows)} symbols...")
+    schwab = SchwabMarketClient()
+    by_symbol = _fetch_series(schwab, windows)
 
     updated = 0
-    for w in watches:
-        try:
-            if backfill_watch(db, w, dry_run=args.dry_run):
-                updated += 1
-        except Exception as e:
-            print(f"  ERROR {w.get('watch_id')}: {e}")
+    skipped = 0
+    for w in candidates:
+        watch_id = w.get("watch_id")
+        symbol = str(w.get("symbol") or "").upper()
+        result = _compute_peak_trough(w, by_symbol.get(symbol, []), now_utc)
+        if result is None:
+            skipped += 1
+            continue
+        peak, trough = result
+        old_peak = w.get("peak_pnl_pct")
+        old_trough = w.get("trough_pnl_pct")
+        if old_peak == peak and old_trough == trough:
+            continue
+        print(
+            f"  {watch_id} {symbol:6s} peak {old_peak}->{peak:+.2f}% "
+            f"trough {old_trough}->{trough:+.2f}%",
+        )
+        if not args.dry_run:
+            w["peak_pnl_pct"] = peak
+            w["trough_pnl_pct"] = trough
+            conn.execute(
+                "UPDATE watches SET watch_json = ? WHERE watch_id = ?",
+                (json.dumps(w), watch_id),
+            )
+        updated += 1
 
-    prefix = "[DRY RUN] " if args.dry_run else ""
-    print(f"\n{prefix}Updated {updated}/{len(watches)} watches")
+    if not args.dry_run:
+        conn.commit()
+    conn.close()
+
+    prefix = "DRY RUN — " if args.dry_run else ""
+    print(f"\n{prefix}Updated {updated} watches; skipped {skipped}")
 
 
 if __name__ == "__main__":

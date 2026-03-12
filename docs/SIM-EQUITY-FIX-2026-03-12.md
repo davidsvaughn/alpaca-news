@@ -56,11 +56,13 @@ elif self.market:
         log.warning("Could not fetch exit price for %s — using entry price", symbol)
 ```
 
-### Fix 2: Unrealized PnL in equity snapshots (TODO — next)
+### Fix 2: Unrealized PnL in equity snapshots
 
-**File:** `trader/online/live_monitor.py`, `_snapshot_equity()`
+**Files:** `trader/online/live_monitor.py` (`_snapshot_equity`), `trader/online/orchestrator.py`
 
-The sim calculation path needs to fetch batch quotes for all holding symbols and compute unrealized PnL from `(current_price - entry_price) / entry_price` instead of relying on a field that doesn't exist.
+1. Added `market` (MarketDataService) param to `LiveExitMonitor.__init__`
+2. Orchestrator now passes `_live_market` to the monitor
+3. `_snapshot_equity()` sim path now fetches batch quotes via `monitor.market.get_quotes()` for all holding symbols and computes unrealized PnL from `(current_price - entry_price) / entry_price` instead of relying on a watch field that was never set
 
 ## Backfill
 
