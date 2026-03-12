@@ -768,7 +768,30 @@ class LivePortfolioManager:
                 except Exception:
                     log.exception("ALPACA STOP FAILED for %s — position open without stop protection!", symbol)
         else:
-            # Local/shadow portfolio — calculate qty from allocation
+            # Local/shadow portfolio — fetch fresh price at decision time
+            # so simulated entry_price reflects the actual market price now,
+            # not the stale snapshot price from investigation time.
+            if self.market:
+                try:
+                    quotes = self.market.get_quotes([symbol])
+                    q = (quotes or {}).get(symbol.upper()) or (quotes or {}).get(symbol) or {}
+                    fresh = q.get("lastPrice") or q.get("last_price")
+                    if fresh and float(fresh) > 0:
+                        entry_price = float(fresh)
+                        from trader.models.watch import WatchEntry
+                        wb.entry = WatchEntry(
+                            snapshot_id=wb.entry.snapshot_id,
+                            price=entry_price,
+                            time=wb.entry.time,
+                            confidence=wb.entry.confidence,
+                            direction=wb.entry.direction,
+                            horizon=wb.entry.horizon,
+                            thesis=wb.entry.thesis,
+                        )
+                        print(f"LIVE-EVAL: {symbol} fresh entry_price={entry_price:.2f}")
+                except Exception:
+                    log.warning("Could not fetch fresh price for %s — using snapshot price", symbol)
+
             alloc_pct = float((cfg.allocation_params or {}).get("alloc_pct", 5))
             position_size = cfg.starting_capital * alloc_pct / 100.0
             if entry_price and entry_price > 0:
