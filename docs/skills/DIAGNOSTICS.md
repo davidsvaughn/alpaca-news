@@ -245,6 +245,7 @@ db = open_sqlite(os.getenv("TRADER_DB", "data/trader.db"))
 
 ## Cross-references
 
+- [PORTFOLIO-DIVERGENCE.md](PORTFOLIO-DIVERGENCE.md) — Comparing parallel portfolios, replacement churn, fill slippage analysis
 - [ALPACA.md](ALPACA.md) — Alpaca order lifecycle, reconciliation details, extended hours behavior
 - [ALPACA-TRADING.md](../ALPACA-TRADING.md) — Full Alpaca trading documentation
 - [LIVE-TRADING.md](../LIVE-TRADING.md) — Live trading plan and implementation
