@@ -272,6 +272,16 @@ STRATEGIES: dict[str, StrategyDef] = {
 RANK_METHOD_CONFIDENCE = "confidence"
 RANK_METHOD_UNREAL_PL = "unreal_pl"
 RANK_METHOD_COMPOSITE = "composite"
+RANK_METHOD_TRAILING_SLOPE = "trailing_slope"
+RANK_METHOD_VOLUME_TREND = "volume_trend"
+RANK_METHOD_RSI_CURRENT = "rsi_current"
+RANK_METHOD_TECH_SCORE = "tech_score"
+
+_ALL_RANK_METHODS = {
+    RANK_METHOD_CONFIDENCE, RANK_METHOD_UNREAL_PL, RANK_METHOD_COMPOSITE,
+    RANK_METHOD_TRAILING_SLOPE, RANK_METHOD_VOLUME_TREND,
+    RANK_METHOD_RSI_CURRENT, RANK_METHOD_TECH_SCORE,
+}
 
 
 def normalize_rank_method(method: str | None) -> str:
@@ -283,7 +293,7 @@ def normalize_rank_method(method: str | None) -> str:
     key = str(method or "").strip().lower()
     if key in {"", "momentum"}:
         return RANK_METHOD_UNREAL_PL
-    if key in {RANK_METHOD_CONFIDENCE, RANK_METHOD_UNREAL_PL, RANK_METHOD_COMPOSITE}:
+    if key in _ALL_RANK_METHODS:
         return key
     return RANK_METHOD_UNREAL_PL
 
@@ -292,6 +302,10 @@ _RANK_OPTIONS = [
     {"value": RANK_METHOD_CONFIDENCE, "label": "Signal Confidence"},
     {"value": RANK_METHOD_UNREAL_PL, "label": "Unrealized P&L"},
     {"value": RANK_METHOD_COMPOSITE, "label": "Composite"},
+    {"value": RANK_METHOD_TRAILING_SLOPE, "label": "Price Momentum (Slope)"},
+    {"value": RANK_METHOD_VOLUME_TREND, "label": "Accumulation/Distribution"},
+    {"value": RANK_METHOD_RSI_CURRENT, "label": "RSI Exhaustion"},
+    {"value": RANK_METHOD_TECH_SCORE, "label": "Technical Composite"},
 ]
 
 _WHEN_FULL_OPTIONS = [
@@ -328,6 +342,7 @@ ALLOCATIONS: dict[str, AllocationDef] = {
             "when_full": ParamDef("select", "skip", "When Full", options=_WHEN_FULL_OPTIONS),
             "rank_method": ParamDef("select", RANK_METHOD_UNREAL_PL, "Rank By", options=_RANK_OPTIONS),
             "composite_weight": ParamDef("float", 0.5, "Confidence Weight", 0, 1, 0.1),
+            "replace_min_margin": ParamDef("float", 0.0, "Min Margin to Replace", 0, 1, 0.01),
         },
     ),
     "ranking_realloc": AllocationDef(
@@ -339,6 +354,7 @@ ALLOCATIONS: dict[str, AllocationDef] = {
             "alloc_pct": ParamDef("float", 5.0, "Allocation %", 1, 50, 1),
             "rank_method": ParamDef("select", RANK_METHOD_UNREAL_PL, "Rank By", options=_RANK_OPTIONS),
             "composite_weight": ParamDef("float", 0.5, "Confidence Weight", 0, 1, 0.1),
+            "replace_min_margin": ParamDef("float", 0.0, "Min Margin to Replace", 0, 1, 0.01),
         },
     ),
 }
@@ -364,10 +380,17 @@ class BacktestResult:
     # Periodic close prices for equity curve (not sent to frontend).
     # List of (iso_timestamp, close_price) at configured resolution.
     periodic_closes: list[tuple[str, float]] | None = None
+    # Pre-computed ranking features at periodic intervals (internal only).
+    # List of (iso_timestamp, {slope, rsi, ad_slope}) for forward-looking ranking.
+    ranking_features: list[tuple[str, dict[str, float]]] | None = None
+    # Ranking features at entry time — used to score the new signal symmetrically.
+    entry_features: dict[str, float] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         d = asdict(self)
         d.pop("periodic_closes", None)
+        d.pop("ranking_features", None)
+        d.pop("entry_features", None)
         return d
 
 
@@ -595,6 +618,100 @@ def _rank_composite(
     }
 
 
+def _features_at_time(result: BacktestResult, target_iso: str) -> dict[str, float] | None:
+    """Look up ranking features at *target_iso* from ranking_features.
+
+    Parallel to ``_price_at_time()`` — returns the latest feature dict
+    whose timestamp <= target_iso.
+    """
+    if not result.ranking_features:
+        return None
+    best: dict[str, float] | None = None
+    for ts, feat in result.ranking_features:
+        if ts <= target_iso:
+            best = feat
+        else:
+            break
+    return best
+
+
+def _rank_trailing_slope(
+    open_positions: dict[str, BacktestResult],
+    _entry_confidence: dict[str, float],
+    target_iso: str,
+) -> dict[str, float]:
+    """Score by price momentum: normalized slope of recent closes."""
+    scores: dict[str, float] = {}
+    for sid, r in open_positions.items():
+        feat = _features_at_time(r, target_iso)
+        scores[sid] = feat["slope"] if feat else 0.0
+    return scores
+
+
+def _rank_volume_trend(
+    open_positions: dict[str, BacktestResult],
+    _entry_confidence: dict[str, float],
+    target_iso: str,
+) -> dict[str, float]:
+    """Score by Accumulation/Distribution slope."""
+    scores: dict[str, float] = {}
+    for sid, r in open_positions.items():
+        feat = _features_at_time(r, target_iso)
+        scores[sid] = feat["ad_slope"] if feat else 0.0
+    return scores
+
+
+def _rank_rsi_current(
+    open_positions: dict[str, BacktestResult],
+    _entry_confidence: dict[str, float],
+    target_iso: str,
+) -> dict[str, float]:
+    """Score by RSI exhaustion: lower RSI = more room to run = higher score."""
+    scores: dict[str, float] = {}
+    for sid, r in open_positions.items():
+        feat = _features_at_time(r, target_iso)
+        rsi = feat["rsi"] if feat else 50.0
+        scores[sid] = 100.0 - rsi  # invert
+    return scores
+
+
+def _rank_tech_score(
+    open_positions: dict[str, BacktestResult],
+    entry_confidence: dict[str, float],
+    target_iso: str,
+    weights: tuple[float, float, float] = (0.4, 0.3, 0.3),
+) -> dict[str, float]:
+    """Technical composite: z-score blend of slope, A/D slope, and inverted RSI."""
+    slope_scores = _rank_trailing_slope(open_positions, entry_confidence, target_iso)
+    ad_scores = _rank_volume_trend(open_positions, entry_confidence, target_iso)
+    rsi_scores = _rank_rsi_current(open_positions, entry_confidence, target_iso)
+    sids = list(open_positions.keys())
+    if len(sids) < 2:
+        return slope_scores  # can't z-score with < 2, fall back to slope
+
+    def _z(vals: list[float]) -> list[float]:
+        m = sum(vals) / len(vals)
+        v = sum((x - m) ** 2 for x in vals) / (len(vals) - 1)
+        s = math.sqrt(v) if v > 0 else 1.0
+        return [(x - m) / s for x in vals]
+
+    w1, w2, w3 = weights
+    z_slope = _z([slope_scores[s] for s in sids])
+    z_ad = _z([ad_scores[s] for s in sids])
+    z_rsi = _z([rsi_scores[s] for s in sids])
+    return {
+        sid: w1 * zs + w2 * za + w3 * zr
+        for sid, zs, za, zr in zip(sids, z_slope, z_ad, z_rsi)
+    }
+
+
+# Forward-looking methods that use ranking_features
+_FEATURE_BASED_METHODS = {
+    RANK_METHOD_TRAILING_SLOPE, RANK_METHOD_VOLUME_TREND,
+    RANK_METHOD_RSI_CURRENT, RANK_METHOD_TECH_SCORE,
+}
+
+
 def _compute_scores(
     method: str,
     open_positions: dict[str, BacktestResult],
@@ -608,7 +725,42 @@ def _compute_scores(
         return _rank_confidence(open_positions, entry_confidence, target_iso)
     if method == RANK_METHOD_COMPOSITE:
         return _rank_composite(open_positions, entry_confidence, target_iso, composite_weight)
+    if method == RANK_METHOD_TRAILING_SLOPE:
+        return _rank_trailing_slope(open_positions, entry_confidence, target_iso)
+    if method == RANK_METHOD_VOLUME_TREND:
+        return _rank_volume_trend(open_positions, entry_confidence, target_iso)
+    if method == RANK_METHOD_RSI_CURRENT:
+        return _rank_rsi_current(open_positions, entry_confidence, target_iso)
+    if method == RANK_METHOD_TECH_SCORE:
+        return _rank_tech_score(open_positions, entry_confidence, target_iso)
     return _rank_unreal_pl(open_positions, entry_confidence, target_iso)
+
+
+def _score_new_signal(
+    rank_method: str,
+    new_confidence: float,
+    new_features: dict[str, float] | None,
+    composite_weight: float,
+) -> float:
+    """Compute the score for an incoming signal using the same method as holdings."""
+    if rank_method == RANK_METHOD_CONFIDENCE:
+        return new_confidence
+    if rank_method == RANK_METHOD_UNREAL_PL:
+        return 0.0  # just entered — no unrealised P&L yet
+    if rank_method == RANK_METHOD_COMPOSITE:
+        return composite_weight * new_confidence
+    # Forward-looking methods: use the signal's own features (symmetric scoring)
+    if rank_method in _FEATURE_BASED_METHODS and new_features:
+        if rank_method == RANK_METHOD_TRAILING_SLOPE:
+            return new_features.get("slope", 0.0)
+        if rank_method == RANK_METHOD_VOLUME_TREND:
+            return new_features.get("ad_slope", 0.0)
+        if rank_method == RANK_METHOD_RSI_CURRENT:
+            return 100.0 - new_features.get("rsi", 50.0)
+        if rank_method == RANK_METHOD_TECH_SCORE:
+            # Can't z-score a single value against holdings; use slope as proxy
+            return new_features.get("slope", 0.0)
+    return 0.0
 
 
 def _try_replace(
@@ -619,6 +771,8 @@ def _try_replace(
     target_iso: str,
     rank_method: str,
     composite_weight: float,
+    new_features: dict[str, float] | None = None,
+    min_margin: float = 0.0,
 ) -> str | None:
     """If the new signal outranks the weakest open position, return the
     snapshot_id of the position to replace.  Otherwise return None."""
@@ -628,16 +782,9 @@ def _try_replace(
     scores = _compute_scores(
         rank_method, open_positions, entry_confidence, target_iso, composite_weight,
     )
-    # Score the incoming signal the same way
-    if rank_method == RANK_METHOD_CONFIDENCE:
-        new_score = new_confidence
-    elif rank_method == RANK_METHOD_UNREAL_PL:
-        new_score = 0.0  # just entered — no unrealised P&L yet
-    else:
-        # For composite, approximate: confidence component only (unrealized P&L=0)
-        new_score = composite_weight * new_confidence
+    new_score = _score_new_signal(rank_method, new_confidence, new_features, composite_weight)
     worst_sid = min(scores, key=scores.get)  # type: ignore[arg-type]
-    if new_score > scores[worst_sid]:
+    if new_score > scores[worst_sid] + min_margin:
         return worst_sid
     return None
 
@@ -691,6 +838,7 @@ def apply_allocation(
 
     rank_method = normalize_rank_method(str(alloc_params.get("rank_method", RANK_METHOD_UNREAL_PL)))
     composite_weight = float(alloc_params.get("composite_weight", 0.5))
+    replace_min_margin = float(alloc_params.get("replace_min_margin", 0.0))
 
     # Walk forward chronologically
     open_positions: dict[str, BacktestResult] = {}   # sid -> result
@@ -728,6 +876,8 @@ def apply_allocation(
             victim_sid = _try_replace(
                 sid, new_confidence, open_positions, entry_confidence,
                 new_entry_time, rank_method, composite_weight,
+                new_features=result.entry_features,
+                min_margin=replace_min_margin,
             )
             if victim_sid is not None:
                 # Early-exit the victim
@@ -1332,6 +1482,110 @@ def _compute_vdd_signal_indices(
     lag_cum_delta = cum_delta.shift(lookback)
     mask = ((close >= prev_roll_max) & (cum_delta < lag_cum_delta)).fillna(False)
     return np.flatnonzero(mask.to_numpy(dtype=bool, copy=False)).astype(np.int64)
+
+
+# ---------------------------------------------------------------------------
+# Ranking feature computation (shared by backtest and live paths)
+# ---------------------------------------------------------------------------
+
+
+def _compute_trailing_slope(closes: np.ndarray, lookback: int = 30) -> float:
+    """Normalized slope of linear regression over last *lookback* values.
+
+    Returns slope / mean(values) so the result is in "% per bar" units,
+    making it comparable across stocks with different price levels.
+    """
+    vals = closes[-lookback:] if len(closes) >= lookback else closes
+    if len(vals) < 2:
+        return 0.0
+    x = np.arange(len(vals), dtype=float)
+    slope = np.polyfit(x, vals, 1)[0]
+    mean = np.mean(vals)
+    return float(slope / mean) if mean > 0 else 0.0
+
+
+def _compute_ad_slope(
+    highs: np.ndarray,
+    lows: np.ndarray,
+    closes: np.ndarray,
+    volumes: np.ndarray,
+    lookback: int = 30,
+) -> float:
+    """Slope of cumulative Accumulation/Distribution line over last *lookback* bars.
+
+    Uses the Money Flow Multiplier: MFM = ((C-L)-(H-C))/(H-L).
+    Each bar's A/D contribution = MFM * volume.
+    """
+    hl_range = highs - lows
+    hl_range = np.where(hl_range == 0, 1.0, hl_range)  # avoid div/0
+    mfm = ((closes - lows) - (highs - closes)) / hl_range
+    ad = mfm * volumes
+    cum_ad = np.cumsum(ad)
+    tail = cum_ad[-lookback:] if len(cum_ad) >= lookback else cum_ad
+    if len(tail) < 2:
+        return 0.0
+    x = np.arange(len(tail), dtype=float)
+    return float(np.polyfit(x, tail, 1)[0])
+
+
+def compute_ranking_features(
+    df_5m: pd.DataFrame,
+    lookback: int = 30,
+    rsi_period: int = 14,
+) -> dict[str, float]:
+    """Compute all forward-looking ranking features from a 5-min OHLCV DataFrame.
+
+    Returns ``{slope, rsi, ad_slope}`` — used by both backtest and live ranking.
+    The DataFrame must have columns: Open, High, Low, Close, Volume.
+    """
+    closes = df_5m["Close"].to_numpy(dtype=float, copy=False)
+    highs = df_5m["High"].to_numpy(dtype=float, copy=False)
+    lows = df_5m["Low"].to_numpy(dtype=float, copy=False)
+    volumes = df_5m["Volume"].to_numpy(dtype=float, copy=False)
+
+    slope = _compute_trailing_slope(closes, lookback)
+    ad_slope = _compute_ad_slope(highs, lows, closes, volumes, lookback)
+
+    # RSI: use the existing _compute_rsi on the close series, take last value
+    rsi_series = _compute_rsi(df_5m["Close"], rsi_period)
+    rsi_val = float(rsi_series.iloc[-1]) if not rsi_series.empty and not np.isnan(rsi_series.iloc[-1]) else 50.0
+
+    return {"slope": slope, "rsi": rsi_val, "ad_slope": ad_slope}
+
+
+def compute_ranking_features_from_tick(
+    tick_bars: pd.DataFrame,
+    lookback: int = 30,
+    rsi_period: int = 14,
+) -> dict[str, float]:
+    """Compute ranking features from tick_collector bars (live only).
+
+    *tick_bars* has columns: close, high, low, volume, est_uptick, est_downtick.
+    For volume_trend, uses Lee-Ready classified delta instead of A/D formula.
+    """
+    closes = tick_bars["close"].to_numpy(dtype=float, copy=False)
+    highs = tick_bars["high"].to_numpy(dtype=float, copy=False)
+    lows = tick_bars["low"].to_numpy(dtype=float, copy=False)
+
+    slope = _compute_trailing_slope(closes, lookback)
+
+    # Volume trend from Lee-Ready classified volume (more accurate than A/D)
+    est_up = tick_bars["est_uptick"].to_numpy(dtype=float, copy=False)
+    est_down = tick_bars["est_downtick"].to_numpy(dtype=float, copy=False)
+    cum_delta = np.cumsum(est_up - est_down)
+    tail = cum_delta[-lookback:] if len(cum_delta) >= lookback else cum_delta
+    if len(tail) < 2:
+        ad_slope = 0.0
+    else:
+        x = np.arange(len(tail), dtype=float)
+        ad_slope = float(np.polyfit(x, tail, 1)[0])
+
+    # RSI from tick closes
+    close_series = tick_bars["close"]
+    rsi_series = _compute_rsi(close_series, rsi_period)
+    rsi_val = float(rsi_series.iloc[-1]) if not rsi_series.empty and not np.isnan(rsi_series.iloc[-1]) else 50.0
+
+    return {"slope": slope, "rsi": rsi_val, "ad_slope": ad_slope}
 
 
 # ---------------------------------------------------------------------------
@@ -2242,6 +2496,89 @@ def _extract_periodic_closes(
     return [(t.isoformat(), float(row["Close"])) for t, row in resampled.iterrows()]
 
 
+def _extract_ranking_features(
+    df: pd.DataFrame,
+    entry_idx: int,
+    bars_held: int,
+    resolution_minutes: int,
+    slope_lookback: int = 30,
+    rsi_period: int = 14,
+) -> list[tuple[str, dict[str, float]]]:
+    """Pre-compute ranking features at periodic intervals during backtest.
+
+    Resamples to 5-min bars (with warmup before entry for indicator init),
+    then computes features at each periodic timestamp.
+    """
+    end_idx = min(entry_idx + bars_held, len(df))
+    if end_idx <= entry_idx:
+        return []
+
+    # Warmup: include bars before entry so indicators aren't cold-starting
+    warmup_1m = max(slope_lookback, rsi_period) * 5  # 5-min bars → need 5x 1-min bars
+    warmup_start = max(0, entry_idx - warmup_1m)
+    chunk = df.iloc[warmup_start:end_idx]
+
+    # Resample to 5-min OHLCV
+    ohlcv_5m = chunk.resample("5min").agg({
+        "Open": "first", "High": "max", "Low": "min",
+        "Close": "last", "Volume": "sum",
+    }).dropna(subset=["Close"])
+    if len(ohlcv_5m) < 2:
+        return []
+
+    # Determine the periodic timestamps (same as periodic_closes)
+    held = df.iloc[entry_idx:end_idx]
+    if resolution_minutes <= 1:
+        timestamps = [t.isoformat() for t in held.index]
+    else:
+        rule = f"{resolution_minutes}min"
+        resampled_ts = held["Close"].resample(rule).last().dropna().index
+        timestamps = [t.isoformat() for t in resampled_ts]
+
+    if not timestamps:
+        return []
+
+    # For each periodic timestamp, compute features on the 5-min slice up to that point
+    features: list[tuple[str, dict[str, float]]] = []
+    for ts_iso in timestamps:
+        # Select 5-min bars up to (and including) this timestamp
+        slice_5m = ohlcv_5m.loc[:ts_iso]
+        if len(slice_5m) < 2:
+            features.append((ts_iso, {"slope": 0.0, "rsi": 50.0, "ad_slope": 0.0}))
+            continue
+        feat = compute_ranking_features(slice_5m, slope_lookback, rsi_period)
+        features.append((ts_iso, feat))
+
+    return features
+
+
+def _compute_entry_features(
+    df: pd.DataFrame,
+    entry_idx: int,
+    slope_lookback: int = 30,
+    rsi_period: int = 14,
+) -> dict[str, float]:
+    """Compute ranking features at entry time for the new signal.
+
+    Used to score the incoming signal symmetrically against existing positions.
+    """
+    # Warmup before entry
+    warmup_1m = max(slope_lookback, rsi_period) * 5
+    warmup_start = max(0, entry_idx - warmup_1m)
+    chunk = df.iloc[warmup_start:entry_idx + 1]
+
+    # Resample to 5-min
+    ohlcv_5m = chunk.resample("5min").agg({
+        "Open": "first", "High": "max", "Low": "min",
+        "Close": "last", "Volume": "sum",
+    }).dropna(subset=["Close"])
+
+    if len(ohlcv_5m) < 2:
+        return {"slope": 0.0, "rsi": 50.0, "ad_slope": 0.0}
+
+    return compute_ranking_features(ohlcv_5m, slope_lookback, rsi_period)
+
+
 def run_backtest(
     strategy_key: str,
     params: dict[str, float],
@@ -2482,6 +2819,12 @@ def run_backtest(
             ) if pnl_pct is not None else None
             _mark("periodic_closes", t_curve)
 
+            # Pre-compute ranking features for forward-looking allocation
+            rf = _extract_ranking_features(
+                df, entry_idx, bars_held, stats_resolution_minutes,
+            ) if pnl_pct is not None else None
+            ef = _compute_entry_features(df, entry_idx) if pnl_pct is not None else None
+
             results.append(BacktestResult(
                 snapshot_id=e["snapshot_id"],
                 symbol=symbol,
@@ -2494,6 +2837,8 @@ def run_backtest(
                 bars_held=bars_held,
                 hold_minutes=hold_minutes,
                 periodic_closes=pc,
+                ranking_features=rf,
+                entry_features=ef,
             ))
             if pnl_pct is None:
                 counts["trades_no_data"] += 1

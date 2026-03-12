@@ -2,7 +2,7 @@
 
 > Portfolio-level position management: capacity rules, replacement logic, and ranking methods.
 >
-> Last updated: 2026-03-06
+> Last updated: 2026-03-12
 
 ---
 
@@ -139,7 +139,7 @@ What we really want: **"which position has the best prospects going forward from
 
 ---
 
-## Proposed: Forward-Looking Ranking Methods
+## Forward-Looking Ranking Methods (Implemented 2026-03-12)
 
 ### Data Availability (confirmed 2026-03-06)
 
@@ -263,46 +263,42 @@ score = w1 * norm(trailing_slope) + w2 * norm(ad_slope) + w3 * norm(inverted_rsi
 - More robust than any single indicator
 - Can be tuned via weights
 - Higher implementation complexity
-- Save for later — start with simpler methods first
+- Weights: 0.4 slope + 0.3 A/D slope + 0.3 inverted RSI (z-score normalized)
+
+### Anti-Churn Guard: `replace_min_margin`
+
+**Added 2026-03-12** — prevents the "death churn" where positions slightly underwater
+get replaced by marginally better signals in rapid succession.
+
+- **Parameter:** `replace_min_margin` (default 0.0, range 0–1)
+- **Effect:** `new_score > worst_score + replace_min_margin` (must exceed by margin)
+- Available in both `max_positions` and `ranking_realloc` allocation params
+- A value of 0.05 means the new signal must score at least 0.05 better than the worst position
+
+**Origin:** Discovered 2026-03-12 when comparing two parallel portfolios. The Alpaca portfolio
+churned through 12 replacement exits totaling -$745, while the non-Alpaca portfolio (which
+accidentally had replacements disabled due to a scoring bug) gained +1.1%. See
+[PORTFOLIO-DIVERGENCE.md](skills/PORTFOLIO-DIVERGENCE.md) for the full analysis.
 
 ---
 
-## Implementation Plan
+## Tick Collector Integration (Live Only, 2026-03-12)
 
-### Phase 1: Trailing Slope (simplest, highest signal)
+All forward-looking ranking methods benefit from tick-level data when the tick_collector
+service is running. The live scoring path follows this priority:
 
-1. Add `_rank_trailing_slope()` to `backtest.py`
-   - Takes `open_positions`, `target_iso`, `lookback_bars` params
-   - For existing positions: compute slope from their backtest bar data
-   - For the incoming signal: fetch recent bars via `data_service.get_price_history()`
-   - Return score dict keyed by snapshot_id
+1. **Tick collector** (`tick_collector/vdd.py` → `get_vdd_bars()`): 5-min buckets with
+   Lee-Ready classified uptick/downtick volume. Higher quality than bar-based methods.
+2. **Schwab 1-min bars** (fallback): Standard OHLCV resampled to 5-min.
 
-2. Add `"trailing_slope"` to `_RANK_OPTIONS` and `_compute_scores()` dispatch
+| Method | Tick Data Advantage |
+|--------|-------------------|
+| `trailing_slope` | 30s bucket closes = more responsive slope |
+| `volume_trend` | Lee-Ready classified delta vs bar-based A/D formula |
+| `rsi_current` | Higher resolution RSI from sub-minute closes |
+| `tech_score` | Benefits from all above |
 
-3. Update `_try_replace()` to handle the new method:
-   - New signal gets a real score (not 0.0 or proxy)
-   - Same comparison logic: replace only if new > weakest
-
-4. **Backtest considerations:**
-   - Existing positions: already have 1-min bars in `BacktestResult.periodic_closes`
-   - Incoming signal: need to fetch historical bars at the entry time
-   - Caching strategy: fetch once per symbol per backtest run, reuse across entries
-   - Latency: ~0.3s per Schwab fetch. For a backtest with many replacements, this
-     could add up. Consider parallel fetching or pre-fetching all symbols at start.
-
-5. **Live trading:** straightforward — fetch current bars at decision time
-
-### Phase 2: Volume-Weighted Trend (if Phase 1 proves useful)
-
-- Add `_rank_volume_trend()` using AD line slope
-- Captures distribution/accumulation that price slope alone misses
-- Same data sources, same symmetric scoring
-
-### Phase 3: Composite (if both Phase 1 and 2 add value)
-
-- Combine trailing slope + AD trend + optionally RSI
-- z-score normalization like the existing composite method
-- Tunable weights
+**Backtest** always uses bar-based computation (tick data not available historically).
 
 ---
 
@@ -317,11 +313,12 @@ score = w1 * norm(trailing_slope) + w2 * norm(ad_slope) + w3 * norm(inverted_rsi
 
 | File | Role |
 |------|------|
-| `trader/market/backtest.py` | Allocation definitions, `apply_allocation()`, `_try_replace()`, ranking helpers |
+| `trader/market/backtest.py` | Constants, `BacktestResult` fields, ranking functions, feature computation, `_try_replace()`, anti-churn |
+| `trader/online/live_monitor.py` | Live scoring with tick/bar fallback, `_find_replacement_victim()`, `replace_min_margin` |
+| `tick_collector/vdd.py` | `get_vdd_bars()` — tick-based OHLCV + classified volume for live ranking |
 | `trader/market/data_service.py` | `get_price_history()` — Schwab-first with yfinance fallback |
 | `trader/market/schwab_client.py` | `get_intraday_candles()` — primary bar data source |
-| `trader/market/yfinance_client.py` | `get_price_history()` — fallback bar data source |
-| `trader/web/templates/snapshots.html` | Backtest panel UI — allocation selector, parameter inputs |
+| `trader/web/templates/snapshots.html` | Backtest panel UI — allocation selector, parameter inputs (auto-populated) |
 
 ---
 

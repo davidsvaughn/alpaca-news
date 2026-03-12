@@ -34,7 +34,14 @@ from trader.db.database import (
     insert_watch,
     update_watch_if_current_status,
 )
-from trader.market.backtest import normalize_rank_method, RANK_METHOD_CONFIDENCE, RANK_METHOD_UNREAL_PL, RANK_METHOD_COMPOSITE
+from trader.market.backtest import (
+    normalize_rank_method,
+    RANK_METHOD_CONFIDENCE, RANK_METHOD_UNREAL_PL, RANK_METHOD_COMPOSITE,
+    RANK_METHOD_TRAILING_SLOPE, RANK_METHOD_VOLUME_TREND,
+    RANK_METHOD_RSI_CURRENT, RANK_METHOD_TECH_SCORE,
+    _FEATURE_BASED_METHODS, _score_new_signal,
+    compute_ranking_features, compute_ranking_features_from_tick,
+)
 from trader.market.market_hours import ET, add_market_hours, is_market_open, is_trading_session_open
 from trader.models.live_config import LiveConfig
 from trader.models.watch import WatchBuilder
@@ -833,6 +840,51 @@ class LivePortfolioManager:
     # Replace-weakest helpers
     # ------------------------------------------------------------------
 
+    def _fetch_ranking_features_for_symbol(self, symbol: str) -> dict[str, float] | None:
+        """Fetch ranking features for a single symbol (live).
+
+        Priority: tick_collector (higher quality) → Schwab 1-min bars.
+        """
+        # Try tick_collector first
+        try:
+            from tick_collector.vdd import get_vdd_bars, get_pool
+
+            loop = getattr(self, "_loop", None)
+            if loop is None or loop.is_closed():
+                loop = asyncio.new_event_loop()
+                self._loop = loop
+
+            pool = loop.run_until_complete(get_pool())
+            if pool is not None:
+                # 5-min buckets, 2.5h lookback for 30 bars
+                tick_bars = loop.run_until_complete(
+                    get_vdd_bars(pool, symbol, lookback_m=150, bucket_s=300)
+                )
+                if tick_bars is not None and len(tick_bars) >= 2:
+                    return compute_ranking_features_from_tick(tick_bars)
+        except Exception:
+            pass  # fall through to bar-based
+
+        # Fall back to Schwab 1-min bars
+        if self.market:
+            try:
+                from trader.market.backtest import _get_ohlcv_1m
+                from datetime import date, timedelta
+                start = (date.today() - timedelta(days=2)).isoformat()
+                df = _get_ohlcv_1m(symbol, start)
+                if df is not None and len(df) >= 10:
+                    # Resample to 5-min
+                    ohlcv_5m = df.resample("5min").agg({
+                        "Open": "first", "High": "max", "Low": "min",
+                        "Close": "last", "Volume": "sum",
+                    }).dropna(subset=["Close"])
+                    if len(ohlcv_5m) >= 2:
+                        return compute_ranking_features(ohlcv_5m)
+            except Exception:
+                log.warning("Could not fetch bars for %s ranking", symbol)
+
+        return None
+
     def _score_holding_watches(
         self,
         holdings: list[dict[str, Any]],
@@ -842,10 +894,8 @@ class LivePortfolioManager:
     ) -> dict[str, float]:
         """Score each holding watch. Returns {watch_id: score}.
 
-        For unreal_pl: uses Alpaca current_price if broker connected,
-        otherwise falls back to entry_price (score = 0).
-        For confidence: uses entry confidence from the watch.
-        For composite: z-score combination of both.
+        Supports all ranking methods including forward-looking ones that
+        fetch bar data for feature computation.
         """
         scores: dict[str, float] = {}
         confidences: dict[str, float] = {}
@@ -859,6 +909,22 @@ class LivePortfolioManager:
                 alpaca_prices = {p.symbol.upper(): p.current_price for p in positions}
             except Exception:
                 log.warning("Could not fetch Alpaca positions for ranking")
+
+        # If no broker, fetch fresh quotes for unreal_pl/composite scoring
+        if not alpaca_prices and self.market and rank_method in (
+            RANK_METHOD_UNREAL_PL, RANK_METHOD_COMPOSITE,
+        ):
+            syms = [w.get("symbol", "").upper() for w in holdings if w.get("symbol")]
+            if syms:
+                try:
+                    quotes = self.market.get_quotes(syms)
+                    for sym in syms:
+                        q = (quotes or {}).get(sym) or {}
+                        price = q.get("lastPrice") or q.get("last_price")
+                        if price and float(price) > 0:
+                            alpaca_prices[sym] = float(price)
+                except Exception:
+                    log.warning("Could not fetch quotes for non-Alpaca ranking")
 
         for w in holdings:
             wid = w["watch_id"]
@@ -875,6 +941,45 @@ class LivePortfolioManager:
             else:
                 pnl_scores[wid] = 0.0
 
+        # --- Forward-looking methods: fetch bar data and compute features ---
+        if rank_method in _FEATURE_BASED_METHODS:
+            feature_scores: dict[str, dict[str, float]] = {}
+            for w in holdings:
+                wid = w["watch_id"]
+                sym = w.get("symbol", "").upper()
+                feat = self._fetch_ranking_features_for_symbol(sym)
+                feature_scores[wid] = feat or {"slope": 0.0, "rsi": 50.0, "ad_slope": 0.0}
+
+            if rank_method == RANK_METHOD_TRAILING_SLOPE:
+                scores = {wid: f["slope"] for wid, f in feature_scores.items()}
+            elif rank_method == RANK_METHOD_VOLUME_TREND:
+                scores = {wid: f["ad_slope"] for wid, f in feature_scores.items()}
+            elif rank_method == RANK_METHOD_RSI_CURRENT:
+                scores = {wid: 100.0 - f["rsi"] for wid, f in feature_scores.items()}
+            elif rank_method == RANK_METHOD_TECH_SCORE:
+                wids = list(feature_scores.keys())
+                if len(wids) < 2:
+                    scores = {wid: f["slope"] for wid, f in feature_scores.items()}
+                else:
+                    import math
+
+                    def _z(vals: list[float]) -> list[float]:
+                        m = sum(vals) / len(vals)
+                        v = sum((x - m) ** 2 for x in vals) / (len(vals) - 1)
+                        s = math.sqrt(v) if v > 0 else 1.0
+                        return [(x - m) / s for x in vals]
+
+                    slopes = [feature_scores[w]["slope"] for w in wids]
+                    ads = [feature_scores[w]["ad_slope"] for w in wids]
+                    rsis = [100.0 - feature_scores[w]["rsi"] for w in wids]
+                    z_s, z_a, z_r = _z(slopes), _z(ads), _z(rsis)
+                    scores = {
+                        wid: 0.4 * zs + 0.3 * za + 0.3 * zr
+                        for wid, zs, za, zr in zip(wids, z_s, z_a, z_r)
+                    }
+            return scores
+
+        # --- Legacy methods ---
         if rank_method == RANK_METHOD_CONFIDENCE:
             scores = confidences
         elif rank_method == RANK_METHOD_UNREAL_PL:
@@ -920,6 +1025,7 @@ class LivePortfolioManager:
             str(alloc_params.get("rank_method", RANK_METHOD_UNREAL_PL))
         )
         composite_weight = float(alloc_params.get("composite_weight", 0.5))
+        replace_min_margin = float(alloc_params.get("replace_min_margin", 0.0))
 
         # Get all holding watches for this config
         all_watches = get_active_watches(self.db)
@@ -939,29 +1045,29 @@ class LivePortfolioManager:
         if not scores:
             return None
 
-        # Score the incoming signal
-        if rank_method == RANK_METHOD_CONFIDENCE:
-            new_score = new_confidence
-        elif rank_method == RANK_METHOD_UNREAL_PL:
-            new_score = 0.0  # just entered — no unrealised P&L yet
-        else:
-            # composite: confidence component only (unrealized P&L=0)
-            new_score = composite_weight * new_confidence
+        # Score the incoming signal (symmetric for forward-looking methods)
+        new_features: dict[str, float] | None = None
+        if rank_method in _FEATURE_BASED_METHODS:
+            new_features = self._fetch_ranking_features_for_symbol(new_symbol)
+
+        new_score = _score_new_signal(rank_method, new_confidence, new_features, composite_weight)
 
         # Find weakest
         worst_wid = min(scores, key=scores.get)  # type: ignore[arg-type]
         worst_score = scores[worst_wid]
 
-        if new_score <= worst_score:
+        if new_score <= worst_score + replace_min_margin:
             print(f"LIVE-EVAL: {new_symbol} new_score={new_score:.4f} <= "
-                  f"worst_score={worst_score:.4f} ({worst_wid}) — no replacement")
+                  f"worst_score={worst_score:.4f}+margin={replace_min_margin} "
+                  f"({worst_wid}) — no replacement")
             return None
 
         # Find the watch dict for the victim
         for w in holdings:
             if w["watch_id"] == worst_wid:
                 print(f"LIVE-EVAL: {new_symbol} new_score={new_score:.4f} > "
-                      f"worst={w['symbol']} score={worst_score:.4f} — replacing")
+                      f"worst={w['symbol']} score={worst_score:.4f} "
+                      f"(margin={replace_min_margin}) — replacing")
                 return w
         return None
 

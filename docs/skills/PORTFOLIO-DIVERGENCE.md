@@ -115,15 +115,19 @@ Systematic positive slippage on the Alpaca side means limit price buffers may be
 
 ## Known divergence causes
 
-### 1. Replacement scoring asymmetry (found 2026-03-12)
+### 1. Replacement scoring asymmetry (found 2026-03-12, FIXED)
 
 **Symptom:** Alpaca portfolio churns heavily (many replacement exits), simulated portfolio makes zero replacements.
 
-**Root cause:** In `_score_holding_watches` ([live_monitor.py](../../trader/online/live_monitor.py)), non-Alpaca portfolios have no `current_price`, so all positions score 0.0. New signals also score 0.0. Since `new_score > worst_score` is never true (0.0 > 0.0 is false), replacements never fire. The Alpaca portfolio has real prices, so slightly-negative positions get replaced constantly.
+**Root cause:** In `_score_holding_watches` ([live_monitor.py](../../trader/online/live_monitor.py)), non-Alpaca portfolios had no `current_price`, so all positions scored 0.0. New signals also scored 0.0. Since `new_score > worst_score` was never true (0.0 > 0.0 is false), replacements never fired.
 
-**Impact:** 12 unnecessary replacement exits totaling -$745 in one day. Churn cascaded as new positions also went slightly negative and got replaced.
+**Fix (2026-03-12):**
+1. Non-Alpaca portfolios now fetch fresh quotes via `MarketDataService.get_quotes()` for `unreal_pl`/`composite` scoring
+2. Simulated entry prices now use fresh Schwab quotes at decision time (not stale snapshot prices)
+3. Added `replace_min_margin` anti-churn parameter (default 0.0) — new signal must score this much better than worst
+4. Added 4 forward-looking ranking methods (`trailing_slope`, `volume_trend`, `rsi_current`, `tech_score`) that score symmetrically using bar data
 
-**Key files:** [live_monitor.py](../../trader/online/live_monitor.py) `_score_holding_watches`, `_find_replacement_victim`
+**Key files:** [live_monitor.py](../../trader/online/live_monitor.py) `_score_holding_watches`, `_find_replacement_victim`, `_fetch_ranking_features_for_symbol`
 
 ### 2. Fill slippage compounding
 

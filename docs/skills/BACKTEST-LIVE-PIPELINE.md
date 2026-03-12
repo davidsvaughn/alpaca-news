@@ -228,11 +228,51 @@ _STRATEGY_RUNNERS = {
 
 Since `evaluate_exit()` dispatches via `_STRATEGY_RUNNERS`, and `LiveConfig` stores `exit_strategy` + `exit_params`, the live monitor will call your new strategy with no additional code.
 
+## Adding a new ranking method
+
+Ranking methods control which position gets replaced when the portfolio is full. Unlike strategies (which auto-discover), ranking methods need changes in both backtest and live paths.
+
+### Step 1: Add constant + UI option (backtest.py)
+
+```python
+RANK_METHOD_MY_METHOD = "my_method"
+```
+
+Add to `_ALL_RANK_METHODS` set and `_RANK_OPTIONS` list. The UI dropdown auto-populates from `_RANK_OPTIONS`.
+
+### Step 2: If feature-based — add to `_FEATURE_BASED_METHODS`
+
+Forward-looking methods that need bar data (not just entry price/confidence) should be added to `_FEATURE_BASED_METHODS`. This tells both backtest and live paths to use `ranking_features`/`entry_features`.
+
+### Step 3: Implement ranking function (backtest.py)
+
+```python
+def _rank_my_method(open_positions, entry_confidence, target_iso):
+    # For feature-based: use _features_at_time(result, target_iso)
+    # For backward-looking: use _price_at_time(result, target_iso)
+```
+
+### Step 4: Register in dispatchers
+
+- `_compute_scores()` in backtest.py — add dispatch case
+- `_score_new_signal()` in backtest.py — add new signal scoring logic
+- `_score_holding_watches()` in live_monitor.py — add live scoring branch
+
+### Step 5: Live scoring (if feature-based)
+
+In `_score_holding_watches()`, add a branch for your method in the `_FEATURE_BASED_METHODS` block. Features are computed by `_fetch_ranking_features_for_symbol()` which tries tick_collector first, then Schwab bars.
+
+### Key files
+- `backtest.py`: Constants, ranking function, `_compute_scores`, `_score_new_signal`, `_FEATURE_BASED_METHODS`
+- `live_monitor.py`: `_score_holding_watches`, `_find_replacement_victim`
+- No UI changes needed (auto-populated from `_RANK_OPTIONS`)
+
 ## Gotchas
 
-### Guard vs strategy: different extension patterns
+### Guard vs strategy vs ranking: different extension patterns
 - **New guard**: Touch all 7 files in the pipeline. Guards are independent of strategy choice.
 - **New strategy**: Only touch `backtest.py` (define + implement + register). UI and live path auto-discover.
+- **New ranking method**: Touch `backtest.py` + `live_monitor.py`. UI auto-populates from `_RANK_OPTIONS`.
 - **New guard type that needs state** (like trailing stop): Can't use `_check_guards()` or `_first_guard_hit()` — those are stateless. Compute independently after the strategy runner returns, then compare bar indices to pick the earlier exit.
 
 ### `run_backtest()` vs `evaluate_exit()` — keep them in sync
