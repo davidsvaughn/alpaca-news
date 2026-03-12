@@ -14,6 +14,7 @@ This folder contains **operational knowledge for AI agents** working on this cod
 |------|--------|---------|
 | [DIAGNOSTICS.md](DIAGNOSTICS.md) | Debugging & logs | Where to find errors, log sources, key SQL queries, common gotchas |
 | [ALPACA.md](ALPACA.md) | Alpaca broker | Order lifecycle, common failures, reconciliation, transaction log |
+| [TRADE-ANALYSIS.md](TRADE-ANALYSIS.md) | Performance analysis | SQL queries, snapshot deep dive process, skip pattern audit, bearish signals |
 
 ### Planned files
 
