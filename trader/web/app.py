@@ -1826,12 +1826,18 @@ def create_app(
             return JSONResponse({"error": "config not found"}, status_code=404)
 
         snapshots = get_equity_history(db, config_id, since=since, until=until)
-        return {
-            "config_id": config_id,
-            "name": cfg.get("name", ""),
-            "starting_capital": cfg.get("starting_capital", 0),
-            "snapshots": snapshots,
-        }
+        return JSONResponse(
+            {
+                "config_id": config_id,
+                "name": cfg.get("name", ""),
+                "starting_capital": cfg.get("starting_capital", 0),
+                "snapshots": snapshots,
+            },
+            headers={
+                "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+                "Pragma": "no-cache",
+            },
+        )
 
     @app.post("/api/portfolio/{config_id}/sync")
     async def api_portfolio_sync(config_id: str):

@@ -44,7 +44,7 @@
 <!-- All portfolio content (loaded via HTMX) -->
 <div id="positions-content"
      hx-get="/api/positions"
-     hx-trigger="load, every 30s"
+     hx-trigger="load, every 30s, sse-refresh from:body"
      hx-swap="innerHTML">
   <div class="text-center text-muted py-3">Loading portfolios...</div>
 </div>

@@ -588,7 +588,7 @@
     var configId = container.dataset.configId;
     if (!configId) return;
 
-    fetch('/api/portfolio/' + configId + '/equity-history')
+    fetch('/api/portfolio/' + configId + '/equity-history?_ts=' + Date.now(), { cache: 'no-store' })
       .then(function(r) { return r.json(); })
       .then(function(data) {
         // Skip if a newer script execution has started (HTMX double-exec guard)

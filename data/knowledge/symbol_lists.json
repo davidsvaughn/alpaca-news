@@ -1528,7 +1528,38 @@
     "WHD",
     "TGLS",
     "STT",
-    "STNE"
+    "STNE",
+    "SGMT",
+    "HBIO",
+    "RPID",
+    "DTIL",
+    "GIII",
+    "TIC",
+    "REFI",
+    "AMTX",
+    "GAMB",
+    "LCUT",
+    "SNBR",
+    "OLLI",
+    "YMM",
+    "HYFT",
+    "ECL",
+    "OTF",
+    "PSEC/PA",
+    "CGBD",
+    "BXSL",
+    "AXXA",
+    "ORBS",
+    "ACU",
+    "ESQ",
+    "CHAI",
+    "SGA",
+    "ALH",
+    "MCRB",
+    "SUNS",
+    "AHCO",
+    "VRA",
+    "APTV"
   ],
   "crypto": [],
   "rejected": [
@@ -1702,7 +1733,10 @@
     "CGUIY",
     "ACO.X",
     "CANU",
-    "PAYP"
+    "PAYP",
+    "TALABAT",
+    "DHER",
+    "PLPL3"
   ],
-  "last_updated": "2026-03-11T23:50:34.026836+00:00"
+  "last_updated": "2026-03-12T14:19:54.362594+00:00"
 }

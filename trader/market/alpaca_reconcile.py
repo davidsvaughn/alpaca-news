@@ -22,6 +22,7 @@ SAFETY: Rule 3 never force-exits on a single bulk lookup miss. It requires:
 from __future__ import annotations
 
 import logging
+import re
 from typing import Any
 
 log = logging.getLogger(__name__)
@@ -79,7 +80,11 @@ def reconcile(
 
     Returns a summary dict with actions taken.
     """
-    from trader.db.database import get_active_watches, insert_watch, update_watch
+    from trader.db.database import (
+        get_active_watches,
+        insert_watch,
+        update_watch_if_current_status,
+    )
     from trader.models.watch import WatchBuilder
 
     account_id = getattr(broker, "account_id", None) or "unknown"
@@ -136,7 +141,15 @@ def reconcile(
                         reason="fractional_remainder_liquidated",
                     )
                     updated = builder.to_watch()
-                    update_watch(db, watch["watch_id"], updated.to_dict())
+                    ok = update_watch_if_current_status(
+                        db,
+                        watch["watch_id"],
+                        updated.to_dict(),
+                        expected_status="holding",
+                    )
+                    if not ok:
+                        log.info("RECONCILE: %s fractional liquidation skipped stale watch %s",
+                                 symbol, watch["watch_id"])
                     summary.setdefault("fractional_liquidated", []).append(symbol)
                     log.info("RECONCILE: %s liquidated fractional remainder (qty=%.4f) "
                              "and exited watch %s",
@@ -207,7 +220,15 @@ def reconcile(
 
         if needs_update:
             updated = builder.to_watch()
-            update_watch(db, watch["watch_id"], updated.to_dict())
+            ok = update_watch_if_current_status(
+                db,
+                watch["watch_id"],
+                updated.to_dict(),
+                expected_status="holding",
+            )
+            if not ok:
+                log.info("RECONCILE: %s sync skipped stale watch %s",
+                         symbol, watch["watch_id"])
         else:
             summary["ok"].append(symbol)
             _log_tx(db, account_id, "reconcile_ok", symbol,
@@ -268,7 +289,16 @@ def reconcile(
         builder = WatchBuilder.from_dict(watch)
         builder.record_exit(price=exit_price, reason=exit_reason)
         updated = builder.to_watch()
-        update_watch(db, watch["watch_id"], updated.to_dict())
+        ok = update_watch_if_current_status(
+            db,
+            watch["watch_id"],
+            updated.to_dict(),
+            expected_status="holding",
+        )
+        if not ok:
+            log.info("RECONCILE: %s force-exit skipped stale watch %s",
+                     symbol, watch["watch_id"])
+            continue
         summary["watch_force_exited"].append({
             "symbol": symbol,
             "watch_id": watch["watch_id"],
@@ -397,6 +427,20 @@ def reconcile(
     return summary
 
 
+def _parse_available_qty(error_msg: str) -> float | None:
+    """Extract 'available' qty from Alpaca insufficient-qty error message.
+
+    Error JSON looks like: {"available":"0","code":40310000,...,"message":"insufficient qty available for order (requested: 7.67, available: 0)"}
+    """
+    m = re.search(r'"available"\s*:\s*"([^"]+)"', error_msg)
+    if m:
+        try:
+            return float(m.group(1))
+        except ValueError:
+            return None
+    return None
+
+
 def ensure_stops(
     *,
     broker: Any,  # AlpacaBroker
@@ -416,7 +460,7 @@ def ensure_stops(
 
     Returns summary of actions taken.
     """
-    from trader.db.database import get_active_watches, update_watch
+    from trader.db.database import get_active_watches, update_watch_if_current_status
     from trader.models.watch import WatchBuilder
 
     account_id = getattr(broker, "account_id", None) or "unknown"
@@ -469,7 +513,12 @@ def ensure_stops(
                 builder.alpaca_stop_order_id = existing_stop.order_id
                 builder.alpaca_stop_price = stop_price
                 updated = builder.to_watch()
-                update_watch(db, watch_id, updated.to_dict())
+                update_watch_if_current_status(
+                    db,
+                    watch_id,
+                    updated.to_dict(),
+                    expected_status="holding",
+                )
             summary["already_open"].append(symbol)
             continue
 
@@ -502,7 +551,15 @@ def ensure_stops(
         builder.alpaca_stop_order_id = result.order_id
         builder.alpaca_stop_price = stop_price
         updated = builder.to_watch()
-        update_watch(db, watch_id, updated.to_dict())
+        ok = update_watch_if_current_status(
+            db,
+            watch_id,
+            updated.to_dict(),
+            expected_status="holding",
+        )
+        if not ok:
+            log.info("ENSURE-STOPS: %s skipped stale watch %s", symbol, watch_id)
+            continue
 
         summary["submitted"].append({"symbol": symbol, "stop_price": stop_price,
                                      "qty": qty, "order_id": result.order_id})

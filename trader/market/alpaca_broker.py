@@ -511,21 +511,37 @@ class AlpacaBroker:
 
     def _close_position_market(self, symbol: str) -> OrderResult | None:
         """Close position with a market order (regular hours)."""
-        try:
-            order = self._client.close_position(symbol.upper())
-            result = self._to_result(order)
-            log.info("CLOSE position: %s -> order %s", symbol, order.id)
-            self._log_tx("sell_submit", symbol.upper(), order_id=result.order_id, status=result.status)
-            return result
-        except Exception as e:
-            if "position does not exist" in str(e).lower():
-                log.warning("No position to close for %s", symbol)
-                self._log_tx("sell_failed", symbol.upper(), status="no_position",
-                             detail={"error": str(e)})
-                return None
-            self._log_tx("sell_failed", symbol.upper(), status="error",
-                         detail={"error": str(e)})
-            raise
+        # Cancel any open orders first (stops hold shares and can block a market close).
+        self._cancel_open_orders(symbol)
+
+        last_error: Exception | None = None
+        for attempt in (1, 2):
+            try:
+                order = self._client.close_position(symbol.upper())
+                result = self._to_result(order)
+                log.info("CLOSE position: %s -> order %s", symbol, order.id)
+                self._log_tx("sell_submit", symbol.upper(), order_id=result.order_id, status=result.status)
+                return result
+            except Exception as e:
+                last_error = e
+                msg = str(e).lower()
+                if "position does not exist" in msg:
+                    log.warning("No position to close for %s", symbol)
+                    self._log_tx("sell_failed", symbol.upper(), status="no_position",
+                                 detail={"error": str(e)})
+                    return None
+                # Cancels can take a moment to release held shares; retry once.
+                if "insufficient qty available" in msg and attempt == 1:
+                    log.warning("CLOSE %s blocked by held shares; retrying after cancel settle", symbol)
+                    import time
+                    time.sleep(1.0)
+                    self._cancel_open_orders(symbol)
+                    continue
+                break
+
+        self._log_tx("sell_failed", symbol.upper(), status="error",
+                     detail={"error": str(last_error) if last_error else "unknown"})
+        raise last_error if last_error else RuntimeError(f"Failed to close position for {symbol}")
 
     def _cancel_open_orders(self, symbol: str) -> int:
         """Cancel all open orders for a symbol. Returns count of cancelled orders."""
@@ -535,7 +551,7 @@ class AlpacaBroker:
             if self.cancel_order(o.order_id):
                 cancelled += 1
         if cancelled:
-            log.info("Cancelled %d open orders for %s before extended-hours sell", cancelled, symbol)
+            log.info("Cancelled %d open orders for %s before sell", cancelled, symbol)
             import time; time.sleep(0.5)  # brief pause for cancellations to settle
         return cancelled
 

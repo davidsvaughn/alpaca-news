@@ -32,7 +32,7 @@ from trader.db.database import (
     get_active_live_config,
     get_active_watches,
     insert_watch,
-    update_watch,
+    update_watch_if_current_status,
 )
 from trader.market.backtest import normalize_rank_method, RANK_METHOD_CONFIDENCE, RANK_METHOD_UNREAL_PL, RANK_METHOD_COMPOSITE
 from trader.market.market_hours import ET, add_market_hours, is_market_open, is_trading_session_open
@@ -228,7 +228,13 @@ class LiveExitMonitor:
                     builder.peak_pnl_pct = round(current_pnl, 4)
                 if builder.trough_pnl_pct is None or current_pnl < builder.trough_pnl_pct:
                     builder.trough_pnl_pct = round(current_pnl, 4)
-                update_watch(self.db, watch_id, builder.to_watch().to_dict())
+                # Guard against concurrent reconcile/stream exits resurrecting holding state.
+                update_watch_if_current_status(
+                    self.db,
+                    watch_id,
+                    builder.to_watch().to_dict(),
+                    expected_status="holding",
+                )
             return
 
         # Get or create indicator cache for this symbol;
@@ -327,7 +333,14 @@ class LiveExitMonitor:
                 ))
 
         updated = builder.to_watch()
-        update_watch(self.db, watch_id, updated.to_dict())
+        ok = update_watch_if_current_status(
+            self.db,
+            watch_id,
+            updated.to_dict(),
+            expected_status="holding",
+        )
+        if not ok:
+            log.info("Skipping stale holding update for %s (%s): status changed concurrently", symbol, watch_id)
 
     # ------------------------------------------------------------------
     # Exited → cooling_off transition
@@ -355,7 +368,14 @@ class LiveExitMonitor:
         )
 
         updated = builder.to_watch()
-        update_watch(self.db, watch_id, updated.to_dict())
+        ok = update_watch_if_current_status(
+            self.db,
+            watch_id,
+            updated.to_dict(),
+            expected_status="exited",
+        )
+        if not ok:
+            log.info("Skipping stale exited->cooling transition for %s (%s)", watch_dict["symbol"], watch_id)
 
         if self.bus:
             from trader.online.event_bus import PipelineEvent
@@ -403,7 +423,15 @@ class LiveExitMonitor:
         log.info("SEALED: %s %s", symbol, watch_id)
 
         updated = builder.to_watch()
-        update_watch(self.db, watch_id, updated.to_dict())
+        ok = update_watch_if_current_status(
+            self.db,
+            watch_id,
+            updated.to_dict(),
+            expected_status="cooling_off",
+        )
+        if not ok:
+            log.info("Skipping stale cooling->sealed transition for %s (%s)", symbol, watch_id)
+            return
 
         # Clean up indicator cache
         self._indicator_caches.pop(symbol, None)
@@ -933,7 +961,15 @@ class LivePortfolioManager:
         log.info("REPLACE EXIT: %s %s — exit_price=%.2f", symbol, watch_id, exit_price)
 
         updated = builder.to_watch()
-        update_watch(self.db, watch_id, updated.to_dict())
+        ok = update_watch_if_current_status(
+            self.db,
+            watch_id,
+            updated.to_dict(),
+            expected_status="holding",
+        )
+        if not ok:
+            log.info("Skipping stale replacement exit for %s (%s): status changed concurrently", symbol, watch_id)
+            return False
 
         if self.bus:
             from trader.online.event_bus import PipelineEvent
@@ -1076,7 +1112,7 @@ class LivePortfolioManager:
 
 
 _SHADOW_SUMMARY_INTERVAL_S = 3600  # write clean summary JSON hourly
-_EQUITY_SNAPSHOT_INTERVAL_S = float(os.getenv("EQUITY_SNAPSHOT_INTERVAL", "900"))  # 15 min default
+_EQUITY_SNAPSHOT_INTERVAL_S = float(os.getenv("EQUITY_SNAPSHOT_INTERVAL", "60"))  # 1 min default
 
 
 def _ensure_stops_if_needed(monitor: LiveExitMonitor, last_date: str | None) -> str | None:

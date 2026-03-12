@@ -289,6 +289,34 @@ def update_watch(db: Database, watch_id: str, watch: dict[str, Any]) -> None:
         )
 
 
+def update_watch_if_current_status(
+    db: Database,
+    watch_id: str,
+    watch: dict[str, Any],
+    *,
+    expected_status: str,
+) -> bool:
+    """Update a watch only if its current DB status matches expected_status.
+
+    Returns True if updated, False if status changed concurrently.
+    """
+    with db.engine.begin() as conn:
+        result = conn.execute(
+            text(
+                "UPDATE watches SET status = :status, watch_json = :wjson, "
+                "updated_at = CURRENT_TIMESTAMP "
+                "WHERE watch_id = :wid AND status = :expected_status"
+            ),
+            {
+                "wid": watch_id,
+                "status": watch["status"],
+                "wjson": json.dumps(watch, ensure_ascii=False),
+                "expected_status": expected_status,
+            },
+        )
+    return bool(result.rowcount)
+
+
 def get_watch(db: Database, watch_id: str) -> dict[str, Any] | None:
     """Fetch a single watch by ID. Returns the parsed JSON or None."""
     with db.engine.connect() as conn:
