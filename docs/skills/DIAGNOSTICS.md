@@ -156,6 +156,17 @@ with db.engine.connect() as conn:
 | `GET /api/debug/shadow` | Volume delta shadow collector state |
 | `POST /api/portfolio/{config_id}/sync` | Force reconciliation |
 
+## Proactive log review
+
+At the start of a conversation (especially during or after market hours), **check the error logs proactively**:
+
+1. Read `logs/trader.log` for today's errors and warnings
+2. If yesterday's rotated log exists (`trader.log.YYYY-MM-DD`), scan it too
+3. Summarize what you find for the user — categorize by error type, affected symbols, and frequency
+4. **Do NOT implement fixes without asking the user first.** Present findings and proposed fixes, then wait for approval before changing any code.
+
+This applies even if the user hasn't asked about errors — surface issues early so they can be triaged.
+
 ## Common diagnostic workflows
 
 ### "Why didn't the system buy X today?"

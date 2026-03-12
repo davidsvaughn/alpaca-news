@@ -51,8 +51,11 @@
       {% set qty = w.qty if w.qty is defined and w.qty else none %}
       <td>{% if qty %}{{ "%.2f"|format(qty) }}{% else %}<span class="text-muted">&mdash;</span>{% endif %}</td>
       <td>
-        {% if cur and qty %}
-          ${{ "{:,.0f}".format(cur * qty) }}
+        {% if qty and pnl is not none %}
+          {% set value = (w.entry.price * qty) * (pnl / 100.0) %}
+          <span class="{% if value >= 0 %}pnl-positive{% else %}pnl-negative{% endif %}">
+            {{ "${:+,.2f}".format(value) }}
+          </span>
         {% else %}
           <span class="text-muted">&mdash;</span>
         {% endif %}
@@ -434,6 +437,7 @@
 <script>
 (function() {
   var SORT_KEY = 'positions_sort_state';
+  var SELECTION_KEY = 'positions_liquidate_selection';
 
   function getSortState() {
     try {
@@ -449,6 +453,66 @@
 
   function saveSortState(state) {
     try { localStorage.setItem(SORT_KEY, JSON.stringify(state || {})); } catch (e) {}
+  }
+
+  function getSelectionState() {
+    try {
+      var raw = localStorage.getItem(SELECTION_KEY);
+      if (!raw) return {};
+      var parsed = JSON.parse(raw);
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
+      return parsed;
+    } catch (e) {
+      return {};
+    }
+  }
+
+  function saveSelectionState(state) {
+    try { localStorage.setItem(SELECTION_KEY, JSON.stringify(state || {})); } catch (e) {}
+  }
+
+  function _syncSelectAll(table) {
+    var all = table.querySelectorAll('._select-pos');
+    var checked = table.querySelectorAll('._select-pos:checked');
+    var selectAll = table.querySelector('._select-all');
+    if (!selectAll) return;
+    selectAll.checked = (all.length > 0 && all.length === checked.length);
+  }
+
+  function _persistTableSelection(table) {
+    var configId = table.dataset.configId;
+    if (!configId) return;
+    var state = getSelectionState();
+    var symbols = [];
+    table.querySelectorAll('._select-pos:checked').forEach(function(cb) {
+      if (cb.value) symbols.push(cb.value);
+    });
+    if (symbols.length > 0) state[configId] = symbols;
+    else delete state[configId];
+    saveSelectionState(state);
+  }
+
+  function _restoreTableSelection(table) {
+    var configId = table.dataset.configId;
+    if (!configId) return;
+    var state = getSelectionState();
+    var saved = Array.isArray(state[configId]) ? state[configId] : [];
+    var want = new Set(saved.map(String));
+    var restored = [];
+
+    table.querySelectorAll('._select-pos').forEach(function(cb) {
+      var keep = want.has(String(cb.value || ''));
+      cb.checked = keep;
+      if (keep && cb.value) restored.push(cb.value);
+    });
+
+    // Clean stale symbols that no longer exist in this table.
+    if (restored.length > 0) state[configId] = restored;
+    else delete state[configId];
+    saveSelectionState(state);
+
+    _syncSelectAll(table);
+    _updateLiquidateBtn(table);
   }
 
   function setHeaderSortVisuals(th, asc) {
@@ -720,25 +784,27 @@
 
   // Select-all checkbox
   document.querySelectorAll('._select-all').forEach(function(el) {
+    if (el.dataset.boundSelectAll === '1') return;
+    el.dataset.boundSelectAll = '1';
     el.addEventListener('change', function() {
       var table = el.closest('table');
       table.querySelectorAll('._select-pos').forEach(function(cb) {
         cb.checked = el.checked;
       });
+      _persistTableSelection(table);
       _updateLiquidateBtn(table);
     });
   });
 
   // Individual checkbox
   document.querySelectorAll('._select-pos').forEach(function(el) {
+    if (el.dataset.boundSelectPos === '1') return;
+    el.dataset.boundSelectPos = '1';
     el.addEventListener('change', function() {
       var table = el.closest('table');
+      _persistTableSelection(table);
       _updateLiquidateBtn(table);
-      // Update select-all state
-      var all = table.querySelectorAll('._select-pos');
-      var checked = table.querySelectorAll('._select-pos:checked');
-      var selectAll = table.querySelector('._select-all');
-      if (selectAll) selectAll.checked = (all.length === checked.length);
+      _syncSelectAll(table);
     });
   });
 
@@ -752,6 +818,11 @@
       btn.textContent = 'Liquidate ' + checked.length + ' selected';
     }
   }
+
+  // Restore persisted checkbox selections after every render.
+  document.querySelectorAll('._holdings-table[data-config-id]').forEach(function(table) {
+    _restoreTableSelection(table);
+  });
 
   // Sync button
   document.querySelectorAll('._sync-btn').forEach(function(btn) {
