@@ -39,7 +39,7 @@ from contextvars import ContextVar
 from dataclasses import asdict, dataclass
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 import numpy as np
 import pandas as pd
@@ -67,6 +67,37 @@ def _trace_inc(key: str, n: int = 1) -> None:
         return
     counts = ctx.setdefault("counts", {})
     counts[key] = int(counts.get(key, 0)) + int(n)
+
+
+ProgressCallback = Callable[[dict[str, Any]], None]
+
+
+def _safe_emit_progress(
+    progress_cb: ProgressCallback | None,
+    payload: dict[str, Any],
+) -> None:
+    """Best-effort progress emission.
+
+    Progress updates should never interfere with the backtest itself.
+    """
+    if progress_cb is None:
+        return
+    try:
+        progress_cb(payload)
+    except Exception:
+        log.debug("Ignoring backtest progress callback failure", exc_info=True)
+
+
+def _entry_time_bounds(entries: list[dict[str, Any]]) -> tuple[str | None, str | None]:
+    times = [
+        str(e.get("entry_time", e.get("entry_date", ""))).strip()
+        for e in entries
+        if str(e.get("entry_time", e.get("entry_date", ""))).strip()
+    ]
+    if not times:
+        return None, None
+    times.sort()
+    return times[0], times[-1]
 
 # ---------------------------------------------------------------------------
 # Strategy definitions
@@ -832,6 +863,7 @@ def apply_allocation(
     entries: list[dict[str, Any]],
     alloc_key: str,
     alloc_params: dict[str, Any],
+    progress_cb: ProgressCallback | None = None,
 ) -> tuple[list[BacktestResult], dict[str, int]]:
     """Filter / modify *results* according to an allocation strategy.
 
@@ -855,6 +887,9 @@ def apply_allocation(
 
     # Sort entries chronologically for the portfolio walk-forward
     chrono = sorted(by_sid.values(), key=lambda t: t[2].get("entry_time", ""))
+    timeline_start = chrono[0][2].get("entry_time", "") if chrono else None
+    timeline_end = chrono[-1][2].get("entry_time", "") if chrono else None
+    total = len(chrono)
 
     # Determine capacity rule
     if alloc_key == "fixed_dollar":
@@ -880,7 +915,18 @@ def apply_allocation(
     out: dict[int, BacktestResult] = {}               # original index -> final result
     stats = {"taken": 0, "skipped": 0, "replaced": 0}
 
-    for orig_idx, result, entry in chrono:
+    _safe_emit_progress(progress_cb, {
+        "phase": "allocation",
+        "label": "Applying allocation",
+        "processed": 0,
+        "total": total,
+        "phase_progress": 0.0,
+        "chrono": True,
+        "timeline_start": timeline_start,
+        "timeline_end": timeline_end,
+    })
+
+    for pos, (orig_idx, result, entry) in enumerate(chrono, start=1):
         sid = result.snapshot_id
         new_entry_time = entry.get("entry_time", "")
         new_confidence = float(entry.get("confidence", 0.5))
@@ -954,6 +1000,22 @@ def apply_allocation(
             )
             stats["skipped"] += 1
 
+        _safe_emit_progress(progress_cb, {
+            "phase": "allocation",
+            "label": "Applying allocation",
+            "processed": pos,
+            "total": total,
+            "phase_progress": (pos / total) if total > 0 else 1.0,
+            "chrono": True,
+            "current_entry_time": new_entry_time or None,
+            "current_symbol": result.symbol,
+            "timeline_start": timeline_start,
+            "timeline_end": timeline_end,
+            "alloc_taken": stats["taken"],
+            "alloc_skipped": stats["skipped"],
+            "alloc_replaced": stats["replaced"],
+        })
+
     # Return results in original order
     final = [out[i] for i in range(len(results)) if i in out]
     # Adjust taken count: replaced victims were already counted as taken originally
@@ -1008,6 +1070,7 @@ def compute_portfolio_sim(
     alloc_params: dict[str, Any],
     starting_amount: float,
     reinvest_delay_minutes: int = 1,
+    progress_cb: ProgressCallback | None = None,
 ) -> dict[str, Any]:
     """Dollar-denominated portfolio simulation on already-filtered results.
 
@@ -1022,6 +1085,15 @@ def compute_portfolio_sim(
         and r.exit_reason not in ("skipped", "no_data", "unknown_strategy")
     ]
     if not taken:
+        _safe_emit_progress(progress_cb, {
+            "phase": "portfolio_sim",
+            "label": "Simulating portfolio",
+            "processed": 0,
+            "total": 0,
+            "phase_progress": 1.0,
+            "chrono": True,
+            "portfolio_value": round(starting_amount, 2),
+        })
         return {
             "sim_starting": round(starting_amount, 2),
             "sim_ending": round(starting_amount, 2),
@@ -1049,8 +1121,29 @@ def compute_portfolio_sim(
     pending_cash: list[tuple[str, float]] = []
     sim_trades = 0
     MIN_POSITION = 1.0  # ignore dust
+    timeline_start = taken[0].entry_time
+    timeline_end = max((r.exit_time or r.entry_time) for r in taken)
 
-    for r in taken:
+    def _sim_equity() -> float:
+        active_principal = sum(float(pos["invested"]) for pos in active.values())
+        pending_total = sum(float(amount) for _, amount in pending_cash)
+        return cash + active_principal + pending_total
+
+    _safe_emit_progress(progress_cb, {
+        "phase": "portfolio_sim",
+        "label": "Simulating portfolio",
+        "processed": 0,
+        "total": len(taken),
+        "phase_progress": 0.0,
+        "chrono": True,
+        "timeline_start": timeline_start,
+        "timeline_end": timeline_end,
+        "portfolio_value": round(starting_amount, 2),
+        "sim_trades": 0,
+        "sim_active_positions": 0,
+    })
+
+    for idx, r in enumerate(taken, start=1):
         cur_time = r.entry_time
 
         # 4a. Evict closed positions → pending cash
@@ -1088,6 +1181,22 @@ def compute_portfolio_sim(
             }
             sim_trades += 1
 
+        _safe_emit_progress(progress_cb, {
+            "phase": "portfolio_sim",
+            "label": "Simulating portfolio",
+            "processed": idx,
+            "total": len(taken),
+            "phase_progress": idx / len(taken),
+            "chrono": True,
+            "current_entry_time": cur_time,
+            "current_symbol": r.symbol,
+            "timeline_start": timeline_start,
+            "timeline_end": timeline_end,
+            "portfolio_value": round(_sim_equity(), 2),
+            "sim_trades": sim_trades,
+            "sim_active_positions": len(active),
+        })
+
     # 5. Close remaining positions + collect pending cash
     for pos in active.values():
         cash += pos["invested"] * (1 + pos["pnl_pct"] / 100)
@@ -1096,6 +1205,21 @@ def compute_portfolio_sim(
 
     ending = cash
     return_pct = (ending - starting_amount) / starting_amount * 100 if starting_amount > 0 else 0.0
+
+    _safe_emit_progress(progress_cb, {
+        "phase": "portfolio_sim",
+        "label": "Simulating portfolio",
+        "processed": len(taken),
+        "total": len(taken),
+        "phase_progress": 1.0,
+        "chrono": True,
+        "current_entry_time": timeline_end,
+        "timeline_start": timeline_start,
+        "timeline_end": timeline_end,
+        "portfolio_value": round(ending, 2),
+        "sim_trades": sim_trades,
+        "sim_active_positions": 0,
+    })
 
     # Compute CAGR-based daily return over the trading-day span
     sim_daily_pct: float | None = None
@@ -2625,6 +2749,7 @@ def run_backtest(
     price_delay_minutes: int = 10,
     stats_resolution_minutes: int = 60,
     trace: dict[str, Any] | None = None,
+    progress_cb: ProgressCallback | None = None,
 ) -> list[BacktestResult]:
     """Run an exit strategy backtest for a batch of entries using 1-min bars.
 
@@ -2648,9 +2773,30 @@ def run_backtest(
     counts: dict[str, int] = defaultdict(int)
     symbol_sec: dict[str, float] = defaultdict(float)
     symbol_entries: dict[str, int] = defaultdict(int)
+    total_entries = len(entries)
+    processed_entries = 0
+    timeline_start, timeline_end = _entry_time_bounds(entries)
 
     def _mark(stage: str, start: float) -> None:
         stage_sec[stage] += max(0.0, time.perf_counter() - start)
+
+    def _emit_run_progress(
+        *,
+        current_symbol: str | None = None,
+        current_entry_time: str | None = None,
+    ) -> None:
+        _safe_emit_progress(progress_cb, {
+            "phase": "engine",
+            "label": "Evaluating exits by symbol",
+            "processed": processed_entries,
+            "total": total_entries,
+            "phase_progress": (processed_entries / total_entries) if total_entries > 0 else 1.0,
+            "chrono": False,
+            "current_symbol": current_symbol,
+            "current_entry_time": current_entry_time,
+            "timeline_start": timeline_start,
+            "timeline_end": timeline_end,
+        })
 
     base_runner = _STRATEGY_RUNNERS.get(strategy_key)
     if base_runner is None:
@@ -2693,6 +2839,7 @@ def run_backtest(
     _mark("group_entries", t_group)
     counts["entries_total"] = len(entries)
     counts["symbols_total"] = len(by_symbol)
+    _emit_run_progress()
 
     for symbol, sym_entries in by_symbol.items():
         sym_start = time.perf_counter()
@@ -2728,6 +2875,11 @@ def run_backtest(
                     exit_reason="no_data",
                 ))
                 counts["trades_no_data"] += 1
+                processed_entries += 1
+                _emit_run_progress(
+                    current_symbol=symbol,
+                    current_entry_time=e.get("entry_time", e.get("entry_date", "")) or None,
+                )
             symbol_sec[symbol] += max(0.0, time.perf_counter() - sym_start)
             continue
 
@@ -2746,6 +2898,11 @@ def run_backtest(
                     exit_reason="no_data",
                 ))
                 counts["trades_no_data"] += 1
+                processed_entries += 1
+                _emit_run_progress(
+                    current_symbol=symbol,
+                    current_entry_time=e.get("entry_time", e.get("entry_date", "")) or None,
+                )
             symbol_sec[symbol] += max(0.0, time.perf_counter() - sym_start)
             continue
 
@@ -2768,6 +2925,11 @@ def run_backtest(
                 ))
                 counts["trades_no_data"] += 1
                 _mark("entry_locate", t_locate)
+                processed_entries += 1
+                _emit_run_progress(
+                    current_symbol=symbol,
+                    current_entry_time=entry_time_str or None,
+                )
                 continue
 
             # If entry_price is missing (0) or entry landed before 9:30+delay
@@ -2884,6 +3046,11 @@ def run_backtest(
                 counts["trades_guard_exit"] += 1
             else:
                 counts["trades_strategy_exit"] += 1
+            processed_entries += 1
+            _emit_run_progress(
+                current_symbol=symbol,
+                current_entry_time=entry_time_str or None,
+            )
         symbol_sec[symbol] += max(0.0, time.perf_counter() - sym_start)
 
     total_sec = max(0.0, time.perf_counter() - total_start)

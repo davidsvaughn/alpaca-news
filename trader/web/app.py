@@ -86,7 +86,8 @@ def create_app(
     app.state.settings = settings  # mutable ref for hot-reload
     app.state.online = online
 
-    # In-memory backtest job store: {job_id: {status, result, error, created_at, strategy}}
+    # In-memory backtest job store:
+    # {job_id: {status, result, error, created_at, strategy, progress}}
     _backtest_jobs: dict[str, dict[str, Any]] = {}
 
     # Market data service + fundamentals cache for snapshot enrichment
@@ -1116,6 +1117,24 @@ def create_app(
         if not entries:
             return {"job_id": None, "error": "No snapshots match the current filters."}
 
+        entry_times = sorted(
+            str(e.get("entry_time") or "").strip()
+            for e in entries
+            if str(e.get("entry_time") or "").strip()
+        )
+        timeline_start = entry_times[0] if entry_times else None
+        timeline_end = entry_times[-1] if entry_times else None
+        phase_weights = (
+            {"engine": 0.75, "allocation": 0.15, "portfolio_sim": 0.10}
+            if starting_amount > 0
+            else {"engine": 0.85, "allocation": 0.15, "portfolio_sim": 0.0}
+        )
+        phase_offsets = {
+            "engine": 0.0,
+            "allocation": phase_weights["engine"],
+            "portfolio_sim": phase_weights["engine"] + phase_weights["allocation"],
+        }
+
         # Create job and return immediately
         job_id = str(uuid.uuid4())
         _backtest_jobs[job_id] = {
@@ -1125,6 +1144,22 @@ def create_app(
             "result": None,
             "error": None,
             "task": None,  # will hold asyncio.Task for cancellation
+            "progress": {
+                "phase": "engine",
+                "label": "Queued backtest",
+                "phase_percent": 0.0,
+                "percent_done": 0.0,
+                "chrono": False,
+                "processed": 0,
+                "total": len(entries),
+                "current_symbol": None,
+                "current_entry_time": None,
+                "timeline_start": timeline_start,
+                "timeline_end": timeline_end,
+                "portfolio_value": None,
+                "note": "Trade evaluation is grouped by symbol, not global time order.",
+                "updated_at": time.time(),
+            },
         }
 
         # Prune jobs older than 1 hour
@@ -1144,6 +1179,93 @@ def create_app(
 
         async def _run_backtest_job() -> None:
             log = logging.getLogger("backtest_job")
+            last_progress_emit = 0.0
+
+            def _coerce_int(value: Any) -> int | None:
+                if value is None:
+                    return None
+                try:
+                    return int(value)
+                except (TypeError, ValueError):
+                    return None
+
+            def _coerce_float(value: Any) -> float | None:
+                if value is None:
+                    return None
+                try:
+                    return float(value)
+                except (TypeError, ValueError):
+                    return None
+
+            def _set_backtest_progress(update: dict[str, Any], *, force: bool = False) -> None:
+                nonlocal last_progress_emit
+                job = _backtest_jobs.get(job_id)
+                if job is None:
+                    return
+
+                prev = job.get("progress") or {}
+                phase = str(update.get("phase") or prev.get("phase") or "engine")
+                label = str(update.get("label") or prev.get("label") or phase.replace("_", " ").title())
+                phase_progress = _coerce_float(update.get("phase_progress"))
+                if phase_progress is None:
+                    phase_progress = _coerce_float(prev.get("phase_percent"))
+                    phase_progress = (phase_progress or 0.0) / 100.0
+                phase_progress = max(0.0, min(1.0, phase_progress))
+
+                if phase == "complete":
+                    overall = 1.0
+                elif phase in {"error", "aborted"}:
+                    overall = max(0.0, min(1.0, _coerce_float(prev.get("percent_done")) or 0.0)) / 100.0
+                else:
+                    overall = phase_offsets.get(phase, 0.0) + phase_progress * phase_weights.get(phase, 0.0)
+                    overall = max(0.0, min(1.0, overall))
+
+                progress = {
+                    "phase": phase,
+                    "label": label,
+                    "phase_percent": round(phase_progress * 100.0, 1),
+                    "percent_done": round(overall * 100.0, 1),
+                    "chrono": bool(update.get("chrono", prev.get("chrono", False))),
+                    "processed": _coerce_int(update.get("processed")) or 0,
+                    "total": _coerce_int(update.get("total")) or 0,
+                    "current_symbol": update.get("current_symbol") or prev.get("current_symbol"),
+                    "current_entry_time": update.get("current_entry_time") or prev.get("current_entry_time"),
+                    "timeline_start": update.get("timeline_start") or prev.get("timeline_start") or timeline_start,
+                    "timeline_end": update.get("timeline_end") or prev.get("timeline_end") or timeline_end,
+                    "portfolio_value": None,
+                    "alloc_taken": _coerce_int(update.get("alloc_taken")),
+                    "alloc_skipped": _coerce_int(update.get("alloc_skipped")),
+                    "alloc_replaced": _coerce_int(update.get("alloc_replaced")),
+                    "sim_trades": _coerce_int(update.get("sim_trades")),
+                    "sim_active_positions": _coerce_int(update.get("sim_active_positions")),
+                    "updated_at": time.time(),
+                }
+                portfolio_value = _coerce_float(update.get("portfolio_value"))
+                if portfolio_value is not None:
+                    progress["portfolio_value"] = round(portfolio_value, 2)
+                elif prev.get("portfolio_value") is not None:
+                    progress["portfolio_value"] = prev.get("portfolio_value")
+
+                if phase == "engine":
+                    progress["note"] = "Trade evaluation is grouped by symbol, not global time order."
+                else:
+                    progress["note"] = update.get("note") or prev.get("note")
+
+                if phase in {"allocation", "portfolio_sim", "complete"} and progress.get("note") == "Trade evaluation is grouped by symbol, not global time order.":
+                    progress["note"] = None
+
+                job["progress"] = progress
+
+                now = time.time()
+                phase_changed = progress["phase"] != prev.get("phase")
+                done = progress["total"] > 0 and progress["processed"] >= progress["total"]
+                if force or phase_changed or done or (now - last_progress_emit) >= 0.5:
+                    last_progress_emit = now
+                    bus.publish(PipelineEvent(
+                        type="backtest_progress",
+                        payload={"job_id": job_id, "progress": progress},
+                    ))
+
             try:
                 api_start = time.perf_counter()
                 api_stages: dict[str, float] = {}
@@ -1157,6 +1279,7 @@ def create_app(
                     run_backtest, strategy_key, params, entries, market_close, min_hold,
                     guard_stop_pct, guard_target_pct, guard_trail_pct,
                     price_delay_minutes, res_min, engine_trace,
+                    progress_cb=_set_backtest_progress,
                 )
                 _mark("run_backtest", t_engine)
 
@@ -1164,6 +1287,7 @@ def create_app(
                 t_alloc = time.perf_counter()
                 results, alloc_stats = apply_allocation(
                     results, entries, allocation_key, allocation_params,
+                    progress_cb=_set_backtest_progress,
                 )
                 wpt = weight_per_trade_for_allocation(allocation_key, allocation_params)
                 _mark("apply_allocation", t_alloc)
@@ -1175,6 +1299,7 @@ def create_app(
                     sim_result = compute_portfolio_sim(
                         results, allocation_key, allocation_params,
                         starting_amount, reinvest_delay_minutes,
+                        progress_cb=_set_backtest_progress,
                     )
                     _mark("portfolio_sim", t_sim)
 
@@ -1228,6 +1353,19 @@ def create_app(
                         "engine": engine_trace or {},
                     }
 
+                _set_backtest_progress({
+                    "phase": "complete",
+                    "label": "Backtest complete",
+                    "phase_progress": 1.0,
+                    "processed": len(entries),
+                    "total": len(entries),
+                    "chrono": True,
+                    "current_entry_time": timeline_end,
+                    "timeline_start": timeline_start,
+                    "timeline_end": timeline_end,
+                    "portfolio_value": sim_result["sim_ending"] if sim_result else None,
+                    "sim_trades": sim_result["sim_trades"] if sim_result else None,
+                }, force=True)
                 _backtest_jobs[job_id]["status"] = "complete"
                 _backtest_jobs[job_id]["result"] = response
                 bus.publish(PipelineEvent(
@@ -1237,6 +1375,10 @@ def create_app(
             except asyncio.CancelledError:
                 log.info("Backtest job %s aborted", job_id)
                 _backtest_jobs[job_id]["status"] = "aborted"
+                _set_backtest_progress({
+                    "phase": "aborted",
+                    "label": "Backtest aborted",
+                }, force=True)
                 bus.publish(PipelineEvent(
                     type="backtest_aborted",
                     payload={"job_id": job_id},
@@ -1245,6 +1387,11 @@ def create_app(
                 log.exception("Backtest job %s failed", job_id)
                 _backtest_jobs[job_id]["status"] = "error"
                 _backtest_jobs[job_id]["error"] = str(exc)
+                _set_backtest_progress({
+                    "phase": "error",
+                    "label": "Backtest failed",
+                    "note": str(exc),
+                }, force=True)
                 bus.publish(PipelineEvent(
                     type="backtest_error",
                     payload={"job_id": job_id, "error": str(exc)},
@@ -1263,6 +1410,7 @@ def create_app(
             "strategy": job["strategy"],
             "result": job["result"],
             "error": job["error"],
+            "progress": job.get("progress"),
         }
 
     @app.post("/api/strategies/backtest/{job_id}/abort")
@@ -1873,6 +2021,87 @@ def create_app(
             "submitted": 0,
             "failed": [],
         }
+
+        def _delete_stale_alpaca_config(*, watch_exit_reason: str) -> JSONResponse:
+            """Force-exit local holdings when the linked Alpaca account is gone."""
+            from trader.db.database import update_watch_if_current_status
+            from trader.models.watch import WatchBuilder
+
+            deactivate_live_config(db, config_id)
+            try:
+                from trader.online import orchestrator as _orch
+                _orch.sync_alpaca_trade_streams(
+                    db=db,
+                    bus=bus,
+                    reason=f"delete-stale-account:{config_id}",
+                )
+            except Exception:
+                pass
+
+            force_exited: list[str] = []
+            for watch in get_active_watches(db):
+                if watch.get("status") != "holding":
+                    continue
+                if watch.get("live_config_id") != config_id:
+                    continue
+
+                builder = WatchBuilder.from_dict(watch)
+                entry_price = float((watch.get("entry") or {}).get("price") or 0.0)
+                if entry_price <= 0:
+                    entry_price = 0.01
+                builder.record_exit(price=entry_price, reason=watch_exit_reason)
+                builder.alpaca_stop_order_id = None
+                builder.alpaca_stop_price = None
+                updated = builder.to_watch()
+                ok = update_watch_if_current_status(
+                    db,
+                    watch["watch_id"],
+                    updated.to_dict(),
+                    expected_status="holding",
+                )
+                if ok:
+                    force_exited.append(watch["symbol"])
+
+            liquidation["skipped_reason"] = "alpaca_account_missing"
+            liquidation["force_exit_reason"] = watch_exit_reason
+            liquidation["force_exited"] = sorted(force_exited)
+
+            holding_count = count_holding_watches(db, live_config_id=config_id)
+            if holding_count > 0:
+                return JSONResponse(
+                    {
+                        "error": (
+                            f"cannot_delete_with_holdings: config {config_id} still has "
+                            f"{holding_count} holding watch(es) after stale-account cleanup."
+                        ),
+                        "config_id": config_id,
+                        "alpaca_account_id": alpaca_id,
+                        "liquidation": liquidation,
+                    },
+                    status_code=409,
+                )
+
+            ok = delete_live_config(db, config_id)
+            if not ok:
+                return JSONResponse({"error": "not_found"}, status_code=404)
+            try:
+                from trader.online import orchestrator as _orch
+                _orch.sync_alpaca_trade_streams(
+                    db=db,
+                    bus=bus,
+                    reason=f"delete-stale-finish:{config_id}",
+                )
+            except Exception:
+                pass
+            return JSONResponse(
+                {
+                    "status": "deleted",
+                    "config_id": config_id,
+                    "alpaca_account_id": alpaca_id,
+                    "liquidation": liquidation,
+                },
+            )
+
         alpaca_id = cfg_dict.get("alpaca_account_id")
         if alpaca_id:
             try:
@@ -1900,9 +2129,8 @@ def create_app(
                 registry = AlpacaAccountRegistry()
                 creds = registry.get(alpaca_id)
                 if not creds:
-                    return JSONResponse(
-                        {"error": f"Alpaca account {alpaca_id} not found"},
-                        status_code=404,
+                    return _delete_stale_alpaca_config(
+                        watch_exit_reason="alpaca_account_missing_on_delete",
                     )
 
                 broker = AlpacaBroker(

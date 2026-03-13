@@ -17,8 +17,10 @@ from trader.market.backtest import (
     BacktestResult,
     _extract_periodic_closes,
     _filter_trading_hours,
+    apply_allocation,
     compute_ann_a,
     compute_ann_b,
+    compute_portfolio_sim,
 )
 
 # ---------------------------------------------------------------------------
@@ -139,6 +141,101 @@ class TestComputeAnnA:
         assert stats is not None
         assert stats["ann"] < 0
 
+
+class TestBacktestProgress:
+    def test_apply_allocation_progress_is_chronological(self):
+        events: list[dict[str, object]] = []
+        results = [
+            BacktestResult(
+                snapshot_id="late",
+                symbol="AAPL",
+                entry_price=100.0,
+                entry_time="2026-01-03T10:00:00",
+                exit_price=102.0,
+                exit_time="2026-01-03T11:00:00",
+                pnl_pct=2.0,
+                exit_reason="signal",
+                bars_held=60,
+            ),
+            BacktestResult(
+                snapshot_id="early",
+                symbol="MSFT",
+                entry_price=100.0,
+                entry_time="2026-01-02T10:00:00",
+                exit_price=101.0,
+                exit_time="2026-01-02T11:00:00",
+                pnl_pct=1.0,
+                exit_reason="signal",
+                bars_held=60,
+            ),
+        ]
+        entries = [
+            {"snapshot_id": "late", "entry_time": "2026-01-03T10:00:00", "confidence": 0.8},
+            {"snapshot_id": "early", "entry_time": "2026-01-02T10:00:00", "confidence": 0.7},
+        ]
+
+        final, stats = apply_allocation(
+            results,
+            entries,
+            "max_positions",
+            {"max_pos": 2},
+            progress_cb=events.append,
+        )
+
+        assert len(final) == 2
+        assert stats == {"taken": 2, "skipped": 0, "replaced": 0}
+        assert events[0]["phase"] == "allocation"
+        assert events[0]["processed"] == 0
+        assert events[-1]["processed"] == 2
+        assert events[-1]["total"] == 2
+        assert events[-1]["chrono"] is True
+        assert events[1]["current_entry_time"] == "2026-01-02T10:00:00"
+        assert events[2]["current_entry_time"] == "2026-01-03T10:00:00"
+
+    def test_portfolio_sim_progress_reports_equity(self):
+        events: list[dict[str, object]] = []
+        results = [
+            BacktestResult(
+                snapshot_id="a",
+                symbol="AAPL",
+                entry_price=100.0,
+                entry_time="2026-01-02T10:00:00",
+                exit_price=110.0,
+                exit_time="2026-01-02T11:00:00",
+                pnl_pct=10.0,
+                exit_reason="signal",
+                bars_held=60,
+            ),
+            BacktestResult(
+                snapshot_id="b",
+                symbol="MSFT",
+                entry_price=100.0,
+                entry_time="2026-01-02T12:00:00",
+                exit_price=95.0,
+                exit_time="2026-01-02T13:00:00",
+                pnl_pct=-5.0,
+                exit_reason="signal",
+                bars_held=60,
+            ),
+        ]
+
+        sim = compute_portfolio_sim(
+            results,
+            "max_positions",
+            {"max_pos": 1},
+            1000.0,
+            0,
+            progress_cb=events.append,
+        )
+
+        assert sim["sim_ending"] == pytest.approx(1045.0)
+        assert events[0]["phase"] == "portfolio_sim"
+        assert events[0]["processed"] == 0
+        assert events[-1]["phase_progress"] == pytest.approx(1.0)
+        assert events[-1]["portfolio_value"] == pytest.approx(sim["sim_ending"])
+        assert events[-1]["chrono"] is True
+
+class TestComputeAnnAExtra:
     def test_zero_bars_floors_to_one(self):
         """bars_held=0 should be floored to 1 bar, not cause division by zero."""
         r = _make_result(pnl_pct=0.5, bars_held=0)

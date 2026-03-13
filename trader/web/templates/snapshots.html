@@ -106,6 +106,36 @@
   align-items: start;
 }
 
+.bt-progress-panel {
+  grid-column: 1 / -1;
+  margin-top: .75rem;
+  padding: .7rem .8rem;
+  border: 1px solid #d9e0ea;
+  border-radius: .6rem;
+  background: #fff;
+}
+
+.bt-progress-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: .75rem;
+}
+
+.bt-progress-title {
+  font-size: .85rem;
+  font-weight: 600;
+  color: #243447;
+}
+
+.bt-progress-meta,
+.bt-progress-note,
+.bt-progress-extra {
+  margin-top: .35rem;
+  font-size: .78rem;
+  color: #5e6978;
+}
+
 .bt-section {
   background: #fff;
   border: 1px solid #d9e0ea;
@@ -347,6 +377,22 @@
           <span id="bt-spinner" class="spinner-border spinner-border-sm text-primary d-none"></span>
         </div>
       </div>
+    </div>
+
+    <div id="bt-progress-panel" class="bt-progress-panel d-none">
+      <div class="bt-progress-head">
+        <div>
+          <div class="bt-ui-label mb-1">Backtest Progress</div>
+          <div id="bt-progress-title" class="bt-progress-title">Waiting to start…</div>
+        </div>
+        <div id="bt-progress-percent" class="small text-muted">0.0%</div>
+      </div>
+      <div class="progress mt-2" role="progressbar" aria-label="Backtest progress" aria-valuemin="0" aria-valuemax="100">
+        <div id="bt-progress-bar" class="progress-bar progress-bar-striped progress-bar-animated" style="width:0%"></div>
+      </div>
+      <div id="bt-progress-meta" class="bt-progress-meta"></div>
+      <div id="bt-progress-extra" class="bt-progress-extra d-none"></div>
+      <div id="bt-progress-note" class="bt-progress-note d-none"></div>
     </div>
 
     <div class="bt-layout">
@@ -842,6 +888,7 @@ var _btStrategies = null;  // cached strategy definitions
 var _btAllocations = null; // cached allocation definitions
 var _btResults = {};       // snapshot_id -> result dict
 var _btSummary = null;     // server-computed summary stats
+var _btProgress = null;    // live progress from the async backtest job
 var _btCurrentStrategy = '';
 var _btCurrentAllocation = 'none';
 var _BT_STRAT_KEY = 'bt_last_strategy';
@@ -1172,6 +1219,102 @@ function _collectBacktestFilters() {
   return filters;
 }
 
+function _fmtBtTime(iso) {
+  if (!iso) return '';
+  var dt = new Date(iso);
+  if (isNaN(dt.getTime())) return iso;
+  return dt.toLocaleString([], {
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+  });
+}
+
+function _fmtBtMoney(value) {
+  return '$' + Number(value).toLocaleString(undefined, {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  });
+}
+
+function _renderBacktestProgress(progress) {
+  _btProgress = progress || null;
+  var panel = document.getElementById('bt-progress-panel');
+  if (!panel) return;
+  if (!progress) {
+    panel.classList.add('d-none');
+    return;
+  }
+
+  panel.classList.remove('d-none');
+  var titleEl = document.getElementById('bt-progress-title');
+  var percentEl = document.getElementById('bt-progress-percent');
+  var bar = document.getElementById('bt-progress-bar');
+  var metaEl = document.getElementById('bt-progress-meta');
+  var extraEl = document.getElementById('bt-progress-extra');
+  var noteEl = document.getElementById('bt-progress-note');
+
+  var percent = typeof progress.percent_done === 'number' ? progress.percent_done : 0;
+  titleEl.textContent = progress.label || 'Running backtest';
+  percentEl.textContent = percent.toFixed(1) + '%';
+  bar.style.width = Math.max(0, Math.min(100, percent)) + '%';
+  bar.setAttribute('aria-valuenow', String(percent));
+  bar.classList.remove('bg-success', 'bg-danger', 'bg-warning');
+  if (progress.phase === 'complete') {
+    bar.classList.remove('progress-bar-striped', 'progress-bar-animated');
+    bar.classList.add('bg-success');
+  } else if (progress.phase === 'error') {
+    bar.classList.remove('progress-bar-animated');
+    bar.classList.add('bg-danger');
+  } else if (progress.phase === 'aborted') {
+    bar.classList.remove('progress-bar-animated');
+    bar.classList.add('bg-warning');
+  } else {
+    bar.classList.add('progress-bar-striped', 'progress-bar-animated');
+  }
+
+  var meta = [];
+  if (progress.total > 0) meta.push((progress.processed || 0) + '/' + progress.total);
+  if (progress.current_symbol) meta.push(progress.current_symbol);
+  if (progress.current_entry_time) {
+    meta.push((progress.chrono ? 'timeline ' : 'current signal ') + _fmtBtTime(progress.current_entry_time));
+  }
+  metaEl.textContent = meta.join(' • ');
+
+  var extra = [];
+  if (progress.timeline_start && progress.timeline_end && progress.chrono) {
+    extra.push(_fmtBtTime(progress.timeline_start) + ' → ' + _fmtBtTime(progress.timeline_end));
+  }
+  if (progress.portfolio_value != null) {
+    extra.push('portfolio ' + _fmtBtMoney(progress.portfolio_value));
+  }
+  if (progress.phase === 'portfolio_sim' && progress.sim_active_positions != null) {
+    extra.push(progress.sim_active_positions + ' active positions');
+  }
+  if (progress.phase === 'allocation' && progress.alloc_taken != null) {
+    var allocBits = ['taken ' + progress.alloc_taken];
+    if (progress.alloc_skipped != null) allocBits.push('skipped ' + progress.alloc_skipped);
+    if (progress.alloc_replaced != null) allocBits.push('replaced ' + progress.alloc_replaced);
+    extra.push(allocBits.join(', '));
+  }
+  if (extra.length) {
+    extraEl.textContent = extra.join(' • ');
+    extraEl.classList.remove('d-none');
+  } else {
+    extraEl.textContent = '';
+    extraEl.classList.add('d-none');
+  }
+
+  if (progress.note) {
+    noteEl.textContent = progress.note;
+    noteEl.classList.remove('d-none');
+  } else {
+    noteEl.textContent = '';
+    noteEl.classList.add('d-none');
+  }
+}
+
 function _btSetRunning(running) {
   document.getElementById('bt-spinner').classList.toggle('d-none', !running);
   document.getElementById('bt-run-btn').disabled = running;
@@ -1186,6 +1329,15 @@ function runBacktest() {
   var filters = _collectBacktestFilters();
 
   _btSetRunning(true);
+  _renderBacktestProgress({
+    phase: 'engine',
+    label: 'Starting backtest',
+    percent_done: 0,
+    processed: 0,
+    total: 0,
+    chrono: false,
+    note: 'Trade evaluation is grouped by symbol, not global time order.',
+  });
 
   var marketClose = _getMarketClose();
   var minHold = parseInt(document.getElementById('bt-min-hold').value) || 5;
@@ -1380,6 +1532,7 @@ function _onBacktestComplete(jobId) {
     .then(function(r) { return r.json(); })
     .then(function(data) {
       if (data.status !== 'complete' || !data.result) return;
+      if (data.progress) _renderBacktestProgress(data.progress);
       var trades = data.result.trades || [];
       _btResults = {};
       trades.forEach(function(r) { _btResults[r.snapshot_id] = r; });
@@ -1404,9 +1557,21 @@ document.body.addEventListener('sse:backtest_complete', function(e) {
   _onBacktestComplete(jobId);
 });
 
+document.body.addEventListener('sse:backtest_progress', function(e) {
+  var jobId = e.detail.job_id;
+  if (jobId !== localStorage.getItem('bt_job_id')) return;
+  if (e.detail.progress) _renderBacktestProgress(e.detail.progress);
+});
+
 document.body.addEventListener('sse:backtest_error', function(e) {
   var jobId = e.detail.job_id;
   if (jobId !== localStorage.getItem('bt_job_id')) return;
+  _renderBacktestProgress({
+    phase: 'error',
+    label: 'Backtest failed',
+    percent_done: _btProgress && typeof _btProgress.percent_done === 'number' ? _btProgress.percent_done : 0,
+    note: e.detail.error || 'Unknown error',
+  });
   alert('Backtest failed: ' + (e.detail.error || 'Unknown error'));
   _btSetRunning(false);
   localStorage.removeItem('bt_job_id');
@@ -1415,6 +1580,11 @@ document.body.addEventListener('sse:backtest_error', function(e) {
 document.body.addEventListener('sse:backtest_aborted', function(e) {
   var jobId = e.detail.job_id;
   if (jobId !== localStorage.getItem('bt_job_id')) return;
+  _renderBacktestProgress({
+    phase: 'aborted',
+    label: 'Backtest aborted',
+    percent_done: _btProgress && typeof _btProgress.percent_done === 'number' ? _btProgress.percent_done : 0,
+  });
   _btSetRunning(false);
   localStorage.removeItem('bt_job_id');
 });
@@ -1618,6 +1788,7 @@ function _updateAvgPnl() {
 function clearBacktest() {
   _btResults = {};
   _btSummary = null;
+  _btProgress = null;
   localStorage.removeItem('bt_results');
   localStorage.removeItem('bt_summary');
   localStorage.removeItem('bt_job_id');
@@ -1633,6 +1804,7 @@ function clearBacktest() {
   document.getElementById('bt-alloc-stats').classList.add('d-none');
   document.getElementById('bt-sim-card').classList.add('d-none');
   document.getElementById('bt-clear-btn').classList.add('d-none');
+  _renderBacktestProgress(null);
 }
 
 // =====================================================================
@@ -1715,6 +1887,7 @@ document.body.addEventListener('sse:snapshot_sealed', function() {
       .then(function(r) { return r.json(); })
       .then(function(data) {
         if (data.status === 'complete') {
+          if (data.progress) _renderBacktestProgress(data.progress);
           var trades = data.result.trades || [];
           _btResults = {};
           trades.forEach(function(r) { _btResults[r.snapshot_id] = r; });
@@ -1729,6 +1902,14 @@ document.body.addEventListener('sse:snapshot_sealed', function() {
         } else if (data.status === 'running') {
           // Still running — show spinner + abort button, SSE will pick up completion
           _btSetRunning(true);
+          _renderBacktestProgress(data.progress || {
+            phase: 'engine',
+            label: 'Backtest running',
+            percent_done: 0,
+            processed: 0,
+            total: 0,
+            chrono: false,
+          });
         } else {
           // Error or expired
           localStorage.removeItem('bt_job_id');

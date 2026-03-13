@@ -136,7 +136,7 @@
      'backfill_started','backfill_progress','backfill_complete',
      'follow_up_collection','follow_up_complete','follow_up_created',
      'online_mode_changed','online_skipped','feed_toggled',
-     'backtest_started','backtest_complete','backtest_error','backtest_aborted'].forEach(function(name) {
+     'backtest_started','backtest_progress','backtest_complete','backtest_error','backtest_aborted'].forEach(function(name) {
       _es.addEventListener(name, function(e) {
         var data = JSON.parse(e.data);
         document.body.dispatchEvent(new CustomEvent('sse:' + name, {bubbles: true, detail: data}));
