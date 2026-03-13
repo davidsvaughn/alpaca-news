@@ -77,7 +77,37 @@ Under the new decision-time model:
   - allocation stats
   - portfolio sim outputs
 
-Status: pending
+Status: complete
+
+Artifacts:
+
+- `data/qa/backtest_regression_decision_time_cold.json`
+- `data/qa/backtest_regression_decision_time_warm.json`
+
+Decision-time cold vs warm results:
+
+1. `fixed_stop_recent_bull_no_alloc`
+   - cold: `112.200s`
+   - warm: `56.822s`
+   - hash: `0c47ddd3c95d...`
+2. `vdd_recent_bear_max_positions`
+   - cold: `138.761s`
+   - warm: `72.945s`
+   - hash: `d62899626569...`
+3. `ma_cross_mid_march_extended`
+   - cold: `98.648s`
+   - warm: `49.176s`
+   - hash: `e7eb677afca9...`
+4. `max_hold_guarded_fixed_dollar`
+   - cold: `116.362s`
+   - warm: `61.053s`
+   - hash: `a9b0fe392dd7...`
+
+Result:
+
+- exact hash equality across all four cases
+- warm cache reduced runtime by roughly 2x in this sample
+- this validates the per-snapshot cache as non-semantic
 
 ## Planned test matrix
 
@@ -102,10 +132,16 @@ Exact parameter sets and snapshot ranges: pending baseline selection
 - Built `scripts/backtest_regression_matrix.py` to generate a reproducible baseline matrix and later compare cache cold/warm behavior under a fixed semantic model.
 - Ran an initial provisional baseline before the script explicitly loaded `.env`; discarded it after later hashes differed.
 - Ran an authoritative baseline with explicit `.env` loading and recorded the resulting case hashes above.
+- Added `decision_at` to sealed snapshots and switched backtest entry construction to use `decision_at` with fallback to `created_at` for older rows.
+- Removed the `Price@X` snapshots-table filter/column and removed the inline delay setting from the snapshots page.
+- Removed delayed-price capture from the orchestrator startup path and removed the background `price_at` maintenance loop from `main.py`.
+- Changed live entry extraction to use decision-time price context instead of delayed `price_at` / `price_10min`.
+- Implemented per-snapshot backtest-result caching keyed by effective entry bar/price, strategy params, guards, stats resolution, and available bar horizon.
+- Ran the decision-time regression matrix cold and warm; all case hashes matched exactly while warm runtime improved materially.
 
 ## Open design questions
 
-- Final field name: `decision_at` vs `sealed_at`
+- Whether to remove the remaining legacy `price_delay_minutes` and `price_10min` compatibility fields entirely after old data/configs are migrated
 - Whether to retain legacy fields for read compatibility during migration
 - Cache invalidation rule for snapshots whose outcome can still change as newer bars arrive
 - Whether batch-level cache still adds enough value after per-snapshot caching is in place
