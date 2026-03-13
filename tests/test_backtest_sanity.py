@@ -235,6 +235,33 @@ class TestBacktestProgress:
         assert events[-1]["portfolio_value"] == pytest.approx(sim["sim_ending"])
         assert events[-1]["chrono"] is True
 
+    def test_portfolio_sim_normalizes_mixed_timezone_timestamps(self):
+        results = [
+            BacktestResult(
+                snapshot_id="mixed",
+                symbol="AAPL",
+                entry_price=100.0,
+                entry_time="2026-01-02T15:00:00+00:00",
+                exit_price=102.0,
+                exit_time="2026-01-02T11:00:00",
+                pnl_pct=2.0,
+                exit_reason="signal",
+                bars_held=60,
+            ),
+        ]
+
+        sim = compute_portfolio_sim(
+            results,
+            "max_positions",
+            {"max_pos": 1},
+            1000.0,
+            0,
+        )
+
+        assert sim["sim_ending"] == pytest.approx(1020.0)
+        assert sim["sim_span_days"] == pytest.approx(round(60 / _BARS_PER_DAY, 2), rel=1e-6)
+        assert sim["sim_daily_pct"] is not None
+
 class TestComputeAnnAExtra:
     def test_zero_bars_floors_to_one(self):
         """bars_held=0 should be floored to 1 bar, not cause division by zero."""

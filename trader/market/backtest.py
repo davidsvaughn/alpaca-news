@@ -1363,8 +1363,8 @@ def compute_portfolio_sim(
             if r.pnl_pct is not None
         )
         try:
-            dt_start = datetime.fromisoformat(first_entry.replace("Z", "+00:00"))
-            dt_end = datetime.fromisoformat(last_exit.replace("Z", "+00:00"))
+            dt_start = _parse_entry_time(first_entry)
+            dt_end = _parse_entry_time(last_exit)
             # Business days between dates (Mon-Fri)
             bdays = int(np.busday_count(dt_start.date(), dt_end.date()))
             # Add fractional intraday component
@@ -1378,7 +1378,7 @@ def compute_portfolio_sim(
             ratio = ending / starting_amount
             if ratio > 0 and trading_days > 0:
                 sim_daily_pct = round((ratio ** (1 / trading_days) - 1) * 100, 4)
-        except (ValueError, OverflowError):
+        except (TypeError, ValueError, OverflowError):
             pass
 
     return {
