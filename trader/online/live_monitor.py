@@ -540,6 +540,12 @@ class LiveExitMonitor:
 # ---------------------------------------------------------------------------
 
 
+def _cfg_tag(cfg: "LiveConfig") -> str:
+    """Short identifier for log lines: config_id + optional account name."""
+    acct = f" acct={cfg.alpaca_account_name}" if cfg.alpaca_account_name else ""
+    return f"{cfg.config_id}{acct}"
+
+
 class LivePortfolioManager:
     """Evaluates new snapshots against all active LiveConfigs.
 
@@ -589,14 +595,17 @@ class LivePortfolioManager:
             try:
                 cfg = LiveConfig.from_dict(config_dict)
                 if cfg.paused:
-                    log.debug("LIVE-PM: %s config=%s PAUSED — skipping new buys", symbol, cfg.name)
+                    log.debug("LIVE-PM: %s config=%s PAUSED — skipping new buys", symbol, _cfg_tag(cfg))
                     continue
                 result = self._evaluate_for_config(snapshot, symbol, cfg)
-                log.info("LIVE-PM: %s config=%s -> %s", symbol, cfg.name, "BUY" if result else "SKIP")
+                log.info("LIVE-PM: %s config=%s -> %s", symbol, _cfg_tag(cfg), "BUY" if result else "SKIP")
                 if result:
                     any_created = True
             except Exception as e:
-                log.error("LIVE-PM: %s config=%s ERROR: %s", symbol, config_dict.get('name', '?'), e, exc_info=True)
+                cid = config_dict.get('config_id', '?')
+                acct = config_dict.get('alpaca_account_name')
+                tag = f"{cid} acct={acct}" if acct else cid
+                log.error("LIVE-PM: %s config=%s ERROR: %s", symbol, tag, e, exc_info=True)
 
         return any_created
 
@@ -614,7 +623,7 @@ class LivePortfolioManager:
         prediction = snapshot.get("prediction") or {}
         confidence = prediction.get("confidence", 0.0)
         direction = (prediction.get("direction") or "neutral").lower()
-        log.debug("LIVE-EVAL: %s dir=%s conf=%s config=%s", symbol, direction, confidence, cfg.name)
+        log.debug("LIVE-EVAL: %s dir=%s conf=%s config=%s", symbol, direction, confidence, _cfg_tag(cfg))
 
         # --- Apply filters ---
 
@@ -709,7 +718,7 @@ class LivePortfolioManager:
             if (w.get("status") == "holding"
                     and w.get("symbol") == symbol
                     and w.get("live_config_id") == cfg.config_id):
-                log.debug("LIVE-EVAL: %s SKIP already holding in config %s", symbol, cfg.name)
+                log.debug("LIVE-EVAL: %s SKIP already holding in config=%s", symbol, _cfg_tag(cfg))
                 return False
 
         # --- Exit victim position (replacement) ---
@@ -765,7 +774,7 @@ class LivePortfolioManager:
                         body=(
                             f"Replacement buy FAILED for {symbol} after selling victim {victim_sym}.\n"
                             f"Account: {cfg.alpaca_account_id or 'N/A'}\n"
-                            f"Config: {cfg.name}\n"
+                            f"Config: {_cfg_tag(cfg)}\n"
                             f"Position size: ${position_size:.2f}\n"
                             f"Error: {exc}\n\n"
                             f"The victim position ({victim_sym}) has been exited but the "
@@ -779,7 +788,7 @@ class LivePortfolioManager:
                         body=(
                             f"Buy FAILED for {symbol}.\n"
                             f"Account: {cfg.alpaca_account_id or 'N/A'}\n"
-                            f"Config: {cfg.name}\n"
+                            f"Config: {_cfg_tag(cfg)}\n"
                             f"Position size: ${position_size:.2f}\n"
                             f"Error: {exc}"
                         ),

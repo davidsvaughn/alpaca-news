@@ -1441,7 +1441,7 @@ def run_watch_loop(
                     broker = _broker_pool.get(acct_id)
                     if broker:
                         acct_info = broker.get_account()
-                        log.info("  %s (%s): equity=$%,.2f cash=$%,.2f",
+                        log.info("  %s (%s): equity=$%.2f cash=$%.2f",
                                  acct_info.name, acct_id, acct_info.equity, acct_info.cash)
 
                         # Look up the config linked to this account

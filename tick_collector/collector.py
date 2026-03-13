@@ -55,6 +55,10 @@ class TickCollector:
         self._l1_count = 0
         self._flush_count = 0
         self._last_message_time: float = 0
+        self._last_restart_attempt_time: float = 0
+        self._disconnect_started_at: datetime | None = None
+        self._disconnect_reason: str | None = None
+        self._disconnect_windows: list[dict[str, object]] = []
 
     # ------------------------------------------------------------------
     # Message parsing (runs on schwabdev's background thread)
@@ -191,10 +195,44 @@ class TickCollector:
     # Stream health check
     # ------------------------------------------------------------------
 
+    def _mark_disconnect_start(self, *, reason: str) -> None:
+        """Track the start of a disconnect window without affecting behavior."""
+        if self._disconnect_started_at is not None:
+            return
+        self._disconnect_started_at = datetime.now(timezone.utc)
+        self._disconnect_reason = reason
+
+    def _mark_disconnect_end(self) -> None:
+        """Close the current disconnect window and keep a short in-memory history."""
+        started_at = self._disconnect_started_at
+        if started_at is None:
+            return
+        ended_at = datetime.now(timezone.utc)
+        duration_s = max(0.0, (ended_at - started_at).total_seconds())
+        window = {
+            "started_at": started_at,
+            "ended_at": ended_at,
+            "duration_s": duration_s,
+            "reason": self._disconnect_reason or "unknown",
+        }
+        self._disconnect_windows.append(window)
+        if len(self._disconnect_windows) > 100:
+            self._disconnect_windows.pop(0)
+        log.info(
+            "Disconnect window closed: reason=%s duration=%.2fs started=%s ended=%s",
+            window["reason"],
+            duration_s,
+            started_at.isoformat(timespec="seconds"),
+            ended_at.isoformat(timespec="seconds"),
+        )
+        self._disconnect_started_at = None
+        self._disconnect_reason = None
+
     async def _health_check_loop(self) -> None:
         """Monitor stream health and force-restart if dead."""
-        check_interval = 10  # seconds between checks
-        dead_threshold = 30  # seconds with no messages before restart
+        check_interval = max(0.5, self.config.health_check_interval_sec)
+        dead_threshold = max(1.0, self.config.heartbeat_timeout_sec)
+        restart_cooldown = max(self.config.restart_delay_sec + 1.0, self.config.restart_cooldown_sec)
         max_restarts = 10  # give up after this many consecutive restarts
 
         consecutive_restarts = 0
@@ -210,11 +248,19 @@ class TickCollector:
 
             # Stream is active and we got recent data — all good
             if stream_active and silence < dead_threshold:
+                self._mark_disconnect_end()
                 consecutive_restarts = 0
                 continue
 
             # Stream looks dead
             if not stream_active or silence >= dead_threshold:
+                reason = "inactive" if not stream_active else "silence"
+                self._mark_disconnect_start(reason=reason)
+
+                since_restart = time.time() - self._last_restart_attempt_time
+                if self._last_restart_attempt_time and since_restart < restart_cooldown:
+                    continue
+
                 consecutive_restarts += 1
                 if consecutive_restarts > max_restarts:
                     log.error(
@@ -224,12 +270,13 @@ class TickCollector:
                     continue
 
                 log.warning(
-                    "Stream appears dead (active=%s, silence=%.0fs). "
+                    "Stream appears dead (reason=%s, active=%s, silence=%.0fs). "
                     "Attempting restart %d/%d...",
-                    stream_active, silence, consecutive_restarts, max_restarts,
+                    reason, stream_active, silence, consecutive_restarts, max_restarts,
                 )
 
                 try:
+                    self._last_restart_attempt_time = time.time()
                     self._restart_stream()
                     log.info("Stream restarted successfully (active=%s)", self._stream.active)
                 except Exception:
@@ -246,8 +293,8 @@ class TickCollector:
         except Exception:
             log.exception("Error during stream stop")
 
-        # Small delay before reconnecting
-        time.sleep(2)
+        # Short delay to let schwabdev tear down the old socket before reconnecting.
+        time.sleep(max(0.0, self.config.restart_delay_sec))
 
         # Restart — schwabdev resets _should_stop and replays all subscriptions
         self._stream.start(receiver=self._on_message)

@@ -29,6 +29,9 @@ class CollectorConfig:
 
     # Heartbeat (during market hours, expect messages this often)
     heartbeat_timeout_sec: float = 15.0
+    health_check_interval_sec: float = 2.0
+    restart_delay_sec: float = 0.25
+    restart_cooldown_sec: float = 5.0
 
     # Reconnection backoff
     reconnect_delays: list[float] = field(
@@ -52,4 +55,8 @@ class CollectorConfig:
             flush_interval_sec=float(os.getenv("TICK_FLUSH_INTERVAL", "2.0")),
             portfolio_sync_interval_sec=float(os.getenv("TICK_PORTFOLIO_SYNC_INTERVAL", "60.0")),
             portfolio_cooloff_min=float(os.getenv("TICK_PORTFOLIO_COOLOFF_MIN", "60.0")),
+            heartbeat_timeout_sec=float(os.getenv("TICK_HEARTBEAT_TIMEOUT", "15.0")),
+            health_check_interval_sec=float(os.getenv("TICK_HEALTH_CHECK_INTERVAL", "2.0")),
+            restart_delay_sec=float(os.getenv("TICK_RESTART_DELAY", "0.25")),
+            restart_cooldown_sec=float(os.getenv("TICK_RESTART_COOLDOWN", "5.0")),
         )

@@ -19,6 +19,7 @@ import logging
 import os
 import re
 import threading
+import time
 
 log = logging.getLogger(__name__)
 from datetime import datetime, timezone
@@ -26,6 +27,54 @@ from pathlib import Path
 from typing import Any
 
 _file_lock = threading.Lock()
+
+# ---------------------------------------------------------------------------
+# Alpaca tradeable-symbol cache (bulk-loaded, refreshed periodically)
+# ---------------------------------------------------------------------------
+_alpaca_tradeable: set[str] | None = None
+_alpaca_loaded_at: float = 0.0
+_ALPACA_REFRESH_SECONDS = 24 * 3600  # refresh once per day
+
+
+def _load_alpaca_tradeable() -> set[str] | None:
+    """Bulk-fetch all active tradeable US equity symbols from Alpaca.
+
+    Returns None if credentials are unavailable or the call fails.
+    """
+    try:
+        from alpaca.trading.client import TradingClient
+        from alpaca.trading.enums import AssetClass, AssetStatus
+        from alpaca.trading.requests import GetAssetsRequest
+
+        api_key = os.environ.get("ALPACA_API_KEY")
+        secret_key = os.environ.get("ALPACA_SECRET_KEY")
+        if not api_key or not secret_key:
+            return None
+
+        client = TradingClient(api_key=api_key, secret_key=secret_key, paper=True)
+        assets = client.get_all_assets(
+            filter=GetAssetsRequest(
+                status=AssetStatus.ACTIVE,
+                asset_class=AssetClass.US_EQUITY,
+            )
+        )
+        tradeable = {a.symbol for a in assets if a.tradable}
+        log.info("ALPACA ASSETS: loaded %d tradeable US equity symbols", len(tradeable))
+        return tradeable
+    except Exception as e:
+        log.warning("ALPACA ASSETS: could not load tradeable symbols: %s", e)
+        return None
+
+
+def get_alpaca_tradeable() -> set[str] | None:
+    """Return cached set of Alpaca-tradeable symbols, refreshing if stale."""
+    global _alpaca_tradeable, _alpaca_loaded_at
+    if _alpaca_tradeable is None or (time.monotonic() - _alpaca_loaded_at) > _ALPACA_REFRESH_SECONDS:
+        result = _load_alpaca_tradeable()
+        if result is not None:
+            _alpaca_tradeable = result
+            _alpaca_loaded_at = time.monotonic()
+    return _alpaca_tradeable
 
 DEBUG = os.getenv("DEBUG", "false").lower() in ("true", "1")
 
@@ -218,6 +267,18 @@ def filter_symbols(
             kept.append(sym)
         else:
             filtered.append({"symbol": s, "reason": result})
+
+    # 8. Alpaca tradeable check — reject symbols not active on Alpaca.
+    #    This is a bulk-cached set (refreshed daily), so no per-symbol API call.
+    alpaca_set = get_alpaca_tradeable()
+    if alpaca_set is not None:
+        final_kept: list[str] = []
+        for sym in kept:
+            if sym.upper() in alpaca_set:
+                final_kept.append(sym)
+            else:
+                filtered.append({"symbol": sym.upper(), "reason": "not_alpaca_tradeable"})
+        kept = final_kept
 
     if filtered:
         reasons = ", ".join(f"{f['symbol']}({f['reason']})" for f in filtered)

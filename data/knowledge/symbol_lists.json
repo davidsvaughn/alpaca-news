@@ -1768,7 +1768,21 @@
     "DVLT",
     "SEAT",
     "PPL",
-    "BRNS"
+    "BRNS",
+    "SANA",
+    "CETI",
+    "SIGY",
+    "FUTU",
+    "SFDL",
+    "CRGO",
+    "GTVH",
+    "AMX",
+    "NECB",
+    "USCB",
+    "GREH",
+    "INMD",
+    "NP",
+    "AIFF"
   ],
   "crypto": [],
   "rejected": [
@@ -1968,5 +1982,5 @@
     "ENGH",
     "ATRL"
   ],
-  "last_updated": "2026-03-13T16:11:18.687277+00:00"
+  "last_updated": "2026-03-13T17:41:39.052586+00:00"
 }
