@@ -9,11 +9,14 @@ dashboard toggle buttons.
 from __future__ import annotations
 
 import io
+import logging
 import subprocess
 import sys
 import threading
 from pathlib import Path
 from typing import TYPE_CHECKING
+
+log = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from watchdog.observers import Observer
@@ -128,7 +131,7 @@ class FeedManager:
             stdout=stdout,
             stderr=stderr,
         )
-        print(f"{self.label} websocket started (pid {self._proc.pid})")
+        log.info("%s websocket started (pid %s)", self.label, self._proc.pid)
 
     def _stop_subprocess(self) -> None:
         if self._proc is None:
@@ -138,7 +141,7 @@ class FeedManager:
             self._proc.wait(timeout=5)
         except subprocess.TimeoutExpired:
             self._proc.kill()
-        print(f"{self.label} websocket stopped")
+        log.info("%s websocket stopped", self.label)
         self._proc = None
 
     def _schedule_watch(self) -> None:
@@ -151,7 +154,7 @@ class FeedManager:
         self._watch_handle = self._fs_observer.schedule(
             self._handler, str(d), recursive=False,
         )
-        print(f"{self.label} watchdog scheduled: {d}")
+        log.info("%s watchdog scheduled: %s", self.label, d)
 
     def _unschedule_watch(self) -> None:
         if self._fs_observer is None or self._watch_handle is None:
@@ -160,7 +163,7 @@ class FeedManager:
             self._fs_observer.unschedule(self._watch_handle)
         except Exception:
             pass  # already unscheduled
-        print(f"{self.label} watchdog unscheduled")
+        log.info("%s watchdog unscheduled", self.label)
         self._watch_handle = None
 
 

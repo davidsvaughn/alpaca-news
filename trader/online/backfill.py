@@ -7,7 +7,10 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import logging
 from pathlib import Path
+
+log = logging.getLogger(__name__)
 
 from trader.config import load_settings
 from trader.db.database import open_sqlite
@@ -39,7 +42,7 @@ def main() -> None:
     for p in files[-limit:]:
         process_news_file(path=p, settings=settings, db=db, knowledge=knowledge, bus=bus)
 
-    print(f"Backfill complete. Processed up to {limit} files.")
+    log.info("Backfill complete. Processed up to %d files.", limit)
 
 
 if __name__ == "__main__":

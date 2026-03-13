@@ -14,10 +14,23 @@ Optional:
 
 
 
-import json, pathlib, html, os, datetime as dt
+import json
+import logging
+import pathlib
+import html
+import os
+import datetime as dt
 from dotenv import load_dotenv
 from alpaca.data.live import NewsDataStream
 from alpaca.data.models.news import News
+
+# Basic logging — writes to same trader log file as parent process
+_log_file = os.getenv("LOG_FILE", "logs/trader.log")
+logging.basicConfig(level=logging.INFO)
+log = logging.getLogger("websocket.alpaca")
+_fh = logging.FileHandler(_log_file)
+_fh.setFormatter(logging.Formatter("%(asctime)s [%(name)s] %(levelname)s: %(message)s", datefmt="%Y-%m-%d %H:%M:%S"))
+log.addHandler(_fh)
 
 # create .env file (if it doesn't exist) with following params:
 #     ALPACA_API_KEY=your_api_key
@@ -64,7 +77,7 @@ def _article_to_dict(article: News) -> dict:
 
         return data
     except Exception as e:
-        print(f"Error converting article {article.id}: {e}")
+        log.error("Error converting article %s: %s", article.id, e)
         # return raw data if conversion fails
         return {
             "id": article.id,
@@ -83,9 +96,9 @@ async def news_data_handler(article: News):
         path = _article_path(article)
         with path.open("w", encoding="utf-8") as f:
             json.dump(_article_to_dict(article), f, ensure_ascii=False, indent=2)
-        print("saved", path.name)
+        log.info("saved %s", path.name)
     except Exception as e:
-        print(f"Error saving article:\n{article}:\n\nERROR:\n{e}\n")
+        log.error("Error saving article %s: %s", getattr(article, 'id', '?'), e)
         # Optionally, you could log this error to a file or monitoring system
 
 # -----------------------------------------------------------------------------

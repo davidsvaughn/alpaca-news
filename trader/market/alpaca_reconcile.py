@@ -412,7 +412,6 @@ def reconcile(
         if n_phantom:
             msg += f", {n_phantom} PHANTOM MISSES (investigate!)"
         log.info(msg)
-        print(msg)
     else:
         log.info("RECONCILE complete: all %d positions in sync", len(summary["ok"]))
 

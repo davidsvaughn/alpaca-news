@@ -11,11 +11,14 @@ take priority over skip patterns.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 import time
 from dataclasses import dataclass, field
 from typing import Any
+
+log = logging.getLogger(__name__)
 
 from trader.knowledge.store import KnowledgeStore
 from trader.llm.client import LLMClient
@@ -95,8 +98,7 @@ def _compile_patterns(raw: list[str]) -> list[tuple[str, re.Pattern[str]]]:
         try:
             compiled.append((p, re.compile(p, re.IGNORECASE)))
         except re.error:
-            if DEBUG:
-                print(f"PRE-FILTER: invalid regex, skipping: {p!r}")
+            log.debug("PRE-FILTER: invalid regex, skipping: %r", p)
     return compiled
 
 
@@ -138,8 +140,7 @@ def _pre_filter(
         inv_compiled = _compile_patterns(investigate_keywords)
         for raw, rxp in inv_compiled:
             if rxp.search(text):
-                if DEBUG:
-                    print(f"PRE-FILTER investigate: matched pattern {raw!r}")
+                log.debug("PRE-FILTER investigate: matched pattern %r", raw)
                 return TriageDecision(
                     action="investigate",
                     confidence=0.99,
@@ -155,8 +156,7 @@ def _pre_filter(
         # Look for uppercase 2-5 letter words that could be tickers (e.g. "FLD", "AAPL")
         has_ticker_candidate = bool(re.search(r'\b[A-Z]{2,5}\b', combined))
         if not has_ticker_candidate:
-            if DEBUG:
-                print("PRE-FILTER skip: no symbols and no ticker-like words")
+            log.debug("PRE-FILTER skip: no symbols and no ticker-like words")
             return TriageDecision(
                 action="skip",
                 confidence=0.99,
@@ -169,8 +169,7 @@ def _pre_filter(
     skip_compiled = _compile_patterns(skip_keywords)
     for raw, rxp in skip_compiled:
         if rxp.search(text):
-            if DEBUG:
-                print(f"PRE-FILTER skip: matched pattern {raw!r} in headline/summary")
+            log.debug("PRE-FILTER skip: matched pattern %r in headline/summary", raw)
             return TriageDecision(
                 action="skip",
                 confidence=0.95,
@@ -182,8 +181,7 @@ def _pre_filter(
     # ── 3. Built-in skip patterns ──
     for raw, rxp in _BUILTIN_SKIP:
         if rxp.search(text):
-            if DEBUG:
-                print(f"PRE-FILTER skip: matched built-in pattern {raw!r}")
+            log.debug("PRE-FILTER skip: matched built-in pattern %r", raw)
             return TriageDecision(
                 action="skip",
                 confidence=0.99,
@@ -196,8 +194,7 @@ def _pre_filter(
     author = str(news.get("author") or "").lower()
     for a in _SKIP_AUTHORS:
         if a in author:
-            if DEBUG:
-                print(f"PRE-FILTER skip: matched skip author {a!r}")
+            log.debug("PRE-FILTER skip: matched skip author %r", a)
             return TriageDecision(
                 action="skip",
                 confidence=0.95,

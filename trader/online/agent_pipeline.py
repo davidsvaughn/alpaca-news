@@ -710,9 +710,8 @@ async def run_pipeline(
         for i, spec in enumerate(config.agents):
             # Cost-based skip
             if not spec.is_final and cumulative_cost >= config.max_cost_usd > 0:
-                if DEBUG:
-                    print(f"[Pipeline]   Skipping {spec.name} — "
-                          f"cumulative cost ${cumulative_cost:.3f} >= ${config.max_cost_usd:.2f}")
+                log.debug("[Pipeline] Skipping %s — cumulative cost $%.3f >= $%.2f",
+                          spec.name, cumulative_cost, config.max_cost_usd)
                 continue
 
             system_prompt = _build_system_prompt(
@@ -736,9 +735,9 @@ async def run_pipeline(
             elif hasattr(spec.model, "model_name"):
                 model_name = spec.model.model_name
 
-            if DEBUG:
-                print(f"[Pipeline] Round {round_num + 1}, Agent {i + 1}/{len(config.agents)}: "
-                      f"{spec.name} ({spec.runner}, {'final' if spec.is_final else 'intermediate'})")
+            log.debug("[Pipeline] Round %d, Agent %d/%d: %s (%s, %s)",
+                      round_num + 1, i + 1, len(config.agents), spec.name, spec.runner,
+                      'final' if spec.is_final else 'intermediate')
 
             if on_stage is not None:
                 on_stage(spec.name, i + 1, len(config.agents))
@@ -785,10 +784,8 @@ async def run_pipeline(
                     "error": {"type": type(e).__name__, "message": error_msg},
                 }
                 all_rounds.append(round_record)
-                print(
-                    f"[Pipeline] Agent {spec.name} ({model_name}) FAILED "
-                    f"after {elapsed}s: {type(e).__name__}: {error_msg} — aborting pipeline"
-                )
+                log.warning("[Pipeline] Agent %s (%s) FAILED after %ss: %s: %s — aborting pipeline",
+                            spec.name, model_name, elapsed, type(e).__name__, error_msg)
                 pipeline_aborted = True
                 break
 
@@ -858,21 +855,18 @@ async def run_pipeline(
             }
             all_rounds.append(round_record)
 
-            if DEBUG:
-                print(f"[Pipeline]   → {len(agent_result.tool_traces)} tool calls, "
-                      f"{agent_result.usage.get('total_tokens', 0)} tokens, ${agent_cost:.3f} "
-                      f"(cumulative: ${cumulative_cost:.3f}), {elapsed}s")
+            log.debug("[Pipeline]   → %d tool calls, %s tokens, $%.3f (cumulative: $%.3f), %ss",
+                      len(agent_result.tool_traces), agent_result.usage.get('total_tokens', 0),
+                      agent_cost, cumulative_cost, elapsed)
 
         # Check if we should loop again
         if signal is not None and signal.confidence >= config.confidence_threshold:
-            if DEBUG:
-                print(f"[Pipeline] Confidence {signal.confidence} >= {config.confidence_threshold} — done.")
+            log.debug("[Pipeline] Confidence %s >= %s — done.", signal.confidence, config.confidence_threshold)
             break
 
         if round_num < config.max_rounds - 1:
-            if DEBUG:
-                print(f"[Pipeline] Confidence {signal.confidence if signal else 'N/A'} "
-                      f"< {config.confidence_threshold} — starting round {round_num + 2}")
+            log.debug("[Pipeline] Confidence %s < %s — starting round %d",
+                      signal.confidence if signal else 'N/A', config.confidence_threshold, round_num + 2)
 
     if signal is None:
         log.warning("Pipeline produced no signal (all agents may have failed)")

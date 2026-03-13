@@ -25,8 +25,10 @@ See docs/VDD-REALTIME.md and docs/TICK-COLLECTOR.md for design details.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
+import threading
 
 from datetime import datetime, timedelta, timezone
 from typing import Literal
@@ -415,45 +417,92 @@ def find_first_signal(bars: pd.DataFrame, lookback_bars: int,
 
 
 # ---------------------------------------------------------------------------
-# Pool helper (for use by trader app — lazy singleton)
+# Pool helper (for use by trader app — loop-local registry)
 # ---------------------------------------------------------------------------
 
-_pool: asyncpg.Pool | None = None
+_pools: dict[asyncio.AbstractEventLoop, asyncpg.Pool] = {}
+_pool_registry_lock = threading.Lock()
+
+
+def _get_registered_pool(loop: asyncio.AbstractEventLoop) -> asyncpg.Pool | None:
+    with _pool_registry_lock:
+        return _pools.get(loop)
+
+
+def _set_registered_pool(loop: asyncio.AbstractEventLoop, pool: asyncpg.Pool) -> None:
+    with _pool_registry_lock:
+        _pools[loop] = pool
+
+
+def _discard_registered_pool(
+    loop: asyncio.AbstractEventLoop,
+    pool: asyncpg.Pool | None = None,
+) -> asyncpg.Pool | None:
+    with _pool_registry_lock:
+        current = _pools.get(loop)
+        if current is None:
+            return None
+        if pool is not None and current is not pool:
+            return current
+        return _pools.pop(loop)
 
 
 async def get_pool() -> asyncpg.Pool | None:
-    """Get or create a shared asyncpg pool for VDD queries.
+    """Get or create the current loop's asyncpg pool for VDD queries.
 
     Returns None if connection fails (TimescaleDB not running).
-    Automatically reconnects if the existing pool's connections are dead.
+    Automatically reconnects if the current loop's pool becomes unusable.
     """
-    global _pool
-    if _pool is not None:
+    loop = asyncio.get_running_loop()
+    pool = _get_registered_pool(loop)
+    if pool is not None:
         # Health check: verify a connection is still usable
         try:
-            async with _pool.acquire() as conn:
+            async with pool.acquire() as conn:
                 await conn.fetchval("SELECT 1")
-            return _pool
+            return pool
         except Exception:
-            log.warning("VDD: pool connections dead, reconnecting...")
+            log.warning(
+                "VDD: pool connections dead, reconnecting (loop=%s thread=%s)",
+                hex(id(loop)),
+                threading.current_thread().name,
+            )
+            _discard_registered_pool(loop, pool)
             try:
-                await _pool.close()
+                await pool.close()
             except Exception:
                 pass
-            _pool = None
     dsn = os.getenv("TIMESCALE_DSN", DEFAULT_DSN)
     try:
-        _pool = await asyncpg.create_pool(dsn, min_size=1, max_size=2)
-        log.info("VDD: connected to TimescaleDB at %s", dsn)
-        return _pool
+        pool = await asyncpg.create_pool(dsn, min_size=1, max_size=2)
+        _set_registered_pool(loop, pool)
+        log.info(
+            "VDD: connected to TimescaleDB at %s (loop=%s thread=%s)",
+            dsn,
+            hex(id(loop)),
+            threading.current_thread().name,
+        )
+        return pool
     except Exception:
         log.warning("VDD: TimescaleDB unavailable, tick-based VDD disabled", exc_info=True)
         return None
 
 
 async def close_pool() -> None:
-    """Close the shared pool (call on shutdown)."""
-    global _pool
-    if _pool is not None:
-        await _pool.close()
-        _pool = None
+    """Close the current loop's pool."""
+    loop = asyncio.get_running_loop()
+    pool = _discard_registered_pool(loop)
+    if pool is not None:
+        await pool.close()
+
+
+async def close_all_pools() -> None:
+    """Close every registered pool. Useful for tests and explicit shutdown."""
+    with _pool_registry_lock:
+        pools = list(_pools.values())
+        _pools.clear()
+    for pool in pools:
+        try:
+            await pool.close()
+        except Exception:
+            log.debug("VDD: pool close failed during global cleanup", exc_info=True)

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 import time
 from typing import Any
@@ -17,6 +18,8 @@ from typing import Any
 from google import genai
 from google.genai import types
 from google.genai.errors import APIError
+
+log = logging.getLogger(__name__)
 
 from trader.online.agent_common import AgentRunResult, TradingSignal, build_trace_dict
 
@@ -97,8 +100,7 @@ async def run_gemini(
             )
             return True
         except (asyncio.TimeoutError, APIError, Exception) as e:
-            if DEBUG:
-                print(f"  [Gemini] preflight failed for {m}: {type(e).__name__}: {e}")
+            log.debug("[Gemini] preflight failed for %s: %s: %s", m, type(e).__name__, e)
             return False
 
     fallback = _FALLBACK_MODEL
@@ -107,7 +109,7 @@ async def run_gemini(
     # If there's a fallback configured, preflight the primary model first.
     if fallback and fallback != model:
         if not await _preflight(model):
-            print(f"Gemini preflight failed for {model}, switching to fallback {fallback}")
+            log.warning("Gemini preflight failed for %s, switching to fallback %s", model, fallback)
             use_model = fallback
 
     # ------------------------------------------------------------------
@@ -127,7 +129,7 @@ async def run_gemini(
     except (asyncio.TimeoutError, APIError) as primary_err:
         # If we haven't tried the fallback yet, try it now
         if use_model != fallback and fallback and fallback != use_model:
-            print(f"Gemini {use_model} failed ({type(primary_err).__name__}), falling back to {fallback}")
+            log.warning("Gemini %s failed (%s), falling back to %s", use_model, type(primary_err).__name__, fallback)
             use_model = fallback
             try:
                 response = await _call(fallback)

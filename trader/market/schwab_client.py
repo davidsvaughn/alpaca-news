@@ -221,8 +221,7 @@ class SchwabMarketClient:
 
     def _init_client(self) -> None:
         if os.getenv("SCHWAB_DISABLED", "false").lower() in ("true", "1"):
-            if DEBUG:
-                print("INFO: SCHWAB_DISABLED=true — market data disabled")
+            log.debug("SCHWAB_DISABLED=true — market data disabled")
             return
 
         app_key = os.getenv("SCHWAB_APP_KEY")

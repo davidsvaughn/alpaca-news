@@ -131,3 +131,33 @@ Likely non-impact:
 
 - The web API itself is still serving requests.
 - Core live trading logic continues running, but with degraded signal quality whenever tick-based VDD is expected.
+
+## Implementation Notes (2026-03-13)
+
+Best way to proceed:
+
+### Use loop-local pool ownership
+
+The safe ownership model is loop-local, not merely thread-local.
+
+`asyncpg` pools are bound to the event loop that created them. In this codebase, the VDD callers create and cache private loops on their instances, so a single thread can still end up creating more than one loop over time. A thread-local pool would still allow reuse across different loops in the same thread, which is the wrong abstraction boundary.
+
+The pool registry should therefore be keyed by `asyncio.get_running_loop()`.
+
+### Locks are not the fix
+
+An `asyncio.Lock` only serializes work inside one loop. A plain threading lock only serializes access to the registry. Neither solves the original failure mode by itself, which is one owner closing a pool another owner is actively using.
+
+Locks are acceptable around registry bookkeeping, but not as the primary fix.
+
+### Keep the health check after ownership is fixed
+
+The `SELECT 1` health check in `get_pool()` is reasonable once the pool is loop-local. At that point, closing and recreating a dead pool only affects the current loop's pool rather than a process-global singleton.
+
+### `Future exception was never retrieved` should be reduced, not assumed eliminated
+
+The cross-owner `pool.close()` behavior is a strong explanation for the uncaught-future noise in the terminal dump. Moving to loop-local ownership should reduce that noise substantially. It may not eliminate every case, because genuine database disconnects can still happen.
+
+### `close_pool()` should close the current loop's pool
+
+The existing `close_pool()` implementation assumes one module-global pool. After the refactor, it should only close the pool associated with the current running loop. A separate helper can close all registered pools if test or shutdown code ever needs that behavior.

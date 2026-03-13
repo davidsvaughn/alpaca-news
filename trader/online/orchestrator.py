@@ -658,8 +658,7 @@ def _run_single_exploration_body(
                 )
             except Exception as e:
                 # Don't fail the pipeline on cost estimation errors
-                if DEBUG:
-                    log.warning("Cost estimation failed for agent %s: %s", agent_name, e)
+                log.warning("Cost estimation failed for agent %s: %s", agent_name, e)
 
         # Update activity with pipeline cost
         if tracker is not None:
@@ -773,12 +772,12 @@ def _run_single_exploration_body(
     watch_was_created = False
     _sig_dir = signal.direction if signal else "no_signal"
     _sig_conf = signal.confidence if signal else 0
-    print(f"LIVE-DEBUG: watch_enabled={settings.watch_enabled} signal={_sig_dir} conf={_sig_conf} symbol={symbol}")
+    log.debug("LIVE-DEBUG: watch_enabled=%s signal=%s conf=%s symbol=%s", settings.watch_enabled, _sig_dir, _sig_conf, symbol)
     if settings.watch_enabled and signal is not None and signal.direction != "neutral":
         try:
             from trader.db.database import get_active_live_configs
             active_cfgs = get_active_live_configs(db)
-            print(f"LIVE-DEBUG: active_cfgs={len(active_cfgs)}")
+            log.debug("LIVE-DEBUG: active_cfgs=%d", len(active_cfgs))
 
             if active_cfgs:
                 # Live trading mode: use LivePortfolioManager
@@ -796,8 +795,7 @@ def _run_single_exploration_body(
                 # Legacy mode: simple confidence threshold
                 holding_count = count_holding_watches(db)
                 if holding_count >= settings.watch_max_concurrent:
-                    if DEBUG:
-                        print(f"SKIP watch: {holding_count} concurrent watches (max {settings.watch_max_concurrent})")
+                    log.debug("SKIP watch: %d concurrent watches (max %d)", holding_count, settings.watch_max_concurrent)
                 else:
                     entry_price = _extract_entry_price(snapshot, symbol)
                     if entry_price is not None:
@@ -823,8 +821,8 @@ def _run_single_exploration_body(
                             },
                         ))
                         watch_was_created = True
-                    elif DEBUG:
-                        print(f"SKIP watch: could not extract entry price for {symbol}")
+                    else:
+                        log.debug("SKIP watch: could not extract entry price for %s", symbol)
         except Exception as e:
             if DEBUG:
                 raise
@@ -897,10 +895,9 @@ def process_news_file(
     if snapshot_exists(db, snap_id):
         if not settings.mock_llm and is_mock_snapshot(db, snap_id):
             delete_snapshot(db, snap_id)
-            print(f"REPLACED mock snapshot: {snap_id} from {path}")
+            log.info("REPLACED mock snapshot: %s from %s", snap_id, path)
         else:
-            if DEBUG:
-                print(f"SKIP (already processed): {snap_id} from {path}")
+            log.debug("SKIP (already processed): %s from %s", snap_id, path)
             return
 
     trigger = Trigger(
@@ -1064,7 +1061,7 @@ def _process_news_body(
                     tracker.finish(_act_id)
                 raise
             except TimeoutError as exc:
-                print(f"TRIAGE TIMEOUT: {exc} — treating as skip")
+                log.warning("TRIAGE TIMEOUT: %s — treating as skip", exc)
                 triage = TriageDecision(
                     action="skip", confidence=0.0,
                     reasoning=f"Triage timed out: {exc}",
@@ -1084,7 +1081,7 @@ def _process_news_body(
         except (TimeoutError, Exception) as exc:
             if not isinstance(exc, TimeoutError):
                 raise
-            print(f"TRIAGE TIMEOUT: {exc} — treating as skip")
+            log.warning("TRIAGE TIMEOUT: %s — treating as skip", exc)
             triage = TriageDecision(
                 action="skip", confidence=0.0,
                 reasoning=f"Triage timed out: {exc}",
@@ -1294,7 +1291,7 @@ def _worker_loop(
             continue
         try:
             if online is not None and not online.enabled:
-                print(f"OFFLINE: skipped {path.name}")
+                log.info("OFFLINE: skipped %s", path.name)
                 bus.publish(PipelineEvent(
                     type="online_skipped",
                     payload={"path": str(path), "reason": "offline"},
@@ -1311,7 +1308,7 @@ def _worker_loop(
                 tracker=tracker,
             )
         except JobAborted:
-            print(f"ABORTED: {path.name}")
+            log.info("ABORTED: %s", path.name)
         except Exception as e:
             if DEBUG:
                 raise
@@ -1365,7 +1362,7 @@ def run_watch_loop(
         )
         worker.start()
     if num_workers > 1:
-        print(f"Started {num_workers} parallel explorer threads")
+        log.info("Started %d parallel explorer threads", num_workers)
 
     handler = _NewsHandler(work_queue=work_q)
     fs_observer = Observer()
@@ -1429,8 +1426,8 @@ def run_watch_loop(
             _broker_pool = AlpacaBrokerPool(db=db)
 
             if _broker_pool.registry:
-                print(f"Alpaca accounts configured: {len(_broker_pool.registry)} "
-                      f"({', '.join(_broker_pool.registry.list_ids())})")
+                log.info("Alpaca accounts configured: %d (%s)",
+                         len(_broker_pool.registry), ', '.join(_broker_pool.registry.list_ids()))
 
                 # Initialize brokers for accounts linked to active configs
                 from trader.db.database import get_active_live_configs
@@ -1444,8 +1441,8 @@ def run_watch_loop(
                     broker = _broker_pool.get(acct_id)
                     if broker:
                         acct_info = broker.get_account()
-                        print(f"  {acct_info.name} ({acct_id}): equity=${acct_info.equity:,.2f} "
-                              f"cash=${acct_info.cash:,.2f}")
+                        log.info("  %s (%s): equity=$%,.2f cash=$%,.2f",
+                                 acct_info.name, acct_id, acct_info.equity, acct_info.cash)
 
                         # Look up the config linked to this account
                         cfg_dict = next((c for c in active_cfgs

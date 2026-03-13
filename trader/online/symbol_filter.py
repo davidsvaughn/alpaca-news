@@ -15,9 +15,12 @@ Positive filter: ``quoteType in ("EQUITY", "ETF") and market == "us_market"``
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 import threading
+
+log = logging.getLogger(__name__)
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -216,8 +219,8 @@ def filter_symbols(
         else:
             filtered.append({"symbol": s, "reason": result})
 
-    if filtered and DEBUG:
+    if filtered:
         reasons = ", ".join(f"{f['symbol']}({f['reason']})" for f in filtered)
-        print(f"SYMBOL FILTER: removed {reasons}")
+        log.debug("SYMBOL FILTER: removed %s", reasons)
 
     return kept, filtered

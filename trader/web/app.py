@@ -9,6 +9,8 @@ import threading
 import time
 import uuid
 from datetime import datetime, timedelta, timezone
+
+log = logging.getLogger(__name__)
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlencode
@@ -1925,7 +1927,7 @@ def create_app(
                                     purged.append({"symbol": pos.symbol, "error": str(e)})
                             if purged:
                                 alpaca_sync_info["purged"] = purged
-                                print(f"ALPACA PURGE: sold {len(purged)} positions on {alpaca_id}")
+                                log.info("ALPACA PURGE: sold %d positions on %s", len(purged), alpaca_id)
 
                         # Read actual account state (after purge if any)
                         acct = broker.get_account()
@@ -1938,9 +1940,9 @@ def create_app(
                                 {"symbol": p.symbol, "qty": p.qty, "value": p.market_value}
                                 for p in remaining
                             ]
-                        print(f"ALPACA SYNC: {alpaca_id} equity=${acct.equity:.2f} cash=${acct.cash:.2f} positions={len(remaining)}")
+                        log.info("ALPACA SYNC: %s equity=$%.2f cash=$%.2f positions=%d", alpaca_id, acct.equity, acct.cash, len(remaining))
                 except Exception as e:
-                    print(f"ALPACA SYNC failed for {alpaca_id}: {e} — using UI starting_capital")
+                    log.warning("ALPACA SYNC failed for %s: %s — using UI starting_capital", alpaca_id, e)
 
             # Create new
             cfg = LiveConfig.create(

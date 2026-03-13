@@ -10,11 +10,14 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 import time
 from typing import Any
 
 from openai import OpenAI, APIError, APITimeoutError
+
+log = logging.getLogger(__name__)
 
 from trader.market.data_service import MarketDataService
 from trader.online.agent_common import AgentRunResult, TradingSignal, build_trace_dict
@@ -243,8 +246,7 @@ async def run_openai(
                 "output": result_str,
             })
 
-        if DEBUG:
-            print(f"  [OpenAI] Turn {turn}: executed {len(function_calls)} tool calls")
+        log.debug("[OpenAI] Turn %d: executed %d tool calls", turn, len(function_calls))
 
         # Build full conversation for next turn
         conversation.extend(response.output)

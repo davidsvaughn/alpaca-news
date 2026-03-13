@@ -18,8 +18,10 @@ Rotated files are named `trader.log.2026-03-12`, `tick_collector.log.2026-03-11`
 |-----|-------------|----------|
 | Trader | [trader/logging_config.py](../../trader/logging_config.py) | `setup_logging()` |
 | Tick collector | [tick_collector/__main__.py](../../tick_collector/__main__.py) | `_setup_logging()` |
+| Websocket (Sentry) | [websocket/insight_sentry_news.py](../../websocket/insight_sentry_news.py) | Inline `FileHandler` → `logs/trader.log` |
+| Websocket (Alpaca) | [websocket/alpaca_news.py](../../websocket/alpaca_news.py) | Inline `FileHandler` → `logs/trader.log` |
 
-Both follow the same pattern: root logger at DEBUG, console handler at INFO, file handler at configurable level (default INFO).
+Trader and tick collector follow the same pattern: root logger at DEBUG, console handler at INFO, file handler at configurable level (default INFO). Websocket subprocesses append to `logs/trader.log` via a plain `FileHandler` (no rotation — the parent process handles that).
 
 ## What each log captures
 
@@ -36,16 +38,24 @@ Everything from the trader app at INFO+:
 | `trader.online.follow_up_collector` | Follow-up collection, query planner fallbacks |
 | `trader.online.news_archive` | Archive/prune operations and failures |
 | `trader.online.health_check` | Provider availability checks |
-| `trader.online.agent_pipeline` | Pipeline signal warnings |
+| `trader.online.agent_pipeline` | Pipeline agent failures, cost-based skips |
+| `trader.online.feed_manager` | Websocket subprocess start/stop, watchdog schedule/unschedule |
+| `trader.online.triage` | Pre-filter matches (DEBUG level) |
+| `trader.online.symbol_filter` | Symbol removals (DEBUG level) |
+| `trader.online.runners.*` | Grok/OpenAI/Gemini turn-by-turn progress, fallbacks |
+| `trader.llm.cost_tracker` | Per-call cost breakdown (DEBUG level) |
+| `trader.web.app` | Alpaca account sync, purge operations |
 | `trader.market.alpaca_broker` | Buy/sell orders, fill confirmations, position checks |
 | `trader.market.alpaca_stream` | WebSocket fill/cancel events |
 | `trader.market.alpaca_reconcile` | Reconciliation actions on startup |
 | `trader.market.schwab_client` | Stream message handler errors |
 | `trader.market.schwab_tokens` | Reauth terminal warnings |
 | `trader.market.backtest` | Exit strategy evaluations |
-| `trader.main` | Startup, stale server checks |
+| `trader.main` | Startup, Schwab auth, backfill progress, X stream lifecycle |
 | `trader.notifications` | Notification delivery |
 | `trader.db.equity_backfill` | Equity snapshot backfill |
+| `websocket.insight_sentry` | InsightSentry WS connect/disconnect, article saves |
+| `websocket.alpaca` | Alpaca news WS article saves, errors |
 
 **Suppressed loggers** (WARNING+ only in file): `httpx`, `httpcore`, `schwabdev`, `alpaca`, `uvicorn`, `yfinance` (CRITICAL only), `trader.market.volume_delta_shadow`.
 
@@ -127,9 +137,9 @@ grep "ERROR" logs/tick_collector.log*
 
 ## Completeness
 
-All errors, warnings, and tracebacks go through the logging module — no `print()` or `traceback.print_exc()` calls for error reporting. This means the log files are the **complete record** of everything that happened.
+All errors, warnings, informational messages, and tracebacks go through the logging module — no `print()` calls for operational messages. This means the log files are the **complete record** of everything that happened.
 
-The only `print()` calls remaining are a few non-error console messages (e.g., orchestrator's `saved ...` / `OFFLINE: skipped ...` lines). These are informational and not captured in log files.
+The only `print()` calls remaining are in `websocket/` scripts (the `saved ...` lines also go to the log file) and a few test/benchmark scripts (`trader/evidence/`).
 
 ## Gotchas
 
@@ -138,6 +148,7 @@ The only `print()` calls remaining are a few non-error console messages (e.g., o
 - **LIVE-EVAL debug messages**: These are at DEBUG level. They don't appear in log files unless you set `LOG_LEVEL=DEBUG` (which would also capture all other DEBUG messages). Use `LIVE_EVAL_VERBOSE=1` to see them on console only.
 - **Rotated file naming**: Files rotate at midnight. The current day's log is always `trader.log` / `tick_collector.log`. Yesterday's is `.log.2026-03-12`.
 - **Multi-line tracebacks**: When using `exc_info=True` or `log.exception()`, the full traceback is part of the log record and captured in the file. Always read the tail of the log rather than grepping for `ERROR` — grep misses continuation lines.
+- **`.env` overrides code defaults**: The `.env` file can set `LOG_LEVEL`, `TC_LOG_LEVEL`, etc. These take precedence over the code defaults. If logs seem empty or missing expected entries, check `.env` first — a stale override (e.g., `LOG_LEVEL=WARNING`) will silently suppress INFO messages even though the code default is INFO.
 
 ## Cross-references
 

@@ -80,12 +80,12 @@ def run_health_checks() -> list[CheckResult]:
     checks = [_check_grok, _check_openai, _check_gemini]
     results: list[CheckResult] = []
 
-    print("API health checks:")
+    log.info("API health checks:")
     for check_fn in checks:
         result = check_fn()
         results.append(result)
         status = "OK" if result.ok else "FAIL"
-        print(f"  [{status}] {result.provider}: {result.message}")
+        log.info("  [%s] %s: %s", status, result.provider, result.message)
 
     failed = [r for r in results if not r.ok]
     if failed:
@@ -93,6 +93,6 @@ def run_health_checks() -> list[CheckResult]:
         log.warning("%d provider(s) unavailable: %s", len(failed), names)
         log.warning("Pipeline will degrade gracefully for unavailable providers.")
     else:
-        print("  All providers OK.")
+        log.info("  All providers OK.")
 
     return results

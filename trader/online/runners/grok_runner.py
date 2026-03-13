@@ -11,11 +11,14 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 import time
 from typing import Any
 
 from openai import OpenAI, APIError, APITimeoutError
+
+log = logging.getLogger(__name__)
 
 from trader.market.data_service import MarketDataService
 from trader.online.agent_common import AgentRunResult, TradingSignal, build_trace_dict
@@ -273,8 +276,7 @@ async def run_grok(
                 "output": result_str,
             })
 
-        if DEBUG:
-            print(f"  [Grok] Turn {turn}: executed {len(function_calls)} function calls")
+        log.debug("[Grok] Turn %d: executed %d function calls", turn, len(function_calls))
 
         # Use previous_response_id for stateful continuation —
         # this preserves server-side tool results (x_search, web_search)
@@ -321,11 +323,8 @@ async def run_grok(
         manual_web = int(total_usage["web_search_calls"] or 0)
         manual_x = int(total_usage["x_search_calls"] or 0)
         if auth_web != manual_web or auth_x != manual_x:
-            if DEBUG:
-                print(
-                    f"  [Grok] server_side_tool_usage correction: "
-                    f"web_search {manual_web}→{auth_web}, x_search {manual_x}→{auth_x}"
-                )
+            log.debug("[Grok] server_side_tool_usage correction: web_search %d→%d, x_search %d→%d",
+                       manual_web, auth_web, manual_x, auth_x)
             total_usage["web_search_calls"] = auth_web
             total_usage["x_search_calls"] = auth_x
 

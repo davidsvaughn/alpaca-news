@@ -1765,7 +1765,10 @@
     "ACLX",
     "TSEOF",
     "SCLX",
-    "DVLT"
+    "DVLT",
+    "SEAT",
+    "PPL",
+    "BRNS"
   ],
   "crypto": [],
   "rejected": [
@@ -1961,7 +1964,9 @@
     "0007.HK",
     "TSE",
     "BIOPOL",
-    "SEPC"
+    "SEPC",
+    "ENGH",
+    "ATRL"
   ],
-  "last_updated": "2026-03-13T15:22:20.213942+00:00"
+  "last_updated": "2026-03-13T16:11:18.687277+00:00"
 }

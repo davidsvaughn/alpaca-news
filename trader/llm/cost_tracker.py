@@ -5,10 +5,13 @@ This module is intentionally *loud* on budget violations.
 
 from __future__ import annotations
 
+import logging
 import os
 from dataclasses import dataclass, field
 from datetime import date
 from typing import Any, Literal
+
+log = logging.getLogger(__name__)
 
 from trader.llm.pricing import (
     estimate_token_cost_gemini,
@@ -132,9 +135,11 @@ class CostTracker:
             input_tokens = int(usage.get("input_tokens") or 0)
             output_tokens = int(usage.get("output_tokens") or 0)
             src = "auth" if auth_cost and float(auth_cost) > 0 else "est"
-            print(
-                f"COST stage={stage} purpose={purpose} provider={provider} model={model} "
-                f"tokens(in={input_tokens},out={output_tokens}) tools={tools_used} "
-                f"total=${total:.4f}({src}) daily=${self.daily_spent:.4f}/{self.max_daily_cost:.2f}"
+            log.debug(
+                "COST stage=%s purpose=%s provider=%s model=%s "
+                "tokens(in=%d,out=%d) tools=%s total=$%.4f(%s) daily=$%.4f/%.2f",
+                stage, purpose, provider, model,
+                input_tokens, output_tokens, tools_used,
+                total, src, self.daily_spent, self.max_daily_cost,
             )
         return total

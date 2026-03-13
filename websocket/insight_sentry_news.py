@@ -14,11 +14,20 @@ Optional:
 import asyncio
 import hashlib
 import json
+import logging
 import pathlib
 import os
 import datetime as dt
 from dotenv import load_dotenv
 import websockets
+
+# Basic logging — writes to same trader log file as parent process
+_log_file = os.getenv("LOG_FILE", "logs/trader.log")
+logging.basicConfig(level=logging.INFO)
+log = logging.getLogger("websocket.insight_sentry")
+_fh = logging.FileHandler(_log_file)
+_fh.setFormatter(logging.Formatter("%(asctime)s [%(name)s] %(levelname)s: %(message)s", datefmt="%Y-%m-%d %H:%M:%S"))
+log.addHandler(_fh)
 
 load_dotenv()
 INSIGHT_SENTRY_API_KEY = os.getenv("INSIGHT_SENTRY_API_KEY")
@@ -50,7 +59,7 @@ async def connect_and_listen():
         try:
             async with websockets.connect(uri) as websocket:
                 await websocket.send(json.dumps({"api_key": INSIGHT_SENTRY_API_KEY}))
-                print(f"Connected to {uri}")
+                log.info("Connected to %s", uri)
 
                 async for message in websocket:
                     try:
@@ -69,13 +78,13 @@ async def connect_and_listen():
                     path = BASE_DIR / filename
                     with path.open("w", encoding="utf-8") as f:
                         json.dump(data, f, ensure_ascii=False, indent=2)
-                    print("saved", path.name)
+                    log.info("saved %s", path.name)
 
         except websockets.exceptions.ConnectionClosed:
-            print("Connection closed, reconnecting...")
+            log.warning("Connection closed, reconnecting...")
             await asyncio.sleep(2)
         except Exception as e:
-            print(f"Error: {e}")
+            log.error("Error: %s", e)
             await asyncio.sleep(2)
 
 # -----------------------------------------------------------------------------

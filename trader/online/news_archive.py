@@ -202,10 +202,10 @@ def run_news_archive_loop(*, settings: Settings) -> None:
             if news_files or news_pruned or snap_files or snap_pruned:
                 news_mb = news_bytes / (1024 * 1024)
                 snap_mb = snap_bytes / (1024 * 1024)
-                print(
-                    "Archive cycle: "
-                    f"news archived={news_files} ({news_mb:.1f} MB), pruned={news_pruned}; "
-                    f"snapshots archived={snap_files} ({snap_mb:.1f} MB), pruned={snap_pruned}"
+                log.info(
+                    "Archive cycle: news archived=%d (%.1f MB), pruned=%d; "
+                    "snapshots archived=%d (%.1f MB), pruned=%d",
+                    news_files, news_mb, news_pruned, snap_files, snap_mb, snap_pruned,
                 )
         except Exception as exc:
             log.warning("News archive loop failed: %s", exc)
