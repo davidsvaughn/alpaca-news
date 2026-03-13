@@ -30,12 +30,20 @@ Everything from the trader app at INFO+:
 | Logger name | What it logs |
 |-------------|-------------|
 | `trader.online.live_monitor` | Exit checks, cooling off, watch creation, LIVE-PM buy/skip results |
-| `trader.online.orchestrator` | Pipeline runs, watchdog events, snapshot creation |
+| `trader.online.orchestrator` | Pipeline runs, watchdog events, snapshot creation, init failures |
 | `trader.online.online_mode` | Online mode startup, scheduling |
+| `trader.online.watcher` | Legacy watch check-ins, monitoring cycle errors |
+| `trader.online.follow_up_collector` | Follow-up collection, query planner fallbacks |
+| `trader.online.news_archive` | Archive/prune operations and failures |
+| `trader.online.health_check` | Provider availability checks |
+| `trader.online.agent_pipeline` | Pipeline signal warnings |
 | `trader.market.alpaca_broker` | Buy/sell orders, fill confirmations, position checks |
 | `trader.market.alpaca_stream` | WebSocket fill/cancel events |
 | `trader.market.alpaca_reconcile` | Reconciliation actions on startup |
+| `trader.market.schwab_client` | Stream message handler errors |
+| `trader.market.schwab_tokens` | Reauth terminal warnings |
 | `trader.market.backtest` | Exit strategy evaluations |
+| `trader.main` | Startup, stale server checks |
 | `trader.notifications` | Notification delivery |
 | `trader.db.equity_backfill` | Equity snapshot backfill |
 
@@ -117,13 +125,19 @@ grep "ERROR" logs/trader.log.2026-03-12
 grep "ERROR" logs/tick_collector.log*
 ```
 
+## Completeness
+
+All errors, warnings, and tracebacks go through the logging module — no `print()` or `traceback.print_exc()` calls for error reporting. This means the log files are the **complete record** of everything that happened.
+
+The only `print()` calls remaining are a few non-error console messages (e.g., orchestrator's `saved ...` / `OFFLINE: skipped ...` lines). These are informational and not captured in log files.
+
 ## Gotchas
 
 - **Console vs file**: Both show the same content at INFO+ by default. The console uses short time format (`HH:MM:SS`), the file uses full (`YYYY-MM-DD HH:MM:SS`).
-- **`print()` statements don't go to log files**: Some startup messages and the orchestrator's `saved ...` / `OFFLINE: skipped ...` lines use `print()` and only appear on console. They are NOT captured in log files.
 - **Schwab/asyncpg are suppressed**: Set to WARNING+ in both apps. You won't see normal Schwab API calls or asyncpg queries — only errors.
 - **LIVE-EVAL debug messages**: These are at DEBUG level. They don't appear in log files unless you set `LOG_LEVEL=DEBUG` (which would also capture all other DEBUG messages). Use `LIVE_EVAL_VERBOSE=1` to see them on console only.
 - **Rotated file naming**: Files rotate at midnight. The current day's log is always `trader.log` / `tick_collector.log`. Yesterday's is `.log.2026-03-12`.
+- **Multi-line tracebacks**: When using `exc_info=True` or `log.exception()`, the full traceback is part of the log record and captured in the file. Always read the tail of the log rather than grepping for `ERROR` — grep misses continuation lines.
 
 ## Cross-references
 

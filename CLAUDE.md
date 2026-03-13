@@ -73,14 +73,16 @@ Key data sources (in priority order):
 3. **`logs/tick_collector.log`** — INFO+ (stream events, inserts, errors). Rotates daily, keeps 14 days.
 4. **Console output** — INFO+ (same content as log files, but not persisted across restarts).
 
+All errors, warnings, and tracebacks go through the logging module — log files are the **complete record**. No `print()` or `traceback.print_exc()` for error reporting. See `docs/skills/LOGGING.md` for full details (logger names, grep recipes, gotchas).
+
 ```bash
-cat logs/trader.log            # view trader log
-cat logs/tick_collector.log    # view tick collector log
+tail -200 logs/trader.log            # recent trader activity
+tail -200 logs/tick_collector.log    # recent tick collector activity
 ```
 
-Trader log configured via env vars: `LOG_FILE` (default: `logs/trader.log`), `LOG_LEVEL` (default: `INFO`), `LOG_KEEP_DAYS` (default: `14`). See `trader/logging_config.py`.
+Trader log env vars: `LOG_FILE` (default: `logs/trader.log`), `LOG_LEVEL` (default: `INFO`), `LOG_KEEP_DAYS` (default: `14`). See `trader/logging_config.py`.
 
-Tick collector log configured via env vars prefixed with `TC_`: `TC_LOG_FILE` (default: `logs/tick_collector.log`), `TC_LOG_LEVEL` (default: `INFO`), `TC_LOG_KEEP_DAYS` (default: `14`). See `tick_collector/__main__.py`.
+Tick collector log env vars (prefixed `TC_`): `TC_LOG_FILE` (default: `logs/tick_collector.log`), `TC_LOG_LEVEL` (default: `INFO`), `TC_LOG_KEEP_DAYS` (default: `14`). See `tick_collector/__main__.py`.
 
 ## Documentation Lookup
 

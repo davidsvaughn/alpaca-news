@@ -17,6 +17,7 @@ Fail-loud philosophy:
 
 from __future__ import annotations
 
+import logging
 import os
 import threading
 import time
@@ -24,6 +25,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
 
+log = logging.getLogger(__name__)
 DEBUG = os.getenv("DEBUG", "false").lower() in ("true", "1")
 
 
@@ -538,7 +540,7 @@ class SchwabMarketClient:
         except Exception as e:
             if DEBUG:
                 raise
-            print(f"WARN: stream message handler error: {e}")
+            log.warning("Stream message handler error: %s", e, exc_info=True)
 
     def get_stream_snapshot(self, symbol: str) -> dict[str, Any]:
         """Return latest streamed fields for *symbol*."""

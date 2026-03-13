@@ -12,12 +12,15 @@ from __future__ import annotations
 
 import argparse
 import atexit
+import logging
 import os
 import subprocess
 import sys
 import threading
 import time
 from pathlib import Path
+
+log = logging.getLogger(__name__)
 
 # Load .env BEFORE any trader imports so module-level os.getenv() calls
 # (e.g. ALPACA_EXTENDED_HOURS in market_hours.py) see the correct values.
@@ -78,7 +81,7 @@ def _kill_stale_servers(primary_port: int = 8000, legacy_port: int = 8765) -> No
                 except OSError:
                     pass  # already dead
         except Exception as e:
-            print(f"WARN: stale server check on port {port} failed: {e}")
+            log.warning("Stale server check on port %s failed: %s", port, e)
 
 
 def main() -> None:

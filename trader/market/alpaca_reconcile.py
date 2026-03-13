@@ -154,8 +154,6 @@ def reconcile(
                     log.info("RECONCILE: %s liquidated fractional remainder (qty=%.4f) "
                              "and exited watch %s",
                              symbol, float(pos.qty), watch["watch_id"])
-                    print(f"RECONCILE: {symbol} liquidated fractional remainder "
-                          f"(qty={float(pos.qty):.4f}) — watch exited")
                     _log_tx(db, account_id, "reconcile_fractional_liquidated", symbol,
                             detail={"qty": float(pos.qty), "watch_id": watch["watch_id"],
                                     "exit_price": exit_price})
@@ -243,8 +241,7 @@ def reconcile(
         if per_symbol_pos is not None:
             # Position exists! Bulk lookup was wrong (transient API issue).
             summary["watch_phantom_miss"].append(symbol)
-            print(f"RECONCILE WARNING: {symbol} missing from bulk positions but per-symbol "
-                  f"lookup found it (qty={per_symbol_pos.qty:.4f}) — NOT force-exiting")
+            log.warning("RECONCILE: %s missing from bulk positions but per-symbol lookup found it (qty=%.4f) — NOT force-exiting", symbol, per_symbol_pos.qty)
             log.warning("RECONCILE: %s phantom miss — bulk positions missed it but "
                         "per-symbol lookup found position (qty=%.4f). No action taken.",
                         symbol, per_symbol_pos.qty)
@@ -268,9 +265,7 @@ def reconcile(
             else:
                 # No sell fill found — position vanished without a sell order.
                 # This should NOT happen. Log loudly and skip to be safe.
-                print(f"RECONCILE ERROR: {symbol} has NO Alpaca position AND no recent sell "
-                      f"order found! This is unexpected. Watch NOT force-exited. "
-                      f"Manual investigation required!")
+                log.error("RECONCILE: %s has NO Alpaca position AND no recent sell order found! Manual investigation required!", symbol)
                 log.error("RECONCILE: %s — no position AND no sell fill found. "
                           "Possible API issue or manual intervention. NOT force-exiting. "
                           "Watch: %s", symbol, watch["watch_id"])
@@ -304,7 +299,6 @@ def reconcile(
             "watch_id": watch["watch_id"],
             "exit_price": exit_price,
         })
-        print(f"RECONCILE: {symbol} force-exited at ${exit_price:.2f} (confirmed sell on Alpaca)")
         log.warning("RECONCILE: %s watch %s force-exited at $%.2f (confirmed sell)",
                     symbol, watch["watch_id"], exit_price)
         _log_tx(db, account_id, "reconcile_force_exit", symbol,
@@ -329,8 +323,6 @@ def reconcile(
                     summary.setdefault("fractional_liquidated", []).append(symbol)
                     log.info("RECONCILE: %s liquidated fractional remainder (qty=%.4f)",
                              symbol, float(pos.qty))
-                    print(f"RECONCILE: {symbol} liquidated fractional remainder "
-                          f"(qty={float(pos.qty):.4f})")
                     _log_tx(db, account_id, "reconcile_fractional_liquidated", symbol,
                             detail={"qty": float(pos.qty),
                                     "avg_entry_price": pos.avg_entry_price})

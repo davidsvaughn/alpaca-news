@@ -8,10 +8,13 @@ Policy:
 
 from __future__ import annotations
 
+import logging
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from zipfile import ZIP_DEFLATED, ZipFile
+
+log = logging.getLogger(__name__)
 
 from trader.config import Settings
 
@@ -84,7 +87,7 @@ def _archive_feed_dir(
                     except FileNotFoundError:
                         continue
                     except Exception as exc:
-                        print(f"WARN: failed to archive {p}: {exc}")
+                        log.warning("Failed to archive %s: %s", p, exc)
                         continue
 
                 if not archived_ok:
@@ -97,7 +100,7 @@ def _archive_feed_dir(
                 except FileNotFoundError:
                     continue
                 except Exception as exc:
-                    print(f"WARN: archived but failed to delete source {p}: {exc}")
+                    log.warning("Archived but failed to delete source %s: %s", p, exc)
 
     return (archived_files, archived_bytes)
 
@@ -134,7 +137,7 @@ def _prune_old_archives(*, archive_root: Path, retention_days: int) -> int:
             z.unlink()
             deleted += 1
         except Exception as exc:
-            print(f"WARN: failed to prune archive {z}: {exc}")
+            log.warning("Failed to prune archive %s: %s", z, exc)
 
     return deleted
 
@@ -205,5 +208,5 @@ def run_news_archive_loop(*, settings: Settings) -> None:
                     f"snapshots archived={snap_files} ({snap_mb:.1f} MB), pruned={snap_pruned}"
                 )
         except Exception as exc:
-            print(f"WARN: news archive loop failed: {exc}")
+            log.warning("News archive loop failed: %s", exc)
         time.sleep(interval_s)

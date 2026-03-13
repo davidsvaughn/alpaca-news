@@ -6,9 +6,12 @@ provider is reachable.  Logs results (pass/warn/fail) and returns a summary.
 
 from __future__ import annotations
 
+import logging
 import os
 import time
 from dataclasses import dataclass
+
+log = logging.getLogger(__name__)
 
 
 @dataclass
@@ -87,8 +90,8 @@ def run_health_checks() -> list[CheckResult]:
     failed = [r for r in results if not r.ok]
     if failed:
         names = ", ".join(r.provider for r in failed)
-        print(f"  WARNING: {len(failed)} provider(s) unavailable: {names}")
-        print("  Pipeline will degrade gracefully for unavailable providers.")
+        log.warning("%d provider(s) unavailable: %s", len(failed), names)
+        log.warning("Pipeline will degrade gracefully for unavailable providers.")
     else:
         print("  All providers OK.")
 

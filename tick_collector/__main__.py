@@ -36,7 +36,7 @@ def _acquire_lock() -> None:
         _lock_fd.write(str(os.getpid()))
         _lock_fd.flush()
     except OSError:
-        print("ERROR: Another tick collector instance is already running. Exiting.")
+        log.error("Another tick collector instance is already running. Exiting.")
         sys.exit(1)
 
 
@@ -81,9 +81,12 @@ def _setup_logging() -> None:
     )
 
 
+log = logging.getLogger(__name__)
+
+
 def main() -> None:
-    _acquire_lock()
     _setup_logging()
+    _acquire_lock()
     config = CollectorConfig.from_env()
 
     # Preview portfolio symbols
@@ -91,20 +94,19 @@ def main() -> None:
     ps.sync()
     active = sorted(ps.active_symbols)
 
-    print("Tick Collector")
-    print(f"  Portfolio symbols: {len(active)}")
-    print(f"  Trader DB:         {config.trader_db_path}")
-    print(f"  DSN:               {config.dsn}")
-    print(f"  Flush:             every {config.flush_interval_sec}s")
-    print(f"  Portfolio sync:    every {config.portfolio_sync_interval_sec}s")
-    print(f"  Cool-off:          {config.portfolio_cooloff_min} min")
+    log.info("Tick Collector")
+    log.info("  Portfolio symbols: %d", len(active))
+    log.info("  Trader DB:         %s", config.trader_db_path)
+    log.info("  DSN:               %s", config.dsn)
+    log.info("  Flush:             every %ds", config.flush_interval_sec)
+    log.info("  Portfolio sync:    every %ds", config.portfolio_sync_interval_sec)
+    log.info("  Cool-off:          %d min", config.portfolio_cooloff_min)
     if active:
         preview = ', '.join(active[:10])
-        print(f"  Symbols:           {preview}{'...' if len(active) > 10 else ''}")
-    print()
+        log.info("  Symbols:           %s%s", preview, '...' if len(active) > 10 else '')
 
     if not active:
-        print("ERROR: No portfolio holdings found in trader.db")
+        log.error("No portfolio holdings found in trader.db")
         sys.exit(1)
 
     collector = TickCollector(config)

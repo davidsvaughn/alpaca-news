@@ -5,6 +5,7 @@ token expiry. Can launch the reauth script in a separate terminal.
 """
 from __future__ import annotations
 
+import logging
 import os
 import shutil
 import sqlite3
@@ -13,6 +14,8 @@ import sys
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+
+log = logging.getLogger(__name__)
 
 TOKENS_DB = os.path.expanduser("~/.schwabdev/tokens.db")
 REFRESH_TOKEN_TIMEOUT = 7 * 24 * 60 * 60  # 7 days in seconds
@@ -104,7 +107,7 @@ def launch_reauth_terminal() -> bool:
     """
     terminal_cmd = _find_terminal()
     if not terminal_cmd:
-        print("WARN: No terminal emulator found for Schwab reauth")
+        log.warning("No terminal emulator found for Schwab reauth")
         return False
 
     script = str(REAUTH_SCRIPT)
@@ -117,5 +120,5 @@ def launch_reauth_terminal() -> bool:
         )
         return True
     except Exception as e:
-        print(f"WARN: Could not launch reauth terminal: {e}")
+        log.warning("Could not launch reauth terminal: %s", e)
         return False

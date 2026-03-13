@@ -12,11 +12,14 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 import threading
 import time
 from datetime import datetime, timezone
 from typing import Any
+
+log = logging.getLogger(__name__)
 
 import httpx
 from pydantic import BaseModel, Field
@@ -110,7 +113,7 @@ class FollowUpCollector:
                 fid = fu_dict.get("follow_up_id", "?")
                 if DEBUG:
                     raise
-                print(f"WARN: Follow-up {fid} collection error: {e}")
+                log.warning("Follow-up %s collection error: %s", fid, e)
 
     # ------------------------------------------------------------------
     # Scheduling
@@ -349,8 +352,7 @@ class FollowUpCollector:
             result = _get_or_create_loop().run_until_complete(planner.run(prompt))
             return result.output
         except Exception as e:
-            if DEBUG:
-                print(f"WARN: Query planner failed, using fallback: {e}")
+            log.warning("Query planner failed, using fallback: %s", e)
             return _fallback_query_plan(builder, n_web, n_x)
 
 
@@ -540,5 +542,5 @@ def collector_loop(collector: FollowUpCollector, interval_s: int = 300) -> None:
         except Exception as e:
             if DEBUG:
                 raise
-            print(f"WARN: Follow-up collector cycle error: {e}")
+            log.warning("Follow-up collector cycle error: %s", e)
         time.sleep(interval_s)

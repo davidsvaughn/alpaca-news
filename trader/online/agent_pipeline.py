@@ -21,10 +21,13 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 import time
 from dataclasses import dataclass, field
 from typing import Any, Callable
+
+log = logging.getLogger(__name__)
 
 from trader.market.data_service import MarketDataService
 from trader.online.activity_tracker import JobAborted
@@ -871,8 +874,8 @@ async def run_pipeline(
                 print(f"[Pipeline] Confidence {signal.confidence if signal else 'N/A'} "
                       f"< {config.confidence_threshold} — starting round {round_num + 2}")
 
-    if signal is None and DEBUG:
-        print("[Pipeline] WARNING: Pipeline produced no signal (all agents may have failed)")
+    if signal is None:
+        log.warning("Pipeline produced no signal (all agents may have failed)")
 
     # Re-number all traces sequentially
     for idx, trace in enumerate(all_tool_traces):

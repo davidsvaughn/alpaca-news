@@ -18,11 +18,14 @@ Original behavior:
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 import threading
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+
+log = logging.getLogger(__name__)
 from typing import Any
 
 from pydantic_ai import Agent, UsageLimits
@@ -195,7 +198,7 @@ class WatchMonitor:
                 if DEBUG:
                     raise
                 wid = watch_dict.get("watch_id", "?")
-                print(f"WARN: Check-in failed for {wid}: {e}")
+                log.warning("Check-in failed for %s: %s", wid, e)
                 # Advance last_checkin_at to prevent retry storms
                 self._bump_last_checkin(watch_dict)
 
@@ -633,7 +636,7 @@ class WatchMonitor:
             except Exception as e:
                 if DEBUG:
                     raise
-                print(f"WARN: Post-exit follow-up creation failed: {e}")
+                log.warning("Post-exit follow-up creation failed: %s", e)
 
     # ------------------------------------------------------------------
     # Helpers
@@ -675,5 +678,5 @@ def monitoring_loop(monitor: WatchMonitor, interval_s: int = 60) -> None:
         except Exception as e:
             if DEBUG:
                 raise
-            print(f"WARN: Monitoring cycle error: {e}")
+            log.warning("Monitoring cycle error: %s", e)
         time.sleep(interval_s)
