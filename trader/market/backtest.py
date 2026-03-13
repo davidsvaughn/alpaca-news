@@ -30,6 +30,7 @@ Usage::
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import math
@@ -427,6 +428,136 @@ class BacktestResult:
 
 _TRADING_DAYS_PER_YEAR = 252
 _BARS_PER_DAY = 390  # 6.5 hours × 60 minutes
+
+_BACKTEST_RESULT_CACHE_VERSION = "v1"
+_BACKTEST_RESULT_CACHE_DIR = Path.home() / ".cache" / "alpaca-news" / "backtest_results"
+
+
+def _ts_cache_key(value: Any) -> str:
+    """Normalize timestamps for stable cache keys."""
+    if value is None:
+        return ""
+    try:
+        return pd.Timestamp(value).isoformat()
+    except Exception:
+        return str(value)
+
+
+def _normalize_periodic_closes(
+    values: list[Any] | None,
+) -> list[tuple[str, float]] | None:
+    if not values:
+        return None
+    out: list[tuple[str, float]] = []
+    for item in values:
+        if not isinstance(item, (list, tuple)) or len(item) != 2:
+            continue
+        out.append((str(item[0]), float(item[1])))
+    return out or None
+
+
+def _normalize_ranking_features(
+    values: list[Any] | None,
+) -> list[tuple[str, dict[str, float]]] | None:
+    if not values:
+        return None
+    out: list[tuple[str, dict[str, float]]] = []
+    for item in values:
+        if not isinstance(item, (list, tuple)) or len(item) != 2:
+            continue
+        ts = str(item[0])
+        raw = item[1] if isinstance(item[1], dict) else {}
+        out.append((
+            ts,
+            {str(k): float(v) for k, v in raw.items()},
+        ))
+    return out or None
+
+
+def _serialize_backtest_result(result: BacktestResult) -> dict[str, Any]:
+    return asdict(result)
+
+
+def _deserialize_backtest_result(payload: dict[str, Any]) -> BacktestResult:
+    data = dict(payload)
+    data["periodic_closes"] = _normalize_periodic_closes(data.get("periodic_closes"))
+    data["ranking_features"] = _normalize_ranking_features(data.get("ranking_features"))
+    entry_features = data.get("entry_features")
+    if isinstance(entry_features, dict):
+        data["entry_features"] = {str(k): float(v) for k, v in entry_features.items()}
+    else:
+        data["entry_features"] = None
+    return BacktestResult(**data)
+
+
+def _backtest_result_cache_path(symbol: str, cache_key: str) -> Path:
+    return _BACKTEST_RESULT_CACHE_DIR / symbol.upper() / f"{cache_key}.json"
+
+
+def _build_backtest_result_cache_key(
+    *,
+    symbol: str,
+    snapshot_id: str,
+    entry_time: str,
+    actual_entry_bar: Any,
+    effective_entry_price: float,
+    strategy_key: str,
+    params: dict[str, float],
+    market_close: str | None,
+    min_hold: int,
+    guard_stop_pct: float,
+    guard_target_pct: float,
+    guard_trail_pct: float,
+    stats_resolution_minutes: int,
+    data_start: Any,
+    data_end: Any,
+    bar_count: int,
+) -> str:
+    payload = {
+        "version": _BACKTEST_RESULT_CACHE_VERSION,
+        "symbol": symbol.upper(),
+        "snapshot_id": snapshot_id,
+        "entry_time": entry_time,
+        "actual_entry_bar": _ts_cache_key(actual_entry_bar),
+        "effective_entry_price": round(float(effective_entry_price), 8),
+        "strategy_key": strategy_key,
+        "params": params,
+        "market_close": market_close,
+        "min_hold": int(min_hold),
+        "guard_stop_pct": float(guard_stop_pct),
+        "guard_target_pct": float(guard_target_pct),
+        "guard_trail_pct": float(guard_trail_pct),
+        "stats_resolution_minutes": int(stats_resolution_minutes),
+        "data_start": _ts_cache_key(data_start),
+        "data_end": _ts_cache_key(data_end),
+        "bar_count": int(bar_count),
+    }
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+
+def _read_backtest_result_cache(symbol: str, cache_key: str) -> BacktestResult | None:
+    path = _backtest_result_cache_path(symbol, cache_key)
+    try:
+        payload = json.loads(path.read_text())
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        return None
+    if not isinstance(payload, dict):
+        return None
+    try:
+        return _deserialize_backtest_result(payload)
+    except Exception:
+        log.debug("Ignoring corrupt backtest cache for %s", path, exc_info=True)
+        return None
+
+
+def _write_backtest_result_cache(symbol: str, cache_key: str, result: BacktestResult) -> None:
+    path = _backtest_result_cache_path(symbol, cache_key)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(_serialize_backtest_result(result)))
+    except OSError:
+        log.debug("Failed to write backtest cache %s", path, exc_info=True)
 
 
 def compute_ann_a(results: list[BacktestResult]) -> dict[str, float] | None:
@@ -2764,6 +2895,7 @@ def run_backtest(
         guard_stop_pct: Guard stop-loss % (0 = disabled).
         guard_target_pct: Guard take-profit % (0 = disabled).
         guard_trail_pct: Trailing stop guard % (0 = disabled).
+        price_delay_minutes: Legacy compatibility argument; ignored.
 
     Returns:
         List of BacktestResult, one per entry.
@@ -2852,9 +2984,7 @@ def run_backtest(
         for e in sym_entries:
             et_str = e.get("entry_time", e.get("entry_date", ""))
             et = _parse_entry_time(et_str)
-            # Add delay minutes to get past the entry point
-            et_plus_10 = et + timedelta(minutes=price_delay_minutes)
-            parsed_times.append((e, et_plus_10))
+            parsed_times.append((e, et))
         _mark("parse_entry_times", t_parse)
 
         earliest_dt = min(t for _, t in parsed_times)
@@ -2907,6 +3037,9 @@ def run_backtest(
             continue
 
         counts["symbols_with_data"] += 1
+        data_start = df.index[0]
+        data_end = df.index[-1]
+        bar_count = len(df)
         for e, entry_dt in parsed_times:
             entry_price = e["entry_price"]
             entry_time_str = e.get("entry_time", e.get("entry_date", ""))
@@ -2932,17 +3065,56 @@ def run_backtest(
                 )
                 continue
 
-            # If entry_price is missing (0) or entry landed before 9:30+delay
-            # (pre-market/after-hours quote), use the bar at that offset instead.
+            # If entry_price is missing (0) or the entry lands before the
+            # regular session, use the close of the first eligible bar.
             actual_entry_bar = df.index[entry_idx]
             entry_time_of_day = actual_entry_bar.hour * 60 + actual_entry_bar.minute
-            cutoff_minutes = 9 * 60 + 30 + price_delay_minutes
+            cutoff_minutes = 9 * 60 + 30
             if entry_price <= 0 or entry_time_of_day <= cutoff_minutes:
-                # Use the close of the bar N minutes into the session
-                target_idx = min(entry_idx + price_delay_minutes, len(df) - 1)
+                target_idx = min(entry_idx, len(df) - 1)
                 entry_price = float(df.iloc[target_idx]["Close"])
                 entry_idx = target_idx  # walk-forward starts from here too
             _mark("entry_locate", t_locate)
+
+            cache_key = _build_backtest_result_cache_key(
+                symbol=symbol,
+                snapshot_id=str(e.get("snapshot_id") or ""),
+                entry_time=entry_time_str,
+                actual_entry_bar=df.index[entry_idx],
+                effective_entry_price=entry_price,
+                strategy_key=strategy_key,
+                params=params,
+                market_close=market_close,
+                min_hold=min_hold,
+                guard_stop_pct=guard_stop_pct,
+                guard_target_pct=guard_target_pct,
+                guard_trail_pct=guard_trail_pct,
+                stats_resolution_minutes=stats_resolution_minutes,
+                data_start=data_start,
+                data_end=data_end,
+                bar_count=bar_count,
+            )
+            cached_result = _read_backtest_result_cache(symbol, cache_key)
+            if cached_result is not None:
+                results.append(cached_result)
+                counts["result_cache_hits"] += 1
+                if cached_result.pnl_pct is None:
+                    counts["trades_no_data"] += 1
+                else:
+                    counts["trades_valid"] += 1
+                if cached_result.exit_reason == "still_open":
+                    counts["trades_still_open"] += 1
+                elif cached_result.exit_reason.startswith("guard_"):
+                    counts["trades_guard_exit"] += 1
+                else:
+                    counts["trades_strategy_exit"] += 1
+                processed_entries += 1
+                _emit_run_progress(
+                    current_symbol=symbol,
+                    current_entry_time=entry_time_str or None,
+                )
+                continue
+            counts["result_cache_misses"] += 1
 
             # Apply min_hold: start exit checks after min_hold bars
             run_idx = min(entry_idx + max(0, min_hold), len(df) - 1)
@@ -3021,7 +3193,7 @@ def run_backtest(
             ) if pnl_pct is not None else None
             ef = _compute_entry_features(df, entry_idx) if pnl_pct is not None else None
 
-            results.append(BacktestResult(
+            result = BacktestResult(
                 snapshot_id=e["snapshot_id"],
                 symbol=symbol,
                 entry_price=entry_price,
@@ -3035,7 +3207,9 @@ def run_backtest(
                 periodic_closes=pc,
                 ranking_features=rf,
                 entry_features=ef,
-            ))
+            )
+            results.append(result)
+            _write_backtest_result_cache(symbol, cache_key, result)
             if pnl_pct is None:
                 counts["trades_no_data"] += 1
             else:

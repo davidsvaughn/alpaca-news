@@ -50,7 +50,7 @@ class LiveConfig:
 
     # Timing
     min_hold: int = 5                # minimum bars before exit checks
-    price_delay_minutes: int = 10    # delay after snapshot before "entry"
+    price_delay_minutes: int = 10    # legacy field kept for backward compatibility
     market_close: str | None = "16:00"  # "HH:MM" Eastern or None for extended
 
     # Post-exit

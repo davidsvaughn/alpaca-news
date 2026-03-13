@@ -254,7 +254,6 @@
   {% if f.mkt_cap_max %}{% set _ = af.append('Cap<=' + f.mkt_cap_max|string + 'B') %}{% endif %}
   {% if f.pe_min %}{% set _ = af.append('PE>=' + f.pe_min|string) %}{% endif %}
   {% if f.pe_max %}{% set _ = af.append('PE<=' + f.pe_max|string) %}{% endif %}
-  {% if f.price_10_min %}{% set _ = af.append('P@x>=$' + f.price_10_min|string) %}{% endif %}
   {% if f.symbol %}{% set _ = af.append(f.symbol) %}{% endif %}
   {% set alloc_key = p.config.allocation %}
   {% set alloc_params = p.config.allocation_params if p.config.allocation_params is defined and p.config.allocation_params else {} %}
@@ -308,7 +307,6 @@
         <div class="col-auto">
           <strong>Execution</strong><br>
           <span class="text-muted">Min Hold:</span> {{ p.config.min_hold|default(5) }}m
-          <br><span class="text-muted">Delay:</span> {{ p.config.price_delay_minutes|default(10) }}m
           <br><span class="text-muted">Close:</span> {{ p.config.market_close|default('Extended') or 'Extended' }}
         </div>
         <div class="col-auto">

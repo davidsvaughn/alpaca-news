@@ -699,23 +699,11 @@ class LivePortfolioManager:
                   f"(watch={victim_watch['watch_id']})")
 
         # --- Determine entry price ---
-        entry_price = self._extract_entry_price(snapshot, symbol, cfg.price_delay_minutes)
+        entry_price = self._extract_entry_price(snapshot, symbol)
         print(f"LIVE-EVAL: {symbol} entry_price={entry_price}")
         if entry_price is None or entry_price <= 0:
             print(f"LIVE-EVAL: {symbol} SKIP no entry price")
             return False
-
-        # Price minimum filter — uses entry price (current price in live mode).
-        # This corresponds to the "Price@x" filter in backtest, which in live
-        # mode just means "minimum stock price to consider".
-        price_10_min = filters.get("price_10_min")
-        if price_10_min:
-            try:
-                if entry_price < float(price_10_min):
-                    log.info("SKIP %s: price %.2f < min $%s", symbol, entry_price, price_10_min)
-                    return False
-            except (ValueError, TypeError):
-                pass
 
         # --- Duplicate symbol guard (per-portfolio) ---
         existing = get_active_watches(self.db)
@@ -1250,13 +1238,11 @@ class LivePortfolioManager:
         self,
         snapshot: dict[str, Any],
         symbol: str,
-        delay_minutes: int,
     ) -> float | None:
         """Extract entry price from snapshot data.
 
-        In live mode, prioritizes current price (price_context) since the
-        delayed price_at value may not be populated yet at seal time.
-        Falls back through multiple sources.
+        In live mode, entry semantics are decision-time based. Use the latest
+        price captured at seal time, then fall back to model metadata if needed.
         """
         # Try price_context first (current price — always available at seal time)
         # Structure: {per_symbol: {SYMBOL: {last_price: ...}}} or flat {lastPrice: ...}
@@ -1277,19 +1263,6 @@ class LivePortfolioManager:
                 val = price_ctx[key]
                 if val and float(val) > 0:
                     return float(val)
-
-        # Try price_at dict (from delayed price collection, may not exist yet)
-        price_at = snapshot.get("price_at") or {}
-        delay_key = str(delay_minutes)
-        if delay_key in price_at:
-            val = price_at[delay_key]
-            if val and float(val) > 0:
-                return float(val)
-
-        # Try legacy price_10min
-        p10 = snapshot.get("price_10min")
-        if p10 and float(p10) > 0:
-            return float(p10)
 
         # Try prediction entry_price
         pred = snapshot.get("prediction") or {}

@@ -47,7 +47,7 @@
 <div class="card mb-4 border-primary">
   <div class="card-header bg-primary text-white d-flex align-items-center">
     <strong class="me-auto">Pipeline Execution Summary</strong>
-    <span class="badge bg-light text-dark">{{ s.created_at | fmt_dt("long") }}</span>
+    <span class="badge bg-light text-dark">{{ (s.decision_at or s.created_at) | fmt_dt("long") }}</span>
   </div>
   <div class="card-body">
     {# Top row: headline + symbols + direction #}
@@ -805,6 +805,10 @@
           <dd class="col-sm-8">{{ s.version }}</dd>
           <dt class="col-sm-4">Created</dt>
           <dd class="col-sm-8">{{ s.created_at }}</dd>
+          {% if s.decision_at %}
+          <dt class="col-sm-4">Decision</dt>
+          <dd class="col-sm-8">{{ s.decision_at }}</dd>
+          {% endif %}
           {% if s.exploration_budget %}
           <dt class="col-sm-4">Budget</dt>
           <dd class="col-sm-8">

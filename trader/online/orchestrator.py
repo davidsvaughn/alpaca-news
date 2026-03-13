@@ -61,7 +61,6 @@ from trader.online.agent_pipeline import (
 from trader.online.triage import TriageDecision, run_triage
 from trader.online.activity_tracker import JobAborted
 from trader.online.event_bus import EventBus, PipelineEvent
-from trader.online.price_10min import capture_prices_for_snapshot
 from trader.online.x_stream_service import QualityVerdict, XStreamService, build_rules_for_symbols
 
 DEBUG = os.getenv("DEBUG", "false").lower() in ("true", "1")
@@ -692,6 +691,7 @@ def _run_single_exploration_body(
         tracker.update(_act_id, progress="sealing", cost_usd=cost_tracker.item_spent)
 
     # --- Seal snapshot ---
+    builder.mark_decision_now()
     snapshot = builder.seal()
 
     # Persist to DB first (SQLite rollback on crash = no orphaned files)
@@ -711,20 +711,6 @@ def _run_single_exploration_body(
             "confidence": snapshot.prediction.get("confidence") if snapshot.prediction else None,
         })
     )
-
-    # Schedule delayed price capture at all offsets (5-20 min)
-    _created_at = snapshot.created_at
-    def _capture_prices():
-        try:
-            capture_prices_for_snapshot(
-                db=db,
-                snapshot_id=snap_id,
-                symbol=symbol,
-                created_at=_created_at,
-            )
-        except Exception:
-            pass  # best-effort — price_at will just stay empty
-    threading.Thread(target=_capture_prices, daemon=True).start()
 
     # Activity complete — cost now in sealed snapshot
     if tracker is not None:
@@ -1121,6 +1107,7 @@ def _process_news_body(
         builder = SnapshotBuilder(trigger=trigger, snapshot_id=snap_id)
         builder.set_triage(triage_dict)
         builder.set_cost_total(triage_cost_tracker.item_spent)
+        builder.mark_decision_now()
         snapshot = builder.seal()
         insert_snapshot(db, snapshot=snapshot.to_dict())
         out_path = _snapshot_path(settings, snapshot.snapshot_id)

@@ -9,7 +9,6 @@
       <col data-col="headline"><!-- no width: absorbs remaining space -->
       <col data-col="symbols" style="width:6%">
       <col data-col="signal" style="width:4%">
-      <col data-col="price_10" style="width:6%">
       <col data-col="price" style="width:6%">
       <col data-col="avg_vol" style="width:6%">
       <col data-col="mkt_cap" style="width:6%">
@@ -30,10 +29,6 @@
         <th><div class="fcw"><input type="text" class="form-control form-control-sm srv-filter" data-key="symbol" placeholder="Symbol" value="{{ symbol_filter }}" maxlength="12" style="font-size:.7rem;"><span class="fx" onclick="clearFilter(this)">&times;</span></div></th>
         <th>
           <div class="fcw"><input type="number" class="form-control form-control-sm srv-filter" data-key="conf_min" value="{{ conf_min_filter }}" placeholder="Min %" step="any" title="Signed confidence: 85 = bullish ≥85%, -60 = bearish ≥60%, 0 = all bullish" style="font-size:.7rem;"><span class="fx" onclick="clearFilter(this)">&times;</span></div>
-        </th>
-        <th>
-          <div class="fcw"><input type="number" class="form-control form-control-sm srv-filter" data-key="price_10_min" value="{{ price_10_min_filter }}" placeholder="Min" step="any" style="font-size:.7rem;"><span class="fx" onclick="clearFilter(this)">&times;</span></div>
-          <div class="fcw" style="margin-top:2px"><input type="number" id="price-delay-input" class="form-control form-control-sm" value="{{ price_delay_minutes | default(10) }}" placeholder="Min" step="1" min="5" max="20" title="Delay minutes (5-20)" style="font-size:.7rem; width:50px;"></div>
         </th>
         <th>
           <div class="fcw"><input type="number" class="form-control form-control-sm srv-filter" data-key="price_min" value="{{ price_min_filter }}" placeholder="Min" step="any" style="font-size:.7rem;"><span class="fx" onclick="clearFilter(this)">&times;</span></div>
@@ -62,7 +57,6 @@
         <th data-col="headline" data-sort="text" class="resizable-th sortable-th"><span class="col-label">Headline</span><span class="sort-arrow">{% if sort_col == 'headline' %} {% if sort_dir == 'asc' %}&#9650;{% else %}&#9660;{% endif %}{% endif %}</span><div class="resize-handle"></div></th>
         <th data-col="symbols" data-sort="text" class="resizable-th sortable-th"><span class="col-label">Symbols</span><span class="sort-arrow">{% if sort_col == 'symbols' %} {% if sort_dir == 'asc' %}&#9650;{% else %}&#9660;{% endif %}{% endif %}</span><div class="resize-handle"></div></th>
         <th data-col="signal" data-sort="num" class="resizable-th sortable-th"><span class="col-label">Signal</span><span class="sort-arrow">{% if sort_col == 'signal' %} {% if sort_dir == 'asc' %}&#9650;{% else %}&#9660;{% endif %}{% endif %}</span><div class="resize-handle"></div></th>
-        <th data-col="price_10" data-sort="num" class="resizable-th sortable-th"><span class="col-label">Price@{{ price_delay_minutes | default(10) }}</span><span class="sort-arrow">{% if sort_col == 'price_10' %} {% if sort_dir == 'asc' %}&#9650;{% else %}&#9660;{% endif %}{% endif %}</span><div class="resize-handle"></div></th>
         <th data-col="price" data-sort="num" class="resizable-th sortable-th"><span class="col-label">Price</span><span class="sort-arrow">{% if sort_col == 'price' %} {% if sort_dir == 'asc' %}&#9650;{% else %}&#9660;{% endif %}{% endif %}</span><div class="resize-handle"></div></th>
         <th data-col="avg_vol" data-sort="num" class="resizable-th sortable-th"><span class="col-label">AvgVol</span><span class="sort-arrow">{% if sort_col == 'avg_vol' %} {% if sort_dir == 'asc' %}&#9650;{% else %}&#9660;{% endif %}{% endif %}</span><div class="resize-handle"></div></th>
         <th data-col="mkt_cap" data-sort="num" class="resizable-th sortable-th"><span class="col-label">MktCap</span><span class="sort-arrow">{% if sort_col == 'mkt_cap' %} {% if sort_dir == 'asc' %}&#9650;{% else %}&#9660;{% endif %}{% endif %}</span><div class="resize-handle"></div></th>
@@ -79,8 +73,7 @@
       {% set dir = s.prediction.direction if s.prediction and s.prediction.direction else '' %}
       {% set conf = s.prediction.confidence if s.prediction and s.prediction.confidence is defined else None %}
       <tr data-snapshot-id="{{ s.snapshot_id }}"
-          data-entry-price="{{ s._entry_price if s._entry_price is defined and s._entry_price else '' }}"
-          data-entry-time="{{ s.created_at if s.created_at else '' }}"
+          data-entry-time="{{ s._entry_time if s._entry_time else '' }}"
           data-primary-symbol="{{ primary_sym }}">
         <td><input type="checkbox" class="snap-check" value="{{ s.snapshot_id }}" onchange="updateDeleteBtn()"></td>
         <td class="small text-muted text-nowrap" data-sort-val="{{ s.created_at }}">{{ s.created_at | fmt_dt("short") }}</td>
@@ -106,28 +99,9 @@
             <span class="text-muted">&mdash;</span>
           {% endif %}
         </td>
-        <td class="small" data-col="price_10" data-sort-val="{{ s._entry_price if s._entry_price is defined and s._entry_price else '' }}">
-          {% if s._entry_price is defined and s._entry_price %}
-            ${{ "%.2f"|format(s._entry_price) }}
-          {% elif s._price_10_pending %}
-            <span class="text-muted" style="font-size:.72rem;">pending</span>
-          {% else %}
-            <span class="text-muted">&mdash;</span>
-          {% endif %}
-        </td>
         <td class="small" data-col="price" data-sort-val="{{ s._price if s._price is not none else '' }}">
           {% if s._price is not none %}
-            {% if s._entry_price is defined and s._entry_price %}
-              {% if s._price > s._entry_price %}
-                <span class="text-success">{{ s._price_text }}</span>
-              {% elif s._price < s._entry_price %}
-                <span class="text-danger">{{ s._price_text }}</span>
-              {% else %}
-                {{ s._price_text }}
-              {% endif %}
-            {% else %}
-              {{ s._price_text }}
-            {% endif %}
+            {{ s._price_text }}
           {% else %}
             <span class="text-muted">&mdash;</span>
           {% endif %}
@@ -160,7 +134,7 @@
       {% endfor %}
       {% else %}
       <tr>
-        <td colspan="13" class="text-center text-muted py-3">No snapshots found.</td>
+        <td colspan="12" class="text-center text-muted py-3">No snapshots found.</td>
       </tr>
       {% endif %}
     </tbody>

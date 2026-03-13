@@ -358,12 +358,8 @@
                      onchange="saveBtSettings()">
             </div>
             <div class="bt-inline-field">
-              <label class="bt-control-label mb-0" for="bt-sim-delay">Delay</label>
-              <div class="bt-inline-input">
-                <input type="number" id="bt-sim-delay" value="1" min="0" max="1440" step="1"
-                       class="form-control form-control-sm bt-short-input" onchange="saveBtSettings()">
-                <span class="small text-muted">m</span>
-              </div>
+              <label class="bt-control-label mb-0">Entry</label>
+              <div class="small text-muted pt-1">Decision time</div>
             </div>
           </div>
         </div>
@@ -562,7 +558,6 @@
 // =====================================================================
 var _SRV_KEYS = [
   'symbol', 'created_after', 'created_before', 'headline', 'conf_min',
-  'price_10_min',
   'price_min', 'price_max', 'avg_vol_min', 'avg_vol_max',
   'mkt_cap_min', 'mkt_cap_max', 'pe_min', 'pe_max',
   'sort_col', 'sort_dir'
@@ -801,33 +796,6 @@ function initServerFilters() {
 }
 
 // =====================================================================
-// Price delay minutes (inline setting)
-// =====================================================================
-var _priceDelayDebounce = null;
-
-function initPriceDelayInput() {
-  var el = document.getElementById('price-delay-input');
-  if (!el) return;
-  el.addEventListener('change', function() {
-    var val = parseInt(el.value, 10);
-    if (!val || val < 5 || val > 20) return;
-    clearTimeout(_priceDelayDebounce);
-    _priceDelayDebounce = setTimeout(function() {
-      fetch('/api/settings/price-delay', {
-        method: 'POST',
-        headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({minutes: val})
-      }).then(function(r) { return r.json(); }).then(function(data) {
-        // Update column header label
-        var label = document.querySelector('[data-col="price_10"] .col-label');
-        if (label) label.textContent = 'Price@' + data.price_delay_minutes;
-        reloadTable();
-      });
-    }, 600);
-  });
-}
-
-// =====================================================================
 // Per-filter clear (x) buttons
 // =====================================================================
 function clearFilter(xBtn) {
@@ -916,8 +884,7 @@ function saveBtSettings() {
   var guardTarget = parseFloat(document.getElementById('bt-guard-target').value) || 0;
   var guardTrail = parseFloat(document.getElementById('bt-guard-trail').value) || 0;
   var simStart = parseFloat(document.getElementById('bt-sim-start').value) || 10000;
-  var simDelay = parseInt(document.getElementById('bt-sim-delay').value) || 1;
-  localStorage.setItem(_BT_SETTINGS_KEY, JSON.stringify({extHours: ext, closeTime: closeTime, minHold: minHold, guardStop: guardStop, guardTarget: guardTarget, guardTrail: guardTrail, simStart: simStart, simDelay: simDelay}));
+  localStorage.setItem(_BT_SETTINGS_KEY, JSON.stringify({extHours: ext, closeTime: closeTime, minHold: minHold, guardStop: guardStop, guardTarget: guardTarget, guardTrail: guardTrail, simStart: simStart}));
 }
 
 function loadBtSettings() {
@@ -945,9 +912,6 @@ function loadBtSettings() {
     }
     if (s.simStart != null) {
       document.getElementById('bt-sim-start').value = s.simStart;
-    }
-    if (s.simDelay != null) {
-      document.getElementById('bt-sim-delay').value = s.simDelay;
     }
   } catch(e) {}
 }
@@ -1345,11 +1309,10 @@ function runBacktest() {
   var guardTarget = parseFloat(document.getElementById('bt-guard-target').value) || 0;
   var guardTrail = parseFloat(document.getElementById('bt-guard-trail').value) || 0;
   var simStart = parseFloat(document.getElementById('bt-sim-start').value) || 0;
-  var simDelay = parseInt(document.getElementById('bt-sim-delay').value) || 1;
   fetch('/api/strategies/backtest', {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({strategy: strategy, params: params, allocation: _btCurrentAllocation, allocation_params: allocParams, filters: filters, market_close: marketClose, min_hold: minHold, guard_stop_pct: guardStop, guard_target_pct: guardTarget, guard_trail_pct: guardTrail, starting_amount: simStart, reinvest_delay_minutes: simDelay}),
+    body: JSON.stringify({strategy: strategy, params: params, allocation: _btCurrentAllocation, allocation_params: allocParams, filters: filters, market_close: marketClose, min_hold: minHold, guard_stop_pct: guardStop, guard_target_pct: guardTarget, guard_trail_pct: guardTrail, starting_amount: simStart}),
   })
   .then(function(r) { return r.json(); })
   .then(function(data) {
@@ -1385,7 +1348,6 @@ function goLive() {
   var guardTarget = parseFloat(document.getElementById('bt-guard-target').value) || 0;
   var guardTrail = parseFloat(document.getElementById('bt-guard-trail').value) || 0;
   var simStart = parseFloat(document.getElementById('bt-sim-start').value) || 100000;
-  var priceDelay = parseInt(document.getElementById('bt-sim-delay').value) || 10;
 
   var configName = strategy + ' (live)';
   var body = {
@@ -1401,7 +1363,6 @@ function goLive() {
     guard_target_pct: guardTarget,
     guard_trail_pct: guardTrail,
     min_hold: minHold,
-    price_delay_minutes: priceDelay,
     market_close: marketClose,
   };
 
@@ -1629,19 +1590,6 @@ function _displayResults() {
       return;
     }
 
-    // Update Price@10 cell if the backtest corrected the entry price
-    if (r.entry_price) {
-      var p10Cell = row.querySelector('[data-col="price_10"]');
-      if (p10Cell) {
-        var origPrice = parseFloat(row.getAttribute('data-entry-price'));
-        if (!origPrice || Math.abs(origPrice - r.entry_price) > 0.01) {
-          // Backtest used a corrected price — show it
-          p10Cell.textContent = '$' + r.entry_price.toFixed(2);
-          p10Cell.setAttribute('data-sort-val', String(r.entry_price));
-        }
-      }
-    }
-
     // P&L cell
     var pnl = r.pnl_pct;
     var sign = pnl >= 0 ? '+' : '';
@@ -1822,7 +1770,6 @@ document.addEventListener('htmx:afterSwap', function(e) {
     initResizeHandles();
     initSortHandlers();
     initServerFilters();
-    initPriceDelayInput();
     initClientFilters();
     loadFilterState();
     applyClientFilters();

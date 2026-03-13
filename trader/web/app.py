@@ -193,7 +193,7 @@ def create_app(
         return parsed * scale
 
     def _normalize_sort(value: str | None, direction: str | None) -> tuple[str, str]:
-        allowed = {"created", "headline", "symbols", "signal", "price_10", "price", "avg_vol", "mkt_cap", "pe"}
+        allowed = {"created", "headline", "symbols", "signal", "price", "avg_vol", "mkt_cap", "pe"}
         col = (value or "created").strip().lower()
         if col not in allowed:
             col = "created"
@@ -214,6 +214,14 @@ def create_app(
         if not symbols:
             return ""
         return str(symbols[0]).strip().upper()
+
+    def _snapshot_entry_time(snap: dict[str, Any]) -> str:
+        """Return the decision-time timestamp used for entries."""
+        for key in ("decision_at", "created_at"):
+            value = str(snap.get(key) or "").strip()
+            if value:
+                return value
+        return ""
 
     def _safe_float(value: Any) -> float | None:
         if value is None:
@@ -304,8 +312,6 @@ def create_app(
                 return row.get("_primary_symbol") or ""
             if sort_col == "signal":
                 return _signed_confidence(row.get("prediction"))
-            if sort_col == "price_10":
-                return _safe_float(row.get("_entry_price"))
             if sort_col == "price":
                 return _safe_float(row.get("_price"))
             if sort_col == "avg_vol":
@@ -406,15 +412,6 @@ def create_app(
                     result[sym]["pe"] = pe
         return result
 
-    def _get_entry_price(row: dict, delay: int) -> float | None:
-        """Extract the entry price for a given delay from price_at or legacy price_10min."""
-        price_at = row.get("price_at")
-        if isinstance(price_at, dict):
-            val = price_at.get(str(delay))
-            if val is not None:
-                return _safe_float(val)
-        return _safe_float(row.get("price_10min"))
-
     def _snapshot_rows_for_filters(
         *,
         symbol: str | None = None,
@@ -423,7 +420,6 @@ def create_app(
         created_before: str | None = None,
         headline: str | None = None,
         conf_min: str | None = None,
-        price_10_min: str | None = None,
         price_min: str | None = None,
         price_max: str | None = None,
         avg_vol_min: str | None = None,
@@ -439,7 +435,6 @@ def create_app(
         explored_only = explored == "1"
         conf_min_val = _parse_conf_min(conf_min)
         sort_col_norm, sort_dir_norm = _normalize_sort(sort_col, sort_dir)
-        price_10_min_val = _parse_optional_float(price_10_min)
         price_min_val = _parse_optional_float(price_min)
         price_max_val = _parse_optional_float(price_max)
         # UI inputs are unit-scaled:
@@ -452,7 +447,6 @@ def create_app(
         pe_min_val = _parse_optional_float(pe_min)
         pe_max_val = _parse_optional_float(pe_max)
 
-        delay = app.state.settings.price_delay_minutes
         base_total = count_snapshots(
             db,
             symbol=symbol,
@@ -461,8 +455,6 @@ def create_app(
             created_before=created_before,
             headline=headline,
             conf_min=conf_min_val,
-            price_10_min=price_10_min_val,
-            price_delay=delay,
         )
         base_snaps = get_all_snapshots(
             db,
@@ -472,16 +464,12 @@ def create_app(
             created_before=created_before,
             headline=headline,
             conf_min=conf_min_val,
-            price_10_min=price_10_min_val,
-            price_delay=delay,
             limit=max(base_total, 1),
             offset=0,
         )
 
         symbols = [_primary_symbol(s) for s in base_snaps]
         market_by_symbol = _fetch_market_metrics(symbols) if include_market_metrics else {}
-        now_utc = datetime.now(timezone.utc)
-        price_delay_delta = timedelta(minutes=max(0, app.state.settings.price_delay_minutes))
 
         filtered_rows: list[dict[str, Any]] = []
         for snap in base_snaps:
@@ -497,13 +485,7 @@ def create_app(
             row["_avg_vol_text"] = _fmt_volume(row["_avg_vol"])
             row["_mkt_cap_text"] = _fmt_mkt_cap(row["_mkt_cap"])
             row["_pe_text"] = _fmt_pe(row["_pe"])
-            row["_entry_price"] = _get_entry_price(row, delay)
-            created_at = _parse_iso_utc(row.get("created_at"))
-            row["_price_10_pending"] = (
-                row["_entry_price"] is None
-                and created_at is not None
-                and (created_at + price_delay_delta) > now_utc
-            )
+            row["_entry_time"] = _snapshot_entry_time(row)
 
             if include_market_metrics:
                 if not _matches_range(row["_price"], price_min_val, price_max_val):
@@ -527,7 +509,6 @@ def create_app(
             "headline_filter": headline or "",
             "created_after": created_after or "",
             "created_before": created_before or "",
-            "price_10_min_filter": price_10_min or "",
             "price_min_filter": price_min or "",
             "price_max_filter": price_max or "",
             "avg_vol_min_filter": avg_vol_min or "",
@@ -593,7 +574,6 @@ def create_app(
         created_before: str | None = None,
         headline: str | None = None,
         conf_min: str | None = None,
-        price_10_min: str | None = None,
         price_min: str | None = None,
         price_max: str | None = None,
         avg_vol_min: str | None = None,
@@ -608,8 +588,6 @@ def create_app(
         explored_only = explored == "1"
         conf_min_val = _parse_conf_min(conf_min)
         sort_col_norm, sort_dir_norm = _normalize_sort(sort_col, sort_dir)
-        price_10_min_val = _parse_optional_float(price_10_min)
-        delay = app.state.settings.price_delay_minutes
         total = count_snapshots(
             db,
             symbol=symbol,
@@ -618,16 +596,13 @@ def create_app(
             created_before=created_before,
             headline=headline,
             conf_min=conf_min_val,
-            price_10_min=price_10_min_val,
-            price_delay=delay,
         )
         return templates.TemplateResponse(
             request=request,
             name="snapshots.html",
             context={"active_page": "snapshots", "symbol_filter": symbol,
-                     "headline_filter": headline,
-                     "conf_min_filter": conf_min or "",
-                     "price_10_min_filter": price_10_min or "",
+                "headline_filter": headline,
+                "conf_min_filter": conf_min or "",
                      "price_min_filter": price_min or "",
                      "price_max_filter": price_max or "",
                      "avg_vol_min_filter": avg_vol_min or "",
@@ -639,8 +614,7 @@ def create_app(
                      "sort_col": sort_col_norm,
                      "sort_dir": sort_dir_norm,
                      "explored_only": explored_only, "total": total,
-                     "created_after": created_after or "", "created_before": created_before or "",
-                     "price_delay_minutes": app.state.settings.price_delay_minutes},
+                     "created_after": created_after or "", "created_before": created_before or ""},
         )
 
     @app.get("/snapshots/{snapshot_id}", response_class=HTMLResponse)
@@ -853,7 +827,6 @@ def create_app(
         created_before: str | None = None,
         headline: str | None = None,
         conf_min: str | None = None,
-        price_10_min: str | None = None,
         price_min: str | None = None,
         price_max: str | None = None,
         avg_vol_min: str | None = None,
@@ -875,7 +848,6 @@ def create_app(
             created_before=created_before,
             headline=headline,
             conf_min=conf_min,
-            price_10_min=price_10_min,
             price_min=price_min,
             price_max=price_max,
             avg_vol_min=avg_vol_min,
@@ -900,7 +872,6 @@ def create_app(
                 "created_after": meta["created_after"],
                 "created_before": meta["created_before"],
                 "conf_min": meta["conf_min_filter"],
-                "price_10_min": meta["price_10_min_filter"],
                 "price_min": meta["price_min_filter"],
                 "price_max": meta["price_max_filter"],
                 "avg_vol_min": meta["avg_vol_min_filter"],
@@ -927,7 +898,6 @@ def create_app(
                 "symbol_filter": meta["symbol_filter"],
                 "headline_filter": meta["headline_filter"],
                 "conf_min_filter": meta["conf_min_filter"],
-                "price_10_min_filter": meta["price_10_min_filter"],
                 "price_min_filter": meta["price_min_filter"],
                 "price_max_filter": meta["price_max_filter"],
                 "avg_vol_min_filter": meta["avg_vol_min_filter"],
@@ -942,7 +912,6 @@ def create_app(
                 "explored_only": meta["explored_only"],
                 "created_after": meta["created_after"],
                 "created_before": meta["created_before"],
-                "price_delay_minutes": app.state.settings.price_delay_minutes,
             },
         )
 
@@ -1081,7 +1050,6 @@ def create_app(
                 created_before=(str(filters.get("created_before")).strip() if filters.get("created_before") is not None else None),
                 headline=(str(filters.get("headline")).strip() if filters.get("headline") is not None else None),
                 conf_min=(str(filters.get("conf_min")).strip() if filters.get("conf_min") is not None else None),
-                price_10_min=(str(filters.get("price_10_min")).strip() if filters.get("price_10_min") is not None else None),
                 price_min=(str(filters.get("price_min")).strip() if filters.get("price_min") is not None else None),
                 price_max=(str(filters.get("price_max")).strip() if filters.get("price_max") is not None else None),
                 avg_vol_min=(str(filters.get("avg_vol_min")).strip() if filters.get("avg_vol_min") is not None else None),
@@ -1097,9 +1065,8 @@ def create_app(
             entries = []
             for row in sorted_rows:
                 sid = str(row.get("snapshot_id") or "").strip()
-                entry_time = str(row.get("created_at") or "").strip()
+                entry_time = _snapshot_entry_time(row)
                 sym = str(row.get("_primary_symbol") or "").strip().upper()
-                price = _safe_float(row.get("_entry_price")) or 0.0
                 if not sid or not entry_time or not sym:
                     continue
                 pred = row.get("prediction") or {}
@@ -1108,7 +1075,7 @@ def create_app(
                     {
                         "snapshot_id": sid,
                         "symbol": sym,
-                        "entry_price": price if price > 0 else 0,
+                        "entry_price": 0.0,
                         "entry_time": entry_time,
                         "confidence": confidence,
                     }
@@ -1175,8 +1142,6 @@ def create_app(
 
         # Capture settings values needed by background task
         res_min = app.state.settings.stats_resolution_minutes
-        price_delay_minutes = app.state.settings.price_delay_minutes
-
         async def _run_backtest_job() -> None:
             log = logging.getLogger("backtest_job")
             last_progress_emit = 0.0
@@ -1278,7 +1243,7 @@ def create_app(
                 results = await asyncio.to_thread(
                     run_backtest, strategy_key, params, entries, market_close, min_hold,
                     guard_stop_pct, guard_target_pct, guard_trail_pct,
-                    price_delay_minutes, res_min, engine_trace,
+                    0, res_min, engine_trace,
                     progress_cb=_set_backtest_progress,
                 )
                 _mark("run_backtest", t_engine)
@@ -1949,7 +1914,6 @@ def create_app(
                 guard_target_pct=float(body.get("guard_target_pct", 0)),
                 guard_trail_pct=float(body.get("guard_trail_pct", 0)),
                 min_hold=int(body.get("min_hold", 5)),
-                price_delay_minutes=int(body.get("price_delay_minutes", 10)),
                 market_close=body.get("market_close", "16:00"),
                 cooling_off_market_hours=float(body.get("cooling_off_market_hours", 24.0)),
                 live_overrides=body.get("live_overrides", {}),
@@ -2650,26 +2614,6 @@ def create_app(
             f"{restart_note}"
             "<script>setTimeout(() => location.reload(), 3000)</script>"
         )
-
-    # ------------------------------------------------------------------
-    # Price delay minutes (inline update from snapshots table)
-    # ------------------------------------------------------------------
-
-    @app.post("/api/settings/price-delay")
-    async def api_set_price_delay(request: Request):
-        """Update PRICE_DELAY_MINUTES in .env and reload settings."""
-        body = await request.json()
-        minutes = int(body.get("minutes", 0))
-        if minutes < 5 or minutes > 20:
-            return JSONResponse({"error": "minutes must be 5-20"}, status_code=400)
-
-        from dotenv import set_key
-        env_path = str(Path.cwd() / ".env")
-        set_key(env_path, "PRICE_DELAY_MINUTES", str(minutes))
-
-        new = load_settings(override=True)
-        app.state.settings = new
-        return JSONResponse({"price_delay_minutes": new.price_delay_minutes})
 
     # ------------------------------------------------------------------
     # Online mode

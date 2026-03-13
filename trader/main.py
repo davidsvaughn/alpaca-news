@@ -36,7 +36,6 @@ from trader.online.activity_tracker import Activity, ActivityTracker
 from trader.online.event_bus import EventBus, PipelineEvent
 from trader.online.orchestrator import process_news_file, run_watch_loop
 from trader.online.news_archive import run_news_archive_loop
-from trader.online.price_10min import reconcile_missing_prices
 from trader.online.x_stream_service import XStreamGuards, XStreamService
 from trader.web.app import create_app
 
@@ -235,19 +234,6 @@ def main() -> None:
         daemon=True,
     )
     t.start()
-
-    # Backfill missing price_at maps (all offsets 5-20) in the background.
-    def _price_at_maintenance() -> None:
-        while True:
-            try:
-                updated = reconcile_missing_prices(db=db)
-                if updated:
-                    print(f"Price@5-20: backfilled {updated} snapshot(s).")
-            except Exception as exc:
-                print(f"Price@5-20 maintenance error: {exc}")
-            time.sleep(60)
-
-    threading.Thread(target=_price_at_maintenance, daemon=True).start()
 
     # Archive stale incoming news JSON files into daily ZIPs and prune old archives.
     threading.Thread(

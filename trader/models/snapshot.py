@@ -53,6 +53,7 @@ class Snapshot:
     snapshot_id: str
     version: str
     created_at: str
+    decision_at: str
     trigger: Trigger
     market_context: dict[str, Any]
     price_context: dict[str, Any]
@@ -214,6 +215,7 @@ class SnapshotBuilder:
         self.snapshot_id = snapshot_id or str(uuid.uuid4())
         self.version = version
         self.created_at = utc_now().isoformat()
+        self.decision_at = ""
         self.trigger = trigger
         self.market_context: dict[str, Any] = {}
         self.price_context: dict[str, Any] = {}
@@ -254,6 +256,10 @@ class SnapshotBuilder:
     def set_prediction(self, pred: dict[str, Any]) -> None:
         self.prediction = pred
 
+    def mark_decision_now(self) -> None:
+        """Capture the final decision timestamp used for entry semantics."""
+        self.decision_at = utc_now().isoformat()
+
     def set_cost_total(self, total: float) -> None:
         """Override the auto-accumulated total (e.g. from CostTracker)."""
         self._cost_total = total
@@ -283,6 +289,7 @@ class SnapshotBuilder:
             snapshot_id=self.snapshot_id,
             version=self.version,
             created_at=self.created_at,
+            decision_at=self.decision_at or utc_now().isoformat(),
             trigger=self.trigger,
             triage=self.triage,
             market_context=self.market_context,
