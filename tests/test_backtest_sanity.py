@@ -17,6 +17,7 @@ from trader.market.backtest import (
     BacktestResult,
     _extract_periodic_closes,
     _filter_trading_hours,
+    _is_backtest_cache_valid,
     apply_allocation,
     compute_ann_a,
     compute_ann_b,
@@ -261,6 +262,49 @@ class TestBacktestProgress:
         assert sim["sim_ending"] == pytest.approx(1020.0)
         assert sim["sim_span_days"] == pytest.approx(round(60 / _BARS_PER_DAY, 2), rel=1e-6)
         assert sim["sim_daily_pct"] is not None
+
+    def test_finalized_cache_result_stays_valid_when_data_horizon_advances(self):
+        result = BacktestResult(
+            snapshot_id="done",
+            symbol="AAPL",
+            entry_price=100.0,
+            entry_time="2026-01-02T10:00:00",
+            exit_price=103.0,
+            exit_time="2026-01-02T11:00:00",
+            pnl_pct=3.0,
+            exit_reason="signal",
+            bars_held=60,
+        )
+
+        assert _is_backtest_cache_valid(
+            result,
+            {"data_end": "2026-01-02T12:00:00"},
+            "2026-01-02T15:30:00",
+        ) is True
+
+    def test_open_cache_result_invalidates_when_data_horizon_advances(self):
+        result = BacktestResult(
+            snapshot_id="open",
+            symbol="AAPL",
+            entry_price=100.0,
+            entry_time="2026-01-02T10:00:00",
+            exit_price=101.0,
+            exit_time="2026-01-02T12:00:00",
+            pnl_pct=1.0,
+            exit_reason="still_open",
+            bars_held=120,
+        )
+
+        assert _is_backtest_cache_valid(
+            result,
+            {"data_end": "2026-01-02T12:00:00"},
+            "2026-01-02T12:00:00",
+        ) is True
+        assert _is_backtest_cache_valid(
+            result,
+            {"data_end": "2026-01-02T12:00:00"},
+            "2026-01-02T15:30:00",
+        ) is False
 
 class TestComputeAnnAExtra:
     def test_zero_bars_floors_to_one(self):

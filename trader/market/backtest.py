@@ -429,7 +429,7 @@ class BacktestResult:
 _TRADING_DAYS_PER_YEAR = 252
 _BARS_PER_DAY = 390  # 6.5 hours × 60 minutes
 
-_BACKTEST_RESULT_CACHE_VERSION = "v1"
+_BACKTEST_RESULT_CACHE_VERSION = "v2"
 _BACKTEST_RESULT_CACHE_DIR = Path.home() / ".cache" / "alpaca-news" / "backtest_results"
 
 
@@ -510,8 +510,6 @@ def _build_backtest_result_cache_key(
     guard_trail_pct: float,
     stats_resolution_minutes: int,
     data_start: Any,
-    data_end: Any,
-    bar_count: int,
 ) -> str:
     payload = {
         "version": _BACKTEST_RESULT_CACHE_VERSION,
@@ -529,14 +527,52 @@ def _build_backtest_result_cache_key(
         "guard_trail_pct": float(guard_trail_pct),
         "stats_resolution_minutes": int(stats_resolution_minutes),
         "data_start": _ts_cache_key(data_start),
-        "data_end": _ts_cache_key(data_end),
-        "bar_count": int(bar_count),
     }
     encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
 
-def _read_backtest_result_cache(symbol: str, cache_key: str) -> BacktestResult | None:
+def _is_backtest_cache_valid(
+    result: BacktestResult,
+    meta: dict[str, Any] | None,
+    current_data_end: Any,
+) -> bool:
+    """Return True when a cached result is valid for the current bar horizon.
+
+    Finalized exits are stable once their exit timestamp is in the available
+    data. Open/no-data outcomes can change as newer bars arrive, so they are
+    only reusable when the current horizon has not advanced past the cached one.
+    """
+    if not isinstance(meta, dict):
+        return False
+    cached_data_end = meta.get("data_end")
+    if not cached_data_end:
+        return False
+    try:
+        current_end = pd.Timestamp(current_data_end)
+        cached_end = pd.Timestamp(str(cached_data_end))
+    except Exception:
+        return False
+    if current_end < cached_end:
+        return False
+    if result.exit_reason in {"still_open", "no_data"}:
+        return current_end == cached_end
+    exit_time = str(result.exit_time or "").strip()
+    if not exit_time:
+        return current_end == cached_end
+    try:
+        exit_ts = pd.Timestamp(exit_time)
+    except Exception:
+        return False
+    return exit_ts <= current_end
+
+
+def _read_backtest_result_cache(
+    symbol: str,
+    cache_key: str,
+    *,
+    current_data_end: Any,
+) -> BacktestResult | None:
     path = _backtest_result_cache_path(symbol, cache_key)
     try:
         payload = json.loads(path.read_text())
@@ -545,17 +581,35 @@ def _read_backtest_result_cache(symbol: str, cache_key: str) -> BacktestResult |
     if not isinstance(payload, dict):
         return None
     try:
-        return _deserialize_backtest_result(payload)
+        if "result" in payload:
+            meta = payload.get("meta")
+            result = _deserialize_backtest_result(payload.get("result") or {})
+            return result if _is_backtest_cache_valid(result, meta, current_data_end) else None
+        result = _deserialize_backtest_result(payload)
+        return result if _is_backtest_cache_valid(result, None, current_data_end) else None
     except Exception:
         log.debug("Ignoring corrupt backtest cache for %s", path, exc_info=True)
         return None
 
 
-def _write_backtest_result_cache(symbol: str, cache_key: str, result: BacktestResult) -> None:
+def _write_backtest_result_cache(
+    symbol: str,
+    cache_key: str,
+    result: BacktestResult,
+    *,
+    data_end: Any,
+) -> None:
     path = _backtest_result_cache_path(symbol, cache_key)
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(_serialize_backtest_result(result)))
+        payload = {
+            "version": _BACKTEST_RESULT_CACHE_VERSION,
+            "result": _serialize_backtest_result(result),
+            "meta": {
+                "data_end": _ts_cache_key(data_end),
+            },
+        }
+        path.write_text(json.dumps(payload))
     except OSError:
         log.debug("Failed to write backtest cache %s", path, exc_info=True)
 
@@ -3039,7 +3093,6 @@ def run_backtest(
         counts["symbols_with_data"] += 1
         data_start = df.index[0]
         data_end = df.index[-1]
-        bar_count = len(df)
         for e, entry_dt in parsed_times:
             entry_price = e["entry_price"]
             entry_time_str = e.get("entry_time", e.get("entry_date", ""))
@@ -3091,10 +3144,12 @@ def run_backtest(
                 guard_trail_pct=guard_trail_pct,
                 stats_resolution_minutes=stats_resolution_minutes,
                 data_start=data_start,
-                data_end=data_end,
-                bar_count=bar_count,
             )
-            cached_result = _read_backtest_result_cache(symbol, cache_key)
+            cached_result = _read_backtest_result_cache(
+                symbol,
+                cache_key,
+                current_data_end=data_end,
+            )
             if cached_result is not None:
                 results.append(cached_result)
                 counts["result_cache_hits"] += 1
@@ -3209,7 +3264,12 @@ def run_backtest(
                 entry_features=ef,
             )
             results.append(result)
-            _write_backtest_result_cache(symbol, cache_key, result)
+            _write_backtest_result_cache(
+                symbol,
+                cache_key,
+                result,
+                data_end=data_end,
+            )
             if pnl_pct is None:
                 counts["trades_no_data"] += 1
             else:
