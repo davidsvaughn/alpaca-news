@@ -5,6 +5,7 @@ import fcntl
 import logging
 import os
 import sys
+from logging.handlers import TimedRotatingFileHandler
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -17,6 +18,11 @@ load_dotenv()
 
 # Singleton guard: only one tick collector instance allowed
 _LOCK_FILE = Path(__file__).parent.parent / "logs" / ".tick_collector.lock"
+
+# Logging defaults (overridable via env vars)
+_DEFAULT_LOG_FILE = "logs/tick_collector.log"
+_DEFAULT_LOG_LEVEL = "INFO"
+_DEFAULT_KEEP_DAYS = 14
 
 
 def _acquire_lock() -> None:
@@ -33,18 +39,51 @@ def _acquire_lock() -> None:
         print("ERROR: Another tick collector instance is already running. Exiting.")
         sys.exit(1)
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
-    datefmt="%H:%M:%S",
-)
-# Quiet down noisy libs
-logging.getLogger("schwabdev").setLevel(logging.WARNING)
-logging.getLogger("asyncpg").setLevel(logging.WARNING)
+
+def _setup_logging() -> None:
+    """Configure root logger with console + rotating file handlers."""
+    log_file = os.getenv("TC_LOG_FILE", _DEFAULT_LOG_FILE)
+    log_level = os.getenv("TC_LOG_LEVEL", _DEFAULT_LOG_LEVEL).upper()
+    keep_days = int(os.getenv("TC_LOG_KEEP_DAYS", str(_DEFAULT_KEEP_DAYS)))
+
+    log_path = Path(log_file)
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+
+    root = logging.getLogger()
+    root.setLevel(logging.DEBUG)
+
+    # Console handler (INFO+)
+    console = logging.StreamHandler()
+    console.setLevel(logging.INFO)
+    console.setFormatter(logging.Formatter(
+        "%(asctime)s [%(name)s] %(levelname)s: %(message)s",
+        datefmt="%H:%M:%S",
+    ))
+    root.addHandler(console)
+
+    # File handler — rotates daily at midnight
+    file_handler = TimedRotatingFileHandler(
+        log_file, when="midnight", backupCount=keep_days,
+    )
+    file_handler.setLevel(getattr(logging, log_level, logging.WARNING))
+    file_handler.setFormatter(logging.Formatter(
+        "%(asctime)s [%(name)s] %(levelname)s: %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+    ))
+    root.addHandler(file_handler)
+
+    # Quiet down noisy libs
+    logging.getLogger("schwabdev").setLevel(logging.WARNING)
+    logging.getLogger("asyncpg").setLevel(logging.WARNING)
+
+    logging.getLogger(__name__).info(
+        "Logging to file: %s (level=%s, keep=%d days)", log_file, log_level, keep_days,
+    )
 
 
 def main() -> None:
     _acquire_lock()
+    _setup_logging()
     config = CollectorConfig.from_env()
 
     # Preview portfolio symbols

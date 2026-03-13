@@ -6,6 +6,8 @@ Env vars:
     LOG_FILE       — Path to log file (default: logs/trader.log)
     LOG_LEVEL      — Minimum level for file logging (default: WARNING)
     LOG_KEEP_DAYS  — How many days of log files to keep (default: 14)
+    LIVE_EVAL_VERBOSE — Set to 1/true to show LIVE-EVAL/LIVE-PM debug
+                        messages on console (default: off)
 
 The file handler captures WARNING+ by default so you always have a
 record of errors. Console output remains INFO as before.
@@ -23,7 +25,7 @@ from pathlib import Path
 
 # Defaults
 _DEFAULT_LOG_FILE = "logs/trader.log"
-_DEFAULT_LOG_LEVEL = "WARNING"
+_DEFAULT_LOG_LEVEL = "INFO"
 _DEFAULT_KEEP_DAYS = 14
 
 
@@ -79,6 +81,11 @@ def setup_logging() -> None:
 
     # VolumeDeltaCollector logs ~150 "tracking X" messages on startup
     logging.getLogger("trader.market.volume_delta_shadow").setLevel(logging.WARNING)
+
+    # LIVE-EVAL / LIVE-PM verbose console output (off by default)
+    live_eval_verbose = os.getenv("LIVE_EVAL_VERBOSE", "").lower() in ("1", "true", "yes")
+    if not live_eval_verbose:
+        logging.getLogger("trader.online.live_monitor").setLevel(logging.INFO)
 
     logging.getLogger(__name__).info(
         "Logging to file: %s (level=%s, keep=%d days)", log_file, log_level, keep_days,

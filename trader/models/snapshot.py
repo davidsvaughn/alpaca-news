@@ -57,6 +57,7 @@ class Snapshot:
     trigger: Trigger
     market_context: dict[str, Any]
     price_context: dict[str, Any]
+    decision_metrics: dict[str, Any]
     exploration_budget: ExplorationBudget
     triage: dict[str, Any]
     tool_traces: list[dict[str, Any]]
@@ -219,6 +220,7 @@ class SnapshotBuilder:
         self.trigger = trigger
         self.market_context: dict[str, Any] = {}
         self.price_context: dict[str, Any] = {}
+        self.decision_metrics: dict[str, Any] = {}
         self.exploration_budget = exploration_budget or ExplorationBudget()
         self.triage: dict[str, Any] = {}
         self.tool_traces: list[dict[str, Any]] = []
@@ -249,6 +251,9 @@ class SnapshotBuilder:
 
     def set_price_context(self, ctx: dict[str, Any]) -> None:
         self.price_context = ctx
+
+    def set_decision_metrics(self, ctx: dict[str, Any]) -> None:
+        self.decision_metrics = ctx
 
     def set_triage(self, triage: dict[str, Any]) -> None:
         self.triage = triage
@@ -294,6 +299,7 @@ class SnapshotBuilder:
             triage=self.triage,
             market_context=self.market_context,
             price_context=self.price_context,
+            decision_metrics=self.decision_metrics,
             exploration_budget=self.exploration_budget,
             tool_traces=list(self.tool_traces),
             rounds=list(self.rounds),

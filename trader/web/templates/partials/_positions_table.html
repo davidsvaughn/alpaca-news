@@ -259,7 +259,7 @@
   {% set alloc_params = p.config.allocation_params if p.config.allocation_params is defined and p.config.allocation_params else {} %}
   {% set alloc_summary = alloc_key %}
   {% if alloc_key == 'max_positions' %}
-    {% set alloc_summary = alloc_key + ': ' + (alloc_params.get('max_pos', 10)|string) %}
+    {% set alloc_summary = 'max_pos: ' + (alloc_params.get('max_pos', 10)|string) %}
   {% elif alloc_key in ['fixed_dollar', 'ranking_realloc'] %}
     {% set alloc_summary = alloc_key + ': ' + (alloc_params.get('alloc_pct', 5)|string) + '%' %}
   {% endif %}

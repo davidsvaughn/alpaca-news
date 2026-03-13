@@ -1,0 +1,133 @@
+# Logging: Files, Config & Searching
+
+> Where log files live, what they capture, how long they persist, and how to search them.
+
+## Quick reference
+
+| Log file | Source | Default level | Rotation | Retention | Config env vars |
+|----------|--------|---------------|----------|-----------|-----------------|
+| `logs/trader.log` | Trader app (`uv run python -m trader.main`) | INFO | Daily at midnight | 14 days | `LOG_FILE`, `LOG_LEVEL`, `LOG_KEEP_DAYS` |
+| `logs/tick_collector.log` | Tick collector (`uv run python -m tick_collector`) | INFO | Daily at midnight | 14 days | `TC_LOG_FILE`, `TC_LOG_LEVEL`, `TC_LOG_KEEP_DAYS` |
+| `logs/notifications.md` | `trader.notifications.notify()` | Always written | None | Manual cleanup | N/A |
+
+Rotated files are named `trader.log.2026-03-12`, `tick_collector.log.2026-03-11`, etc.
+
+## Setup code
+
+| App | Config file | Function |
+|-----|-------------|----------|
+| Trader | [trader/logging_config.py](../../trader/logging_config.py) | `setup_logging()` |
+| Tick collector | [tick_collector/__main__.py](../../tick_collector/__main__.py) | `_setup_logging()` |
+
+Both follow the same pattern: root logger at DEBUG, console handler at INFO, file handler at configurable level (default INFO).
+
+## What each log captures
+
+### `logs/trader.log`
+
+Everything from the trader app at INFO+:
+
+| Logger name | What it logs |
+|-------------|-------------|
+| `trader.online.live_monitor` | Exit checks, cooling off, watch creation, LIVE-PM buy/skip results |
+| `trader.online.orchestrator` | Pipeline runs, watchdog events, snapshot creation |
+| `trader.online.online_mode` | Online mode startup, scheduling |
+| `trader.market.alpaca_broker` | Buy/sell orders, fill confirmations, position checks |
+| `trader.market.alpaca_stream` | WebSocket fill/cancel events |
+| `trader.market.alpaca_reconcile` | Reconciliation actions on startup |
+| `trader.market.backtest` | Exit strategy evaluations |
+| `trader.notifications` | Notification delivery |
+| `trader.db.equity_backfill` | Equity snapshot backfill |
+
+**Suppressed loggers** (WARNING+ only in file): `httpx`, `httpcore`, `schwabdev`, `alpaca`, `uvicorn`, `yfinance` (CRITICAL only), `trader.market.volume_delta_shadow`.
+
+**LIVE-EVAL/LIVE-PM debug messages**: Off by default. Set `LIVE_EVAL_VERBOSE=1` in `.env` to see step-by-step filter/allocation messages on console. These log at DEBUG level, so they appear in the log file only if `LOG_LEVEL=DEBUG`.
+
+### `logs/tick_collector.log`
+
+Everything from the tick collector at INFO+:
+
+| Logger name | What it logs |
+|-------------|-------------|
+| `tick_collector.collector` | Stream events, subscriptions, restarts, health checks |
+| `tick_collector.db` | Trade inserts, DB connections |
+| `tick_collector.buffer` | Flush events, buffer stats |
+| `tick_collector.portfolio` | Symbol sync from trader DB |
+| `tick_collector.vdd` | VDD pool connections, query results |
+
+**Suppressed loggers** (WARNING+ only): `schwabdev`, `asyncpg`.
+
+### `logs/notifications.md`
+
+Timestamped operator alerts. Written by `notify()` — always active, no log level filtering. Contains buy/sell failures, fix verifications, and anything explicitly flagged for operator attention.
+
+## Searching logs
+
+### Recent issues (last N minutes)
+
+**Always read the tail of the log file first.** Do NOT grep for `ERROR`/`WARNING` — tracebacks are multi-line and grep will miss the stack trace lines. Read the raw tail to see the full picture:
+
+```bash
+# Read last 100-200 lines of each log (adjust as needed)
+tail -200 logs/trader.log
+tail -200 logs/tick_collector.log
+```
+
+Use grep only for targeted follow-up searches (specific symbol, time range, topic).
+
+### By time window
+
+Log file format: `YYYY-MM-DD HH:MM:SS [logger] LEVEL: message`
+
+```bash
+# Everything between 10:50 and 10:55 today
+grep "^2026-03-13 10:5[0-5]" logs/trader.log
+
+# All errors today
+grep "^2026-03-13.*ERROR" logs/trader.log
+```
+
+### By topic
+
+```bash
+# All buy/sell activity
+grep -i "buy\|sell\|fill\|order" logs/trader.log
+
+# Schwab stream issues
+grep -i "stream\|reconnect\|streamerInfo" logs/tick_collector.log
+
+# VDD checks
+grep "VDD\|vdd" logs/trader.log
+
+# Exit strategy evaluations
+grep "COOLING OFF\|EXIT\|exit" logs/trader.log
+
+# Specific symbol
+grep "AAPL" logs/trader.log
+grep "AAPL" logs/tick_collector.log
+```
+
+### Historical (rotated files)
+
+```bash
+# Yesterday's trader errors
+grep "ERROR" logs/trader.log.2026-03-12
+
+# All tick collector errors from the last 3 days
+grep "ERROR" logs/tick_collector.log*
+```
+
+## Gotchas
+
+- **Console vs file**: Both show the same content at INFO+ by default. The console uses short time format (`HH:MM:SS`), the file uses full (`YYYY-MM-DD HH:MM:SS`).
+- **`print()` statements don't go to log files**: Some startup messages and the orchestrator's `saved ...` / `OFFLINE: skipped ...` lines use `print()` and only appear on console. They are NOT captured in log files.
+- **Schwab/asyncpg are suppressed**: Set to WARNING+ in both apps. You won't see normal Schwab API calls or asyncpg queries — only errors.
+- **LIVE-EVAL debug messages**: These are at DEBUG level. They don't appear in log files unless you set `LOG_LEVEL=DEBUG` (which would also capture all other DEBUG messages). Use `LIVE_EVAL_VERBOSE=1` to see them on console only.
+- **Rotated file naming**: Files rotate at midnight. The current day's log is always `trader.log` / `tick_collector.log`. Yesterday's is `.log.2026-03-12`.
+
+## Cross-references
+
+- [DIAGNOSTICS.md](DIAGNOSTICS.md) — Full diagnostic guide: SQL queries, all data sources ranked, console prefixes
+- [trader/logging_config.py](../../trader/logging_config.py) — Trader logging setup
+- [tick_collector/__main__.py](../../tick_collector/__main__.py) — Tick collector logging setup
+- [CLAUDE.md](../../CLAUDE.md) — Project-level logging summary

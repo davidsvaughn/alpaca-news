@@ -1737,7 +1737,35 @@
     "LABZF",
     "TECK",
     "ACLS",
-    "PRKS"
+    "PRKS",
+    "EEX",
+    "CNTY",
+    "BKE",
+    "TXRP",
+    "RLX",
+    "NEWTP",
+    "PEG",
+    "GNSS",
+    "LRCX",
+    "KLIC",
+    "MITI",
+    "EQ",
+    "NOBH",
+    "CBAN",
+    "MNSB",
+    "TYL",
+    "BGMS",
+    "IMMP",
+    "APD",
+    "SBUX",
+    "WRD",
+    "CSTL",
+    "CLIK",
+    "GROW",
+    "ACLX",
+    "TSEOF",
+    "SCLX",
+    "DVLT"
   ],
   "crypto": [],
   "rejected": [
@@ -1928,7 +1956,12 @@
     "HEAR",
     "ARCI",
     "0316.HK",
-    "LABZ"
+    "LABZ",
+    "1205.HK",
+    "0007.HK",
+    "TSE",
+    "BIOPOL",
+    "SEPC"
   ],
-  "last_updated": "2026-03-12T22:58:33.153106+00:00"
+  "last_updated": "2026-03-13T15:22:20.213942+00:00"
 }

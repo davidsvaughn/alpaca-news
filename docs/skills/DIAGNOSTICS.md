@@ -8,7 +8,8 @@
 |---------------|---------------|-----|
 | All order activity (buys, sells, fills, failures) | `alpaca_transactions` table | [SQL query](#alpaca-transactions-query) |
 | Operator alerts (buy failures, fix verifications) | `logs/notifications.md` | `cat logs/notifications.md` |
-| Errors, tracebacks, warnings | `logs/trader.log` | `cat logs/trader.log` |
+| Errors, tracebacks, warnings | `logs/trader.log` | `cat logs/trader.log` — see [LOGGING.md](LOGGING.md) |
+| Tick collector errors | `logs/tick_collector.log` | `cat logs/tick_collector.log` — see [LOGGING.md](LOGGING.md) |
 | Real-time console output | Terminal running `trader.main` | Prefixed lines (see [Console prefixes](#console-output-prefixes)) |
 | Position lifecycle (hold/exit/seal) | `watches` table | [SQL query](#watches-query) |
 | Investigation results | `snapshots` table | `/api/snapshots` or [SQL query](#snapshots-query) |

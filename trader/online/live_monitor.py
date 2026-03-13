@@ -580,25 +580,23 @@ class LivePortfolioManager:
 
         active_configs = get_active_live_configs(self.db)
         if not active_configs:
-            print(f"LIVE-PM: {symbol} — no active configs")
+            log.debug("LIVE-PM: %s — no active configs", symbol)
             return False
-        print(f"LIVE-PM: {symbol} — checking {len(active_configs)} config(s)")
+        log.debug("LIVE-PM: %s — checking %d config(s)", symbol, len(active_configs))
 
         any_created = False
         for config_dict in active_configs:
             try:
                 cfg = LiveConfig.from_dict(config_dict)
                 if cfg.paused:
-                    print(f"LIVE-PM: {symbol} config={cfg.name} PAUSED — skipping new buys")
+                    log.debug("LIVE-PM: %s config=%s PAUSED — skipping new buys", symbol, cfg.name)
                     continue
                 result = self._evaluate_for_config(snapshot, symbol, cfg)
-                print(f"LIVE-PM: {symbol} config={cfg.name} -> {'BUY' if result else 'SKIP'}")
+                log.info("LIVE-PM: %s config=%s -> %s", symbol, cfg.name, "BUY" if result else "SKIP")
                 if result:
                     any_created = True
             except Exception as e:
-                print(f"LIVE-PM: {symbol} config={config_dict.get('name','?')} ERROR: {e}")
-                import traceback
-                traceback.print_exc()
+                log.error("LIVE-PM: %s config=%s ERROR: %s", symbol, config_dict.get('name', '?'), e, exc_info=True)
 
         return any_created
 
@@ -616,12 +614,12 @@ class LivePortfolioManager:
         prediction = snapshot.get("prediction") or {}
         confidence = prediction.get("confidence", 0.0)
         direction = (prediction.get("direction") or "neutral").lower()
-        print(f"LIVE-EVAL: {symbol} dir={direction} conf={confidence} config={cfg.name}")
+        log.debug("LIVE-EVAL: %s dir=%s conf=%s config=%s", symbol, direction, confidence, cfg.name)
 
         # --- Apply filters ---
 
         if direction == "neutral":
-            print(f"LIVE-EVAL: {symbol} SKIP neutral")
+            log.debug("LIVE-EVAL: %s SKIP neutral", symbol)
             return False
 
         # Apply filters — uses the same keys as the backtest UI:
@@ -636,24 +634,24 @@ class LivePortfolioManager:
                 conf_min_val = float(conf_min_str) / 100.0
                 signed_conf = confidence if direction == "bullish" else -confidence
                 if signed_conf < conf_min_val:
-                    print(f"LIVE-EVAL: {symbol} SKIP conf {signed_conf:.2f} < {conf_min_val:.2f}")
+                    log.debug("LIVE-EVAL: %s SKIP conf %.2f < %.2f", symbol, signed_conf, conf_min_val)
                     return False
             except (ValueError, TypeError):
                 pass
-        print(f"LIVE-EVAL: {symbol} passed confidence filter")
+        log.debug("LIVE-EVAL: %s passed confidence filter", symbol)
 
         # Symbol filter
         sym_filter = filters.get("symbol")
         if sym_filter and sym_filter.strip():
             if symbol.upper() != sym_filter.strip().upper():
-                print(f"LIVE-EVAL: {symbol} SKIP symbol filter")
+                log.debug("LIVE-EVAL: %s SKIP symbol filter", symbol)
                 return False
 
         # Market metric filters (price, volume, market cap, PE)
         if not self._apply_market_filters(symbol, filters):
-            print(f"LIVE-EVAL: {symbol} SKIP market metric filter")
+            log.debug("LIVE-EVAL: %s SKIP market metric filter", symbol)
             return False
-        print(f"LIVE-EVAL: {symbol} passed market filters")
+        log.debug("LIVE-EVAL: %s passed market filters", symbol)
 
         # --- Check allocation (per-portfolio) ---
         holding_count = count_holding_watches(self.db, live_config_id=cfg.config_id)
@@ -674,7 +672,7 @@ class LivePortfolioManager:
         else:
             max_concurrent = 20
 
-        print(f"LIVE-EVAL: {symbol} allocation {holding_count}/{max_concurrent}")
+        log.debug("LIVE-EVAL: %s allocation %d/%d", symbol, holding_count, max_concurrent)
 
         # Determine replacement policy
         do_replace = False
@@ -686,23 +684,23 @@ class LivePortfolioManager:
         victim_watch: dict[str, Any] | None = None
         if holding_count >= max_concurrent:
             if not do_replace:
-                print(f"LIVE-EVAL: {symbol} SKIP at capacity (when_full=skip)")
+                log.debug("LIVE-EVAL: %s SKIP at capacity (when_full=skip)", symbol)
                 return False
             # Try to replace the weakest position
             victim_watch = self._find_replacement_victim(
                 symbol, confidence, direction, cfg,
             )
             if victim_watch is None:
-                print(f"LIVE-EVAL: {symbol} SKIP at capacity — new signal not stronger than weakest")
+                log.debug("LIVE-EVAL: %s SKIP at capacity — new signal not stronger than weakest", symbol)
                 return False
-            print(f"LIVE-EVAL: {symbol} will REPLACE {victim_watch['symbol']} "
-                  f"(watch={victim_watch['watch_id']})")
+            log.debug("LIVE-EVAL: %s will REPLACE %s (watch=%s)",
+                       symbol, victim_watch['symbol'], victim_watch['watch_id'])
 
         # --- Determine entry price ---
         entry_price = self._extract_entry_price(snapshot, symbol)
-        print(f"LIVE-EVAL: {symbol} entry_price={entry_price}")
+        log.debug("LIVE-EVAL: %s entry_price=%s", symbol, entry_price)
         if entry_price is None or entry_price <= 0:
-            print(f"LIVE-EVAL: {symbol} SKIP no entry price")
+            log.debug("LIVE-EVAL: %s SKIP no entry price", symbol)
             return False
 
         # --- Duplicate symbol guard (per-portfolio) ---
@@ -711,13 +709,13 @@ class LivePortfolioManager:
             if (w.get("status") == "holding"
                     and w.get("symbol") == symbol
                     and w.get("live_config_id") == cfg.config_id):
-                print(f"LIVE-EVAL: {symbol} SKIP already holding in config {cfg.name}")
+                log.debug("LIVE-EVAL: %s SKIP already holding in config %s", symbol, cfg.name)
                 return False
 
         # --- Exit victim position (replacement) ---
         if victim_watch is not None:
             if not self._exit_victim(victim_watch, cfg):
-                print(f"LIVE-EVAL: {symbol} SKIP — failed to exit victim {victim_watch['symbol']}")
+                log.debug("LIVE-EVAL: %s SKIP — failed to exit victim %s", symbol, victim_watch['symbol'])
                 return False
 
         # --- Create watch ---
@@ -740,18 +738,17 @@ class LivePortfolioManager:
             # Prevents double-buys if watch DB is out of sync.
             existing_pos = broker.get_position(symbol)
             if existing_pos:
-                print(f"LIVE-EVAL: {symbol} SKIP — Alpaca already holds position "
-                      f"(qty={existing_pos.qty:.4f}, entry=${existing_pos.avg_entry_price:.2f})")
-                log.warning("LIVE-EVAL: %s blocked buy — Alpaca already holds %.4f shares",
-                            symbol, existing_pos.qty)
+                log.warning("LIVE-EVAL: %s SKIP — Alpaca already holds position "
+                            "(qty=%.4f, entry=$%.2f)",
+                            symbol, existing_pos.qty, existing_pos.avg_entry_price)
                 return False
 
             position_size = position_size_for_config(cfg) or 0.0
 
             # Guard: don't buy if we can't afford at least 1 whole share
             if entry_price > 0 and position_size / entry_price < 1.0:
-                print(f"LIVE-EVAL: {symbol} SKIP — position size ${position_size:.0f} "
-                      f"< 1 share at ${entry_price:.2f}")
+                log.debug("LIVE-EVAL: %s SKIP — position size $%.0f < 1 share at $%.2f",
+                          symbol, position_size, entry_price)
                 return False
 
             # Submit market buy and WAIT for fill confirmation
@@ -829,7 +826,7 @@ class LivePortfolioManager:
                 try:
                     quotes = self.market.get_quotes([symbol])
                     q = (quotes or {}).get(symbol.upper()) or (quotes or {}).get(symbol) or {}
-                    fresh = self._quote_price(q)
+                    fresh = extract_quote_price(q)
                     if fresh is not None:
                         entry_price = fresh
                         from trader.models.watch import WatchEntry
@@ -842,7 +839,7 @@ class LivePortfolioManager:
                             horizon=wb.entry.horizon,
                             thesis=wb.entry.thesis,
                         )
-                        print(f"LIVE-EVAL: {symbol} fresh entry_price={entry_price:.2f}")
+                        log.debug("LIVE-EVAL: %s fresh entry_price=%.2f", symbol, entry_price)
                 except Exception:
                     log.warning("Could not fetch fresh price for %s — using snapshot price", symbol)
 
@@ -963,7 +960,7 @@ class LivePortfolioManager:
                     quotes = self.market.get_quotes(syms)
                     for sym in syms:
                         q = (quotes or {}).get(sym) or {}
-                        price = self._quote_price(q)
+                        price = extract_quote_price(q)
                         if price is not None:
                             alpaca_prices[sym] = price
                 except Exception:
@@ -1134,17 +1131,17 @@ class LivePortfolioManager:
         worst_score = scores[worst_wid]
 
         if new_score <= worst_score + replace_min_margin:
-            print(f"LIVE-EVAL: {new_symbol} new_score={new_score:.4f} <= "
-                  f"worst_score={worst_score:.4f}+margin={replace_min_margin} "
-                  f"({worst_wid}) — no replacement [normalized 0-1]")
+            log.debug("LIVE-EVAL: %s new_score=%.4f <= worst_score=%.4f+margin=%s "
+                      "(%s) — no replacement [normalized 0-1]",
+                      new_symbol, new_score, worst_score, replace_min_margin, worst_wid)
             return None
 
         # Find the watch dict for the victim
         for w in holdings:
             if w["watch_id"] == worst_wid:
-                print(f"LIVE-EVAL: {new_symbol} new_score={new_score:.4f} > "
-                      f"worst={w['symbol']} score={worst_score:.4f} "
-                      f"(margin={replace_min_margin}) — replacing [normalized 0-1]")
+                log.debug("LIVE-EVAL: %s new_score=%.4f > worst=%s score=%.4f "
+                          "(margin=%s) — replacing [normalized 0-1]",
+                          new_symbol, new_score, w['symbol'], worst_score, replace_min_margin)
                 return w
         return None
 
@@ -1197,7 +1194,7 @@ class LivePortfolioManager:
                 try:
                     quotes = self.market.get_quotes([symbol])
                     q = (quotes or {}).get(symbol.upper()) or (quotes or {}).get(symbol) or {}
-                    fresh = self._quote_price(q)
+                    fresh = extract_quote_price(q)
                     if fresh is not None:
                         exit_price = fresh
                 except Exception:
@@ -1307,7 +1304,7 @@ class LivePortfolioManager:
         price = None
         if isinstance(quote, dict):
             q = quote.get(symbol.upper()) or quote.get(symbol) or {}
-            price = self._quote_price(q)
+            price = extract_quote_price(q)
         if price is None:
             price = (
                 data.get("lastPrice")

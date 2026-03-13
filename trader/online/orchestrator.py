@@ -22,6 +22,7 @@ import json
 import os
 import queue
 import threading
+import logging
 import time
 import traceback
 from datetime import datetime, timezone
@@ -62,6 +63,8 @@ from trader.online.triage import TriageDecision, run_triage
 from trader.online.activity_tracker import JobAborted
 from trader.online.event_bus import EventBus, PipelineEvent
 from trader.online.x_stream_service import QualityVerdict, XStreamService, build_rules_for_symbols
+
+log = logging.getLogger(__name__)
 
 DEBUG = os.getenv("DEBUG", "false").lower() in ("true", "1")
 
@@ -338,6 +341,48 @@ def _extract_entry_price(snapshot: Any, symbol: str) -> float | None:
     return None
 
 
+def _capture_decision_metrics(
+    *,
+    market: MarketDataService | None,
+    symbols: list[str],
+) -> dict[str, Any]:
+    if market is None or not symbols:
+        return {}
+    try:
+        from trader.snapshot_decision import build_decision_metrics_payload
+
+        captured_at = datetime.now(tz=timezone.utc)
+        batch = market.get_quotes_with_fundamentals(
+            symbols,
+            fill_avg_volume_from_history=True,
+            as_of=captured_at,
+        )
+        per_symbol: dict[str, dict[str, Any]] = {}
+        for symbol in symbols:
+            sym = str(symbol or "").strip().upper()
+            if not sym:
+                continue
+            data = batch.get(sym) or {}
+            per_symbol[sym] = {
+                "price": data.get("last_price"),
+                "avg_vol": data.get("avg_10d_volume")
+                if data.get("avg_10d_volume") not in (None, "")
+                else data.get("avg_volume"),
+                "mkt_cap": data.get("market_cap"),
+                "pe": data.get("pe_ratio"),
+                "source": data.get("source") or "quote_fundamentals",
+            }
+        return build_decision_metrics_payload(
+            per_symbol=per_symbol,
+            captured_at=captured_at.isoformat(),
+            source="quote_fundamentals",
+        )
+    except Exception:
+        if DEBUG:
+            raise
+        return {}
+
+
 def _build_mock_pipeline_config() -> PipelineConfig:
     """Build a pipeline config using PydanticAI's TestModel (no API calls)."""
     from pydantic_ai.models.test import TestModel
@@ -495,7 +540,7 @@ def _run_single_exploration_body(
     except Exception as e:
         if DEBUG:
             raise
-        print(f"WARN: MarketDataService init failed: {e}")
+        log.warning("MarketDataService init failed: %s", e)
         market = None
 
     # Start Schwab streaming for real-time candle capture
@@ -505,7 +550,7 @@ def _run_single_exploration_body(
         except Exception as e:
             if DEBUG:
                 raise
-            print(f"WARN: Schwab stream start failed: {e}")
+            log.warning("Schwab stream start failed: %s", e)
 
     # Capture market/price context into the Snapshot
     if market is not None:
@@ -516,7 +561,7 @@ def _run_single_exploration_body(
         except Exception as e:
             if DEBUG:
                 raise
-            print(f"WARN: Market context capture failed: {e}")
+            log.warning("Market context capture failed: %s", e)
 
     # Wire Finnhub rate-limit callback to dashboard
     if tracker is not None:
@@ -575,7 +620,7 @@ def _run_single_exploration_body(
                 "headline": trigger.headline,
             },
         ))
-        print(f"ERROR: Pipeline crashed for {snap_id}: {e}\n{tb}")
+        log.error("Pipeline crashed for %s: %s\n%s", snap_id, e, tb)
 
     if pipeline_result is not None:
         # Add all tool traces from the pipeline
@@ -614,7 +659,7 @@ def _run_single_exploration_body(
             except Exception as e:
                 # Don't fail the pipeline on cost estimation errors
                 if DEBUG:
-                    print(f"WARN: Cost estimation failed for agent {agent_name}: {e}")
+                    log.warning("Cost estimation failed for agent %s: %s", agent_name, e)
 
         # Update activity with pipeline cost
         if tracker is not None:
@@ -681,7 +726,7 @@ def _run_single_exploration_body(
         except Exception as e:
             if DEBUG:
                 raise
-            print(f"WARN: Schwab stop stream failed: {e}")
+            log.warning("Schwab stop stream failed: %s", e)
 
     # Override cost total with the tracker's authoritative figure.
     builder.set_cost_total(cost_tracker.item_spent)
@@ -691,6 +736,9 @@ def _run_single_exploration_body(
         tracker.update(_act_id, progress="sealing", cost_usd=cost_tracker.item_spent)
 
     # --- Seal snapshot ---
+    decision_metrics = _capture_decision_metrics(market=market, symbols=symbols)
+    if decision_metrics:
+        builder.set_decision_metrics(decision_metrics)
     builder.mark_decision_now()
     snapshot = builder.seal()
 
@@ -780,7 +828,7 @@ def _run_single_exploration_body(
         except Exception as e:
             if DEBUG:
                 raise
-            print(f"WARN: Watch creation failed: {e}")
+            log.warning("Watch creation failed: %s", e)
     if settings.follow_up_enabled and not watch_was_created:
         try:
             from trader.db.database import insert_follow_up
@@ -826,7 +874,7 @@ def _run_single_exploration_body(
         except Exception as e:
             if DEBUG:
                 raise
-            print(f"WARN: Follow-up creation failed: {e}")
+            log.warning("Follow-up creation failed: %s", e)
 
 
 def process_news_file(
@@ -1107,6 +1155,13 @@ def _process_news_body(
         builder = SnapshotBuilder(trigger=trigger, snapshot_id=snap_id)
         builder.set_triage(triage_dict)
         builder.set_cost_total(triage_cost_tracker.item_spent)
+        try:
+            market = MarketDataService()
+        except Exception:
+            market = None
+        decision_metrics = _capture_decision_metrics(market=market, symbols=trigger.symbols)
+        if decision_metrics:
+            builder.set_decision_metrics(decision_metrics)
         builder.mark_decision_now()
         snapshot = builder.seal()
         insert_snapshot(db, snapshot=snapshot.to_dict())
@@ -1260,7 +1315,7 @@ def _worker_loop(
         except Exception as e:
             if DEBUG:
                 raise
-            print(f"ERROR processing {path}: {_describe_api_error(e)}")
+            log.error("Error processing %s: %s", path, _describe_api_error(e))
         finally:
             work_queue.task_done()
 
@@ -1366,7 +1421,7 @@ def run_watch_loop(
             from trader.market.data_service import MarketDataService
             _live_market = MarketDataService()
         except Exception as e:
-            print(f"WARN: Live market init failed: {e}")
+            log.warning("Live market init failed: %s", e)
 
         # Alpaca broker pool + trade streams (one per account in use)
         try:
@@ -1417,9 +1472,7 @@ def run_watch_loop(
                         "accounts": list(linked_accounts),
                     }))
         except Exception as e:
-            print(f"WARN: Alpaca broker pool init failed: {e}")
-            import traceback
-            traceback.print_exc()
+            log.warning("Alpaca broker pool init failed: %s", e, exc_info=True)
 
         live_monitor = LiveExitMonitor(
             db=db, bus=bus, data_dir=settings.data_dir,

@@ -1,6 +1,11 @@
 <div class="d-none" data-total-count="{{ total | default(0) }}"></div>
 <input type="hidden" class="srv-filter" data-key="sort_col" value="{{ sort_col }}">
 <input type="hidden" class="srv-filter" data-key="sort_dir" value="{{ sort_dir }}">
+{% if live_metric_fallback_count %}
+<div class="alert alert-warning py-2 px-3 small mb-2">
+  Some `AvgVol` / `MktCap` / `P/E` values are missing historically and are being filled with current-day values for filtering. These rows are labeled `current`.
+</div>
+{% endif %}
 <div>
   <table id="snapshots-tbl" class="table table-sm table-hover align-middle" style="table-layout: fixed; width: 100%;">
     <colgroup>
@@ -109,6 +114,7 @@
         <td class="small" data-col="avg_vol" data-sort-val="{{ s._avg_vol if s._avg_vol is not none else '' }}">
           {% if s._avg_vol is not none %}
             {{ s._avg_vol_text }}
+            {% if s._avg_vol_live_fallback %}<span class="badge bg-warning text-dark ms-1" title="Current-day fallback value used for filtering">current</span>{% endif %}
           {% else %}
             <span class="text-muted">&mdash;</span>
           {% endif %}
@@ -116,6 +122,7 @@
         <td class="small" data-col="mkt_cap" data-sort-val="{{ s._mkt_cap if s._mkt_cap is not none else '' }}">
           {% if s._mkt_cap is not none %}
             {{ s._mkt_cap_text }}
+            {% if s._mkt_cap_live_fallback %}<span class="badge bg-warning text-dark ms-1" title="Current-day fallback value used for filtering">current</span>{% endif %}
           {% else %}
             <span class="text-muted">&mdash;</span>
           {% endif %}
@@ -123,6 +130,7 @@
         <td class="small" data-col="pe" data-sort-val="{{ s._pe if s._pe is not none else '' }}">
           {% if s._pe is not none %}
             {{ s._pe_text }}
+            {% if s._pe_live_fallback %}<span class="badge bg-warning text-dark ms-1" title="Current-day fallback value used for filtering">current</span>{% endif %}
           {% else %}
             <span class="text-muted">&mdash;</span>
           {% endif %}

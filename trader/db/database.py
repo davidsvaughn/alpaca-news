@@ -247,6 +247,16 @@ def update_snapshot_field(db: Database, snapshot_id: str, field: str, value: Any
     return True
 
 
+def update_snapshot_json(db: Database, snapshot_id: str, snapshot: dict[str, Any]) -> bool:
+    """Replace the full snapshot_json payload for a snapshot_id."""
+    with db.engine.begin() as conn:
+        result = conn.execute(
+            text("UPDATE snapshots SET snapshot_json = :sjson WHERE snapshot_id = :sid"),
+            {"sid": snapshot_id, "sjson": json.dumps(snapshot, ensure_ascii=False)},
+        )
+    return bool(result.rowcount)
+
+
 # ---------------------------------------------------------------------------
 # Watches
 # ---------------------------------------------------------------------------

@@ -392,46 +392,152 @@ class MarketDataService:
         return result
 
     def get_quotes_with_fundamentals(
-        self, symbols: list[str],
+        self,
+        symbols: list[str],
+        *,
+        fill_avg_volume_from_history: bool = False,
+        as_of: datetime | None = None,
     ) -> dict[str, dict[str, Any]]:
-        """Batch quotes + fundamentals in one call (Schwab), yfinance fallback."""
+        """Batch quotes + fundamentals with per-field Schwab/yfinance merge."""
         if not symbols:
             return {}
+
+        result: dict[str, dict[str, Any]] = {sym: {} for sym in symbols}
+        schwab_result: dict[str, dict[str, Any]] = {}
+
         if self._schwab.available:
             try:
-                result = self._schwab.get_quotes_with_fundamentals([_schwab_symbol(s) for s in symbols])
-                if result:
-                    # Compute market_cap from shares_outstanding * last_price
-                    for sym, d in result.items():
-                        shares = d.get("shares_outstanding")
-                        price = d.get("last_price")
-                        if shares and price:
-                            d["market_cap"] = shares * price
-                        d["source"] = "schwab"
-                    return result
+                schwab_result = self._schwab.get_quotes_with_fundamentals(
+                    [_schwab_symbol(s) for s in symbols]
+                ) or {}
             except Exception:
                 if DEBUG:
                     raise
-        # Fallback: yfinance per-symbol (get quote + fundamentals separately)
-        result: dict[str, dict[str, Any]] = {}
+                schwab_result = {}
+
         for sym in symbols:
+            data = dict(schwab_result.get(sym) or {})
+            if data:
+                data["source"] = "schwab"
+            result[sym] = data
+
+        def _needs_yf_fill(entry: dict[str, Any]) -> bool:
+            return any(
+                entry.get(key) in (None, "")
+                for key in ("last_price", "pe_ratio", "market_cap", "avg_10d_volume")
+            )
+
+        def _fill_pe_from_eps(entry: dict[str, Any]) -> None:
+            if entry.get("pe_ratio") not in (None, ""):
+                return
+            eps = entry.get("eps")
+            price = entry.get("last_price")
+            try:
+                if eps is None or price is None:
+                    return
+                eps_f = float(eps)
+                price_f = float(price)
+                if eps_f > 0:
+                    entry["pe_ratio"] = price_f / eps_f
+                elif eps_f <= 0:
+                    # Treat non-positive EPS as a non-positive P/E bucket instead of
+                    # leaving it indistinguishable from "unknown".
+                    entry["pe_ratio"] = 0.0
+            except (TypeError, ValueError, ZeroDivisionError):
+                return
+
+        for sym in symbols:
+            entry = result.get(sym) or {}
+            if not _needs_yf_fill(entry):
+                shares = entry.get("shares_outstanding")
+                price = entry.get("last_price")
+                if entry.get("market_cap") in (None, "") and shares and price:
+                    entry["market_cap"] = shares * price
+                _fill_pe_from_eps(entry)
+                result[sym] = entry
+                continue
+
             try:
                 q = self._yfinance.get_quote(_yfinance_symbol(sym))
                 f = self._yfinance.get_fundamentals(_yfinance_symbol(sym))
-                if q and "error" not in q:
-                    entry = {
-                        "last_price": q.get("last_price"),
-                        "net_pct_change": q.get("net_pct_change"),
-                        "total_volume": q.get("total_volume"),
-                        "pe_ratio": f.get("pe_ratio"),
-                        "market_cap": f.get("market_cap"),
-                        "avg_10d_volume": f.get("avg_volume"),
-                        "source": "yfinance",
-                    }
-                    result[sym] = entry
             except Exception:
-                pass
-        return result
+                q = {}
+                f = {}
+
+            if q and "error" not in q:
+                entry.setdefault("last_price", q.get("last_price"))
+                entry.setdefault("net_pct_change", q.get("net_pct_change"))
+                entry.setdefault("total_volume", q.get("total_volume"))
+
+            if f and "error" not in f:
+                if entry.get("pe_ratio") in (None, ""):
+                    entry["pe_ratio"] = f.get("pe_ratio")
+                if entry.get("market_cap") in (None, ""):
+                    entry["market_cap"] = f.get("market_cap")
+                if entry.get("avg_10d_volume") in (None, ""):
+                    entry["avg_10d_volume"] = f.get("avg_volume")
+                entry.setdefault("eps", f.get("eps"))
+                entry.setdefault("shares_outstanding", f.get("shares_outstanding"))
+
+            shares = entry.get("shares_outstanding")
+            price = entry.get("last_price")
+            if entry.get("market_cap") in (None, "") and shares and price:
+                try:
+                    entry["market_cap"] = float(shares) * float(price)
+                except (TypeError, ValueError):
+                    pass
+
+            _fill_pe_from_eps(entry)
+
+            if f and "error" not in f:
+                entry["source"] = "schwab+yfinance" if schwab_result.get(sym) else "yfinance"
+            elif not entry.get("source"):
+                entry["source"] = "schwab" if schwab_result.get(sym) else None
+
+            if entry:
+                result[sym] = entry
+
+        if fill_avg_volume_from_history:
+            history_as_of = as_of or datetime.now(tz=timezone.utc)
+            for sym in symbols:
+                entry = result.get(sym) or {}
+                if entry.get("avg_10d_volume") not in (None, ""):
+                    continue
+                avg_vol = self._compute_avg_volume_from_history(sym, as_of=history_as_of)
+                if avg_vol is None:
+                    continue
+                entry["avg_10d_volume"] = avg_vol
+                entry["source"] = f"{entry.get('source') or 'history'}+avg_volume_history"
+                result[sym] = entry
+
+        return {sym: data for sym, data in result.items() if data}
+
+    def _compute_avg_volume_from_history(
+        self,
+        symbol: str,
+        *,
+        as_of: datetime,
+        lookback_days: int = 10,
+    ) -> float | None:
+        """Compute average completed-day volume from cached/fetched 1-minute bars."""
+        try:
+            from trader.market.backtest import _get_ohlcv_1m
+            from trader.snapshot_decision import compute_avg_daily_volume_from_bars
+        except Exception:
+            return None
+
+        local_as_of = as_of.astimezone(timezone.utc) if as_of.tzinfo else as_of.replace(tzinfo=timezone.utc)
+        end_date = local_as_of.date().isoformat()
+        start_date = (local_as_of.date() - timedelta(days=max(30, lookback_days * 3))).isoformat()
+        try:
+            df = _get_ohlcv_1m(symbol.upper(), start_date, end_date)
+        except Exception:
+            return None
+        return compute_avg_daily_volume_from_bars(
+            df,
+            decision_at=local_as_of.isoformat(),
+            lookback_days=lookback_days,
+        )
 
     def check_options_activity(self, symbol: str) -> dict[str, Any]:
         """Options activity — ATM IV, put/call ratios (Schwab only)."""

@@ -138,6 +138,51 @@ Exact parameter sets and snapshot ranges: pending baseline selection
 - Changed live entry extraction to use decision-time price context instead of delayed `price_at` / `price_10min`.
 - Implemented per-snapshot backtest-result caching keyed by effective entry bar/price, strategy params, guards, stats resolution, and available bar horizon.
 - Ran the decision-time regression matrix cold and warm; all case hashes matched exactly while warm runtime improved materially.
+- Investigated historical snapshot artifacts and confirmed that snapshot file metadata is a viable proxy for seal time:
+  - live snapshot JSON `mtime` tracks the write almost exactly
+  - archived ZIP members preserve the original source-file timestamp, with expected ZIP timestamp granularity limits
+- Added `scripts/backfill_snapshot_decision_time.py` to backfill `decision_at` from live file mtimes / archive ZIP metadata.
+- Used the same script to backfill `decision_metrics.price` from historical 1-minute bars using the same timestamp normalization rule as the backtest engine (`first bar >= decision_at`).
+- Rewrote SQLite snapshot JSON plus live/archive snapshot artifacts so older snapshots no longer rely on `created_at` fallback for entry semantics.
+- Added a new stored `decision_metrics` payload to snapshots and populated it at seal time from quote+fundamental data for newly created snapshots.
+- Switched snapshots-page/backtest price filtering to use stored decision-time metrics instead of current quotes so snapshot selection no longer drifts with present-day price changes.
+- Intentionally left historical `avg_vol` / `mkt_cap` / `pe` blank for older rows unless they were captured at seal time; using current values for historical backtests was deemed less correct than showing missing data.
+- Later refined that policy for operational safety:
+  - snapshots-page filters now visibly fall back to current-day `AvgVol` / `MktCap` / `P/E` when historical values are still missing
+  - these rows are labeled `current` in the table and accompanied by a warning banner
+- Investigated how to recover missing fundamentals more accurately and found the following:
+  - `AvgVol` is usually recoverable either from provider data or, in principle, directly from historical OHLCV as a 10-day trailing average
+  - `P/E` is often recoverable as `price / eps` when EPS is available but the provider omits `pe_ratio`
+  - `MktCap` is exact when `market_cap` is returned directly, or when `shares_outstanding` is available and can be multiplied by price
+  - for several real missing symbols (`NVO`, `SHEL`, `ASML`, `PBR`, `BRK-A`, `BF-A`), yfinance had fields that Schwab omitted, so a better vendor merge beats estimation
+- Updated `MarketDataService.get_quotes_with_fundamentals()` to merge Schwab and yfinance per symbol/per field instead of treating Schwab success as all-or-nothing.
+- That improved path now benefits both:
+  - future snapshots captured at seal time
+  - reruns of the one-time historical fundamentals freeze
+- After rerunning the backfill with the improved merge logic, remaining gaps inside the verified buyable universe dropped to:
+  - `AvgVol` missing: 24 rows
+  - `MktCap` missing: 10 rows
+  - `P/E` missing: 24 rows
+- Those residual gaps appear to be genuine provider-data holes rather than missing fallback logic.
+- Added a historical `AvgVol` fallback computed from cached/fetched 1-minute OHLCV:
+  - definition: average completed-day volume over the previous 10 trading days strictly before `decision_at`
+  - this intentionally excludes the decision date itself, which is the conservative choice for intraday and after-hours decisions
+- Extended `MarketDataService.get_quotes_with_fundamentals()` with an opt-in history-based `AvgVol` fill so new snapshots can use it at seal time without forcing the snapshots table onto the expensive path.
+- Fixed a bug where legitimate `0.0` `avg_10d_volume` values were being discarded by `x or y` coalescing.
+- Normalized non-positive EPS into a stored `P/E` bucket of `0.0` instead of leaving it indistinguishable from "unknown":
+  - positive EPS: `price / eps`
+  - zero or negative EPS: `0.0`
+  - missing EPS: leave `P/E` blank
+- Reran the targeted verified-symbol repair after those fixes. Remaining gaps in the verified buyable universe are now:
+  - `AvgVol` missing: 8 rows
+  - `MktCap` missing: 10 rows
+  - `P/E` missing: 10 rows
+  - `decision_metrics` entirely missing: 8 rows
+- The remaining residuals are concentrated in a handful of symbols:
+  - `PET` and `SPI`: current providers still expose essentially no usable fundamentals, so these rows remain mostly blank
+  - `RGNCF` and `TPTA`: market cap still unavailable even after the improved merge path
+  - `INRE`: EPS remains unavailable, so `P/E` is still truly unknown
+- Conclusion after direct inspection: the current residual set looks like genuine source-data absence rather than an avoidable backfill bug.
 
 ## Open design questions
 
@@ -146,3 +191,59 @@ Exact parameter sets and snapshot ranges: pending baseline selection
 - Cache invalidation rule for snapshots whose outcome can still change as newer bars arrive
 - Whether batch-level cache still adds enough value after per-snapshot caching is in place
 - Fix `compute_portfolio_sim()` timestamp normalization so same-day portfolio simulations cannot fail on mixed naive/aware datetimes
+
+## Metric recovery rules
+
+Use these rules both for one-time backfills and for new snapshots captured at seal time.
+
+### Price
+
+- Preferred source: historical 1-minute OHLCV at decision time
+- Rule: use the first bar whose timestamp is `>= decision_at`
+- Reason: this is conservative and avoids biasing entry earlier than the decision could actually have been acted on
+
+### AvgVol
+
+- Best recovery path: compute from historical OHLCV, not current quote fundamentals
+- Definition: average completed-day volume over the previous 10 trading days strictly before `decision_at`
+- Do not include the decision date itself, even if the decision happened after the close
+- `0.0` is a valid value and must not be treated as missing
+
+### P/E
+
+- Preferred order:
+  1. provider `pe_ratio`
+  2. if `eps > 0`, compute `price / eps`
+  3. if `eps <= 0`, store `0.0`
+  4. if `eps` is missing, leave blank
+- Reason: negative or zero EPS means a conventional positive P/E is not meaningful, but that is different from "unknown"
+
+### Market Cap
+
+- Preferred order:
+  1. provider `market_cap`
+  2. if `shares_outstanding` is available, compute `price * shares_outstanding`
+  3. otherwise leave blank
+- Important constraint: do not invent market cap from weak proxies when neither `market_cap` nor `shares_outstanding` exists
+
+### Vendor merge strategy
+
+- Schwab should not be treated as all-or-nothing
+- Merge per symbol and per field:
+  - keep Schwab values when present
+  - fill missing fields from yfinance
+  - then compute exact derivations such as `price * shares_outstanding` or `price / eps`
+
+### When current values are acceptable
+
+- For old snapshots that still lack stored historical `AvgVol` / `MktCap` / `P/E`, the snapshots table may visibly fall back to current values for filtering
+- This fallback must be loud:
+  - label the field as `current`
+  - show a warning banner
+- Do not silently filter rows in or out based on an unstated current-value fallback
+
+### When not to estimate
+
+- Do not estimate `MktCap` if both `market_cap` and `shares_outstanding` are missing
+- Do not fabricate `P/E` when EPS is missing
+- Prefer a visible blank over a made-up value when the underlying anchor data is absent

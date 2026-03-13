@@ -425,10 +425,22 @@ async def get_pool() -> asyncpg.Pool | None:
     """Get or create a shared asyncpg pool for VDD queries.
 
     Returns None if connection fails (TimescaleDB not running).
+    Automatically reconnects if the existing pool's connections are dead.
     """
     global _pool
     if _pool is not None:
-        return _pool
+        # Health check: verify a connection is still usable
+        try:
+            async with _pool.acquire() as conn:
+                await conn.fetchval("SELECT 1")
+            return _pool
+        except Exception:
+            log.warning("VDD: pool connections dead, reconnecting...")
+            try:
+                await _pool.close()
+            except Exception:
+                pass
+            _pool = None
     dsn = os.getenv("TIMESCALE_DSN", DEFAULT_DSN)
     try:
         _pool = await asyncpg.create_pool(dsn, min_size=1, max_size=2)

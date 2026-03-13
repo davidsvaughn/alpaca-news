@@ -30,10 +30,13 @@ Usage::
 
 from __future__ import annotations
 
+import concurrent.futures
 import hashlib
 import json
 import logging
 import math
+import multiprocessing as mp
+import os
 import time
 from collections import defaultdict
 from contextvars import ContextVar
@@ -429,8 +432,9 @@ class BacktestResult:
 _TRADING_DAYS_PER_YEAR = 252
 _BARS_PER_DAY = 390  # 6.5 hours × 60 minutes
 
-_BACKTEST_RESULT_CACHE_VERSION = "v2"
+_BACKTEST_RESULT_CACHE_VERSION = "v3"
 _BACKTEST_RESULT_CACHE_DIR = Path.home() / ".cache" / "alpaca-news" / "backtest_results"
+_DEFAULT_BACKTEST_MAX_WORKERS = 4
 
 
 def _ts_cache_key(value: Any) -> str:
@@ -612,6 +616,268 @@ def _write_backtest_result_cache(
         path.write_text(json.dumps(payload))
     except OSError:
         log.debug("Failed to write backtest cache %s", path, exc_info=True)
+
+
+def _merge_number_dict(target: dict[str, float | int], source: dict[str, Any]) -> None:
+    for key, value in source.items():
+        target[key] = target.get(key, 0) + value
+
+
+def _resolve_backtest_workers(symbol_count: int, total_entries: int) -> int:
+    """Return the number of symbol-eval worker processes to use."""
+    env_value = os.getenv("BACKTEST_SYMBOL_WORKERS")
+    if env_value is not None:
+        try:
+            requested = max(0, int(env_value))
+        except ValueError:
+            requested = 0
+        if requested <= 1:
+            return 1
+        return min(symbol_count, requested)
+
+    cpu_count = os.cpu_count() or 1
+    if cpu_count <= 1 or symbol_count <= 1 or total_entries < 100:
+        return 1
+    return min(symbol_count, cpu_count, _DEFAULT_BACKTEST_MAX_WORKERS)
+
+
+def _evaluate_symbol_entries(
+    *,
+    symbol: str,
+    sym_entries: list[dict[str, Any]],
+    parsed_times: list[tuple[dict[str, Any], datetime]],
+    df: pd.DataFrame | None,
+    strategy_key: str,
+    params: dict[str, float],
+    market_close: str | None,
+    min_hold: int,
+    guard_stop_pct: float,
+    guard_target_pct: float,
+    guard_trail_pct: float,
+    stats_resolution_minutes: int,
+    capture_trace: bool,
+) -> dict[str, Any]:
+    """Evaluate all entries for one symbol using already-loaded bars."""
+    stage_sec: dict[str, float] = defaultdict(float)
+    counts: dict[str, int] = defaultdict(int)
+    indicator_cache: dict[tuple[Any, ...], Any] = {}
+    results: list[BacktestResult] = []
+    trace_token = None
+    strategy_trace_local: dict[str, dict[str, float | int]] | None = None
+    if capture_trace:
+        strategy_trace_local = {"sec": {}, "counts": {}}
+        trace_token = _STRATEGY_TRACE_CTX.set(strategy_trace_local)
+
+    def _mark(stage: str, start: float) -> None:
+        stage_sec[stage] += max(0.0, time.perf_counter() - start)
+
+    sym_start = time.perf_counter()
+    last_entry_time: str | None = None
+    base_runner = _STRATEGY_RUNNERS[strategy_key]
+
+    try:
+        if df is None or df.empty:
+            counts["symbols_no_data"] += 1
+            for e in sym_entries:
+                results.append(BacktestResult(
+                    snapshot_id=e["snapshot_id"],
+                    symbol=symbol,
+                    entry_price=e["entry_price"],
+                    entry_time=e.get("entry_time", e.get("entry_date", "")),
+                    exit_reason="no_data",
+                ))
+                counts["trades_no_data"] += 1
+                last_entry_time = e.get("entry_time", e.get("entry_date", "")) or last_entry_time
+            return {
+                "symbol": symbol,
+                "results": results,
+                "counts": dict(counts),
+                "stage_sec": dict(stage_sec),
+                "symbol_sec": max(0.0, time.perf_counter() - sym_start),
+                "last_entry_time": last_entry_time,
+                "strategy_trace": strategy_trace_local or {"sec": {}, "counts": {}},
+            }
+
+        counts["symbols_with_data"] += 1
+        data_start = df.index[0]
+        data_end = df.index[-1]
+        for e, entry_dt in parsed_times:
+            entry_price = e["entry_price"]
+            entry_time_str = e.get("entry_time", e.get("entry_date", ""))
+            last_entry_time = entry_time_str or last_entry_time
+
+            t_locate = time.perf_counter()
+            entry_ts = pd.Timestamp(entry_dt, tz=df.index.tz).as_unit(df.index.unit)
+            entry_idx = df.index.searchsorted(entry_ts)
+            if entry_idx >= len(df):
+                results.append(BacktestResult(
+                    snapshot_id=e["snapshot_id"],
+                    symbol=symbol,
+                    entry_price=entry_price,
+                    entry_time=entry_time_str,
+                    exit_reason="no_data",
+                ))
+                counts["trades_no_data"] += 1
+                _mark("entry_locate", t_locate)
+                continue
+
+            actual_entry_bar = df.index[entry_idx]
+            entry_time_of_day = actual_entry_bar.hour * 60 + actual_entry_bar.minute
+            if entry_price <= 0 or entry_time_of_day <= (9 * 60 + 30):
+                entry_price = float(df.iloc[entry_idx]["Close"])
+            _mark("entry_locate", t_locate)
+
+            cache_key = _build_backtest_result_cache_key(
+                symbol=symbol,
+                snapshot_id=str(e.get("snapshot_id") or ""),
+                entry_time=entry_time_str,
+                actual_entry_bar=df.index[entry_idx],
+                effective_entry_price=entry_price,
+                strategy_key=strategy_key,
+                params=params,
+                market_close=market_close,
+                min_hold=min_hold,
+                guard_stop_pct=guard_stop_pct,
+                guard_target_pct=guard_target_pct,
+                guard_trail_pct=guard_trail_pct,
+                stats_resolution_minutes=stats_resolution_minutes,
+                data_start=data_start,
+            )
+            cached_result = _read_backtest_result_cache(
+                symbol,
+                cache_key,
+                current_data_end=data_end,
+            )
+            if cached_result is not None:
+                results.append(cached_result)
+                counts["result_cache_hits"] += 1
+                if cached_result.pnl_pct is None:
+                    counts["trades_no_data"] += 1
+                else:
+                    counts["trades_valid"] += 1
+                if cached_result.exit_reason == "still_open":
+                    counts["trades_still_open"] += 1
+                elif cached_result.exit_reason.startswith("guard_"):
+                    counts["trades_guard_exit"] += 1
+                else:
+                    counts["trades_strategy_exit"] += 1
+                continue
+            counts["result_cache_misses"] += 1
+
+            run_idx = min(entry_idx + max(0, min_hold), len(df) - 1)
+            guard_stop = (
+                entry_price * (1 - guard_stop_pct / 100)
+                if guard_stop_pct > 0 else None
+            )
+            guard_target = (
+                entry_price * (1 + guard_target_pct / 100)
+                if guard_target_pct > 0 else None
+            )
+            t_run = time.perf_counter()
+            _trace_inc("runner_calls")
+            exit_price, exit_time, reason, bars_held = base_runner(
+                df, run_idx, entry_price, params,
+                guard_stop=guard_stop, guard_target=guard_target,
+                indicator_cache=indicator_cache,
+            )
+            _mark("strategy_eval", t_run)
+            bars_held = bars_held + (run_idx - entry_idx)
+
+            if guard_trail_pct > 0:
+                highs = df["High"].to_numpy(dtype=float, copy=False)
+                lows = df["Low"].to_numpy(dtype=float, copy=False)
+                trail_hit = _first_trail_guard_hit(
+                    highs, lows, run_idx, entry_price, guard_trail_pct,
+                )
+                if trail_hit is not None:
+                    trail_rel, trail_price, trail_reason = trail_hit
+                    trail_abs = run_idx + trail_rel
+                    trail_bars = trail_rel + 1 + (run_idx - entry_idx)
+                    if exit_price is None or trail_abs <= (entry_idx + bars_held - 1):
+                        exit_price = trail_price
+                        exit_time = _fmt_ts(df.index, trail_abs)
+                        reason = trail_reason
+                        bars_held = trail_bars
+
+            t_post = time.perf_counter()
+            if exit_price is not None:
+                exit_price = float(exit_price)
+                pnl_pct = round((exit_price - entry_price) / entry_price * 100, 2)
+            elif reason == "still_open":
+                exit_price = float(df.iloc[-1]["Close"])
+                pnl_pct = round((exit_price - entry_price) / entry_price * 100, 2)
+                exit_time = _fmt_ts(df.index, len(df) - 1)
+            else:
+                pnl_pct = None
+            bars_held = int(bars_held)
+            _mark("trade_post", t_post)
+
+            hold_minutes = bars_held
+            if exit_time:
+                try:
+                    exit_dt = pd.Timestamp(exit_time)
+                    entry_bar_dt = df.index[entry_idx]
+                    delta = exit_dt - entry_bar_dt
+                    hold_minutes = max(1, int(delta.total_seconds() / 60))
+                except Exception:
+                    pass
+
+            t_curve = time.perf_counter()
+            pc = _extract_periodic_closes(
+                df, entry_idx, bars_held, stats_resolution_minutes,
+            ) if pnl_pct is not None else None
+            _mark("periodic_closes", t_curve)
+
+            rf = _extract_ranking_features(
+                df, entry_idx, bars_held, stats_resolution_minutes,
+            ) if pnl_pct is not None else None
+            ef = _compute_entry_features(df, entry_idx) if pnl_pct is not None else None
+
+            result = BacktestResult(
+                snapshot_id=e["snapshot_id"],
+                symbol=symbol,
+                entry_price=entry_price,
+                entry_time=entry_time_str,
+                exit_price=round(exit_price, 2) if exit_price is not None else None,
+                exit_time=exit_time,
+                pnl_pct=pnl_pct,
+                exit_reason=reason,
+                bars_held=bars_held,
+                hold_minutes=hold_minutes,
+                periodic_closes=pc,
+                ranking_features=rf,
+                entry_features=ef,
+            )
+            results.append(result)
+            _write_backtest_result_cache(
+                symbol,
+                cache_key,
+                result,
+                data_end=data_end,
+            )
+            if pnl_pct is None:
+                counts["trades_no_data"] += 1
+            else:
+                counts["trades_valid"] += 1
+            if reason == "still_open":
+                counts["trades_still_open"] += 1
+            elif reason.startswith("guard_"):
+                counts["trades_guard_exit"] += 1
+            else:
+                counts["trades_strategy_exit"] += 1
+
+        return {
+            "symbol": symbol,
+            "results": results,
+            "counts": dict(counts),
+            "stage_sec": dict(stage_sec),
+            "symbol_sec": max(0.0, time.perf_counter() - sym_start),
+            "last_entry_time": last_entry_time,
+            "strategy_trace": strategy_trace_local or {"sec": {}, "counts": {}},
+        }
+    finally:
+        if trace_token is not None:
+            _STRATEGY_TRACE_CTX.reset(trace_token)
 
 
 def compute_ann_a(results: list[BacktestResult]) -> dict[str, float] | None:
@@ -2961,6 +3227,7 @@ def run_backtest(
     symbol_entries: dict[str, int] = defaultdict(int)
     total_entries = len(entries)
     processed_entries = 0
+    prefetched_entries = 0
     timeline_start, timeline_end = _entry_time_bounds(entries)
 
     def _mark(stage: str, start: float) -> None:
@@ -2968,15 +3235,21 @@ def run_backtest(
 
     def _emit_run_progress(
         *,
+        label: str = "Evaluating exits by symbol",
         current_symbol: str | None = None,
         current_entry_time: str | None = None,
+        processed_override: int | None = None,
+        phase_progress: float | None = None,
     ) -> None:
+        processed_value = processed_entries if processed_override is None else processed_override
+        if phase_progress is None:
+            phase_progress = (processed_value / total_entries) if total_entries > 0 else 1.0
         _safe_emit_progress(progress_cb, {
             "phase": "engine",
-            "label": "Evaluating exits by symbol",
-            "processed": processed_entries,
+            "label": label,
+            "processed": processed_value,
             "total": total_entries,
-            "phase_progress": (processed_entries / total_entries) if total_entries > 0 else 1.0,
+            "phase_progress": phase_progress,
             "chrono": False,
             "current_symbol": current_symbol,
             "current_entry_time": current_entry_time,
@@ -3027,18 +3300,14 @@ def run_backtest(
     counts["symbols_total"] = len(by_symbol)
     _emit_run_progress()
 
+    prefetched: list[dict[str, Any]] = []
     for symbol, sym_entries in by_symbol.items():
-        sym_start = time.perf_counter()
         symbol_entries[symbol] = len(sym_entries)
-        # Reuse indicators across trades for the same symbol/time window.
-        indicator_cache: dict[tuple[Any, ...], Any] = {}
-        # Parse all entry times and find the date range we need
         t_parse = time.perf_counter()
-        parsed_times: list[tuple[dict, datetime]] = []
-        for e in sym_entries:
-            et_str = e.get("entry_time", e.get("entry_date", ""))
-            et = _parse_entry_time(et_str)
-            parsed_times.append((e, et))
+        parsed_times = [
+            (e, _parse_entry_time(e.get("entry_time", e.get("entry_date", ""))))
+            for e in sym_entries
+        ]
         _mark("parse_entry_times", t_parse)
 
         earliest_dt = min(t for _, t in parsed_times)
@@ -3048,93 +3317,58 @@ def run_backtest(
         t_load = time.perf_counter()
         df_raw = _get_ohlcv_1m(symbol, start_date, today_str)
         _mark("ohlcv_load", t_load)
-        if df_raw is None or df_raw.empty:
-            counts["symbols_no_data"] += 1
-            for e in sym_entries:
-                results.append(BacktestResult(
-                    snapshot_id=e["snapshot_id"],
-                    symbol=symbol,
-                    entry_price=e["entry_price"],
-                    entry_time=e.get("entry_time", e.get("entry_date", "")),
-                    exit_reason="no_data",
-                ))
-                counts["trades_no_data"] += 1
-                processed_entries += 1
-                _emit_run_progress(
-                    current_symbol=symbol,
-                    current_entry_time=e.get("entry_time", e.get("entry_date", "")) or None,
-                )
-            symbol_sec[symbol] += max(0.0, time.perf_counter() - sym_start)
-            continue
 
-        # Filter to trading hours (removes extended-hours bars)
-        t_hours = time.perf_counter()
-        df = _filter_trading_hours(df_raw, market_close)
-        _mark("trading_hours_filter", t_hours)
-        if df.empty:
-            counts["symbols_no_data"] += 1
-            for e in sym_entries:
-                results.append(BacktestResult(
-                    snapshot_id=e["snapshot_id"],
-                    symbol=symbol,
-                    entry_price=e["entry_price"],
-                    entry_time=e.get("entry_time", e.get("entry_date", "")),
-                    exit_reason="no_data",
-                ))
-                counts["trades_no_data"] += 1
-                processed_entries += 1
-                _emit_run_progress(
-                    current_symbol=symbol,
-                    current_entry_time=e.get("entry_time", e.get("entry_date", "")) or None,
-                )
-            symbol_sec[symbol] += max(0.0, time.perf_counter() - sym_start)
-            continue
+        df = None
+        if df_raw is not None and not df_raw.empty:
+            t_hours = time.perf_counter()
+            df = _filter_trading_hours(df_raw, market_close)
+            _mark("trading_hours_filter", t_hours)
 
-        counts["symbols_with_data"] += 1
-        data_start = df.index[0]
-        data_end = df.index[-1]
-        for e, entry_dt in parsed_times:
-            entry_price = e["entry_price"]
-            entry_time_str = e.get("entry_time", e.get("entry_date", ""))
+        prefetched.append({
+            "symbol": symbol,
+            "sym_entries": sym_entries,
+            "parsed_times": parsed_times,
+            "df": df,
+        })
+        prefetched_entries += len(sym_entries)
+        prefetch_progress = (prefetched_entries / total_entries) if total_entries > 0 else 1.0
+        _emit_run_progress(
+            label="Loading bars by symbol",
+            current_symbol=symbol,
+            current_entry_time=sym_entries[-1].get("entry_time", sym_entries[-1].get("entry_date", "")) or None,
+            processed_override=prefetched_entries,
+            phase_progress=min(prefetch_progress * 0.2, 0.2),
+        )
 
-            # Find the first bar on or after entry_dt
-            t_locate = time.perf_counter()
-            entry_ts = pd.Timestamp(entry_dt, tz=df.index.tz).as_unit(df.index.unit)
-            entry_idx = df.index.searchsorted(entry_ts)
-            if entry_idx >= len(df):
-                results.append(BacktestResult(
-                    snapshot_id=e["snapshot_id"],
-                    symbol=symbol,
-                    entry_price=entry_price,
-                    entry_time=entry_time_str,
-                    exit_reason="no_data",
-                ))
-                counts["trades_no_data"] += 1
-                _mark("entry_locate", t_locate)
-                processed_entries += 1
-                _emit_run_progress(
-                    current_symbol=symbol,
-                    current_entry_time=entry_time_str or None,
-                )
-                continue
+    def _consume_symbol_output(output: dict[str, Any]) -> None:
+        nonlocal processed_entries
+        _merge_number_dict(stage_sec, output.get("stage_sec", {}))
+        _merge_number_dict(counts, output.get("counts", {}))
+        symbol = str(output.get("symbol") or "")
+        symbol_sec[symbol] += float(output.get("symbol_sec", 0.0) or 0.0)
+        processed_entries += len(output.get("results", []))
+        if strategy_trace_local is not None:
+            worker_trace = output.get("strategy_trace") or {}
+            _merge_number_dict(strategy_trace_local.setdefault("sec", {}), worker_trace.get("sec", {}))
+            _merge_number_dict(strategy_trace_local.setdefault("counts", {}), worker_trace.get("counts", {}))
+        _emit_run_progress(
+            label="Evaluating exits by symbol",
+            current_symbol=symbol or None,
+            current_entry_time=output.get("last_entry_time") or None,
+            processed_override=processed_entries,
+            phase_progress=(0.2 + ((processed_entries / total_entries) * 0.8)) if total_entries > 0 else 1.0,
+        )
 
-            # If entry_price is missing (0) or the entry lands before the
-            # regular session, use the close of the first eligible bar.
-            actual_entry_bar = df.index[entry_idx]
-            entry_time_of_day = actual_entry_bar.hour * 60 + actual_entry_bar.minute
-            cutoff_minutes = 9 * 60 + 30
-            if entry_price <= 0 or entry_time_of_day <= cutoff_minutes:
-                target_idx = min(entry_idx, len(df) - 1)
-                entry_price = float(df.iloc[target_idx]["Close"])
-                entry_idx = target_idx  # walk-forward starts from here too
-            _mark("entry_locate", t_locate)
+    worker_count = _resolve_backtest_workers(len(prefetched), total_entries)
+    outputs: list[dict[str, Any] | None] = [None] * len(prefetched)
 
-            cache_key = _build_backtest_result_cache_key(
-                symbol=symbol,
-                snapshot_id=str(e.get("snapshot_id") or ""),
-                entry_time=entry_time_str,
-                actual_entry_bar=df.index[entry_idx],
-                effective_entry_price=entry_price,
+    def _run_symbol_jobs_serial() -> None:
+        for idx, job in enumerate(prefetched):
+            output = _evaluate_symbol_entries(
+                symbol=job["symbol"],
+                sym_entries=job["sym_entries"],
+                parsed_times=job["parsed_times"],
+                df=job["df"],
                 strategy_key=strategy_key,
                 params=params,
                 market_close=market_close,
@@ -3143,149 +3377,71 @@ def run_backtest(
                 guard_target_pct=guard_target_pct,
                 guard_trail_pct=guard_trail_pct,
                 stats_resolution_minutes=stats_resolution_minutes,
-                data_start=data_start,
+                capture_trace=trace is not None,
             )
-            cached_result = _read_backtest_result_cache(
-                symbol,
-                cache_key,
-                current_data_end=data_end,
-            )
-            if cached_result is not None:
-                results.append(cached_result)
-                counts["result_cache_hits"] += 1
-                if cached_result.pnl_pct is None:
-                    counts["trades_no_data"] += 1
-                else:
-                    counts["trades_valid"] += 1
-                if cached_result.exit_reason == "still_open":
-                    counts["trades_still_open"] += 1
-                elif cached_result.exit_reason.startswith("guard_"):
-                    counts["trades_guard_exit"] += 1
-                else:
-                    counts["trades_strategy_exit"] += 1
-                processed_entries += 1
-                _emit_run_progress(
-                    current_symbol=symbol,
-                    current_entry_time=entry_time_str or None,
-                )
-                continue
-            counts["result_cache_misses"] += 1
+            outputs[idx] = output
+            _consume_symbol_output(output)
 
-            # Apply min_hold: start exit checks after min_hold bars
-            run_idx = min(entry_idx + max(0, min_hold), len(df) - 1)
-            guard_stop = (
-                entry_price * (1 - guard_stop_pct / 100)
-                if guard_stop_pct > 0 else None
-            )
-            guard_target = (
-                entry_price * (1 + guard_target_pct / 100)
-                if guard_target_pct > 0 else None
-            )
-            t_run = time.perf_counter()
-            _trace_inc("runner_calls")
-            exit_price, exit_time, reason, bars_held = base_runner(
-                df, run_idx, entry_price, params,
-                guard_stop=guard_stop, guard_target=guard_target,
-                indicator_cache=indicator_cache,
-            )
-            _mark("strategy_eval", t_run)
-            # Adjust bars_held to include the min_hold period
-            bars_held = bars_held + (run_idx - entry_idx)
+    if worker_count <= 1:
+        _run_symbol_jobs_serial()
+    else:
+        _safe_emit_progress(progress_cb, {
+            "phase": "engine",
+            "label": f"Evaluating exits by symbol ({worker_count} workers)",
+            "processed": prefetched_entries,
+            "total": total_entries,
+            "phase_progress": 0.2 if total_entries > 0 else 1.0,
+            "chrono": False,
+            "timeline_start": timeline_start,
+            "timeline_end": timeline_end,
+        })
+        try:
+            with concurrent.futures.ProcessPoolExecutor(
+                max_workers=worker_count,
+                mp_context=mp.get_context("spawn"),
+            ) as executor:
+                future_to_idx = {
+                    executor.submit(
+                        _evaluate_symbol_entries,
+                        symbol=job["symbol"],
+                        sym_entries=job["sym_entries"],
+                        parsed_times=job["parsed_times"],
+                        df=job["df"],
+                        strategy_key=strategy_key,
+                        params=params,
+                        market_close=market_close,
+                        min_hold=min_hold,
+                        guard_stop_pct=guard_stop_pct,
+                        guard_target_pct=guard_target_pct,
+                        guard_trail_pct=guard_trail_pct,
+                        stats_resolution_minutes=stats_resolution_minutes,
+                        capture_trace=trace is not None,
+                    ): idx
+                    for idx, job in enumerate(prefetched)
+                }
+                for future in concurrent.futures.as_completed(future_to_idx):
+                    idx = future_to_idx[future]
+                    output = future.result()
+                    outputs[idx] = output
+                    _consume_symbol_output(output)
+        except (OSError, PermissionError):
+            counts["parallel_fallbacks"] += 1
+            _safe_emit_progress(progress_cb, {
+                "phase": "engine",
+                "label": "Evaluating exits by symbol",
+                "processed": processed_entries,
+                "total": total_entries,
+                "phase_progress": (0.2 + ((processed_entries / total_entries) * 0.8)) if total_entries > 0 else 1.0,
+                "chrono": False,
+                "timeline_start": timeline_start,
+                "timeline_end": timeline_end,
+                "note": "Parallel symbol workers unavailable in this environment; using serial evaluation.",
+            })
+            _run_symbol_jobs_serial()
 
-            # Trailing stop guard (independent of strategy)
-            if guard_trail_pct > 0:
-                highs = df["High"].to_numpy(dtype=float, copy=False)
-                lows = df["Low"].to_numpy(dtype=float, copy=False)
-                trail_hit = _first_trail_guard_hit(
-                    highs, lows, run_idx, entry_price, guard_trail_pct,
-                )
-                if trail_hit is not None:
-                    trail_rel, trail_price, trail_reason = trail_hit
-                    trail_abs = run_idx + trail_rel
-                    trail_bars = trail_rel + 1 + (run_idx - entry_idx)
-                    if exit_price is None or trail_abs <= (entry_idx + bars_held - 1):
-                        exit_price = trail_price
-                        exit_time = _fmt_ts(df.index, trail_abs)
-                        reason = trail_reason
-                        bars_held = trail_bars
-
-            # Ensure native Python types (not numpy)
-            t_post = time.perf_counter()
-            if exit_price is not None:
-                exit_price = float(exit_price)
-                pnl_pct = round((exit_price - entry_price) / entry_price * 100, 2)
-            elif reason == "still_open":
-                exit_price = float(df.iloc[-1]["Close"])
-                pnl_pct = round((exit_price - entry_price) / entry_price * 100, 2)
-                exit_time = _fmt_ts(df.index, len(df) - 1)
-            else:
-                pnl_pct = None
-            bars_held = int(bars_held)
-            _mark("trade_post", t_post)
-
-            # Compute wall-clock hold_minutes from actual timestamps
-            # (bar count doesn't reflect overnight gaps)
-            hold_minutes = bars_held  # fallback
-            if exit_time:
-                try:
-                    exit_dt = pd.Timestamp(exit_time)
-                    entry_bar_dt = df.index[entry_idx]
-                    delta = exit_dt - entry_bar_dt
-                    hold_minutes = max(1, int(delta.total_seconds() / 60))
-                except Exception:
-                    pass
-
-            # Extract periodic close prices for equity curve stats
-            t_curve = time.perf_counter()
-            pc = _extract_periodic_closes(
-                df, entry_idx, bars_held, stats_resolution_minutes,
-            ) if pnl_pct is not None else None
-            _mark("periodic_closes", t_curve)
-
-            # Pre-compute ranking features for forward-looking allocation
-            rf = _extract_ranking_features(
-                df, entry_idx, bars_held, stats_resolution_minutes,
-            ) if pnl_pct is not None else None
-            ef = _compute_entry_features(df, entry_idx) if pnl_pct is not None else None
-
-            result = BacktestResult(
-                snapshot_id=e["snapshot_id"],
-                symbol=symbol,
-                entry_price=entry_price,
-                entry_time=entry_time_str,
-                exit_price=round(exit_price, 2) if exit_price is not None else None,
-                exit_time=exit_time,
-                pnl_pct=pnl_pct,
-                exit_reason=reason,
-                bars_held=bars_held,
-                hold_minutes=hold_minutes,
-                periodic_closes=pc,
-                ranking_features=rf,
-                entry_features=ef,
-            )
-            results.append(result)
-            _write_backtest_result_cache(
-                symbol,
-                cache_key,
-                result,
-                data_end=data_end,
-            )
-            if pnl_pct is None:
-                counts["trades_no_data"] += 1
-            else:
-                counts["trades_valid"] += 1
-            if reason == "still_open":
-                counts["trades_still_open"] += 1
-            elif reason.startswith("guard_"):
-                counts["trades_guard_exit"] += 1
-            else:
-                counts["trades_strategy_exit"] += 1
-            processed_entries += 1
-            _emit_run_progress(
-                current_symbol=symbol,
-                current_entry_time=entry_time_str or None,
-            )
-        symbol_sec[symbol] += max(0.0, time.perf_counter() - sym_start)
+    for output in outputs:
+        if output is not None:
+            results.extend(output.get("results", []))
 
     total_sec = max(0.0, time.perf_counter() - total_start)
     if trace is not None:

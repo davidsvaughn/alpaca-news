@@ -238,3 +238,4 @@ data/news/incoming/**/*.json
 data/news/archive/
 data/snapshots/archive/
 .env.copy
+data/news.db

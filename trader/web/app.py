@@ -61,6 +61,7 @@ from trader.online.activity_tracker import ActivityTracker
 from trader.online.event_bus import EventBus, PipelineEvent
 from trader.online.online_mode import OnlineMode
 from trader.reflection.eval_record import build_eval_record, snapshot_export_to_markdown
+from trader.snapshot_decision import decision_symbol_metrics
 from trader.valuation import (
     backfill_watch_qty,
     compute_pct_pnl,
@@ -334,7 +335,22 @@ def create_app(
         with_values.sort(key=lambda x: x[0], reverse=(sort_dir == "desc"))
         return [row for _, row in with_values] + missing
 
-    def _fetch_market_metrics(symbols: list[str]) -> dict[str, dict[str, float | None]]:
+    def _stored_market_metrics(snap: dict[str, Any], symbol: str) -> dict[str, float | None]:
+        metrics = decision_symbol_metrics(snap, symbol)
+        return {
+            "price": _safe_float(metrics.get("price")),
+            "avg_vol": _safe_float(metrics.get("avg_vol")),
+            "mkt_cap": _safe_float(metrics.get("mkt_cap")),
+            "pe": _safe_float(metrics.get("pe")),
+        }
+
+    def _fetch_live_fundamentals(symbols: list[str]) -> dict[str, dict[str, float | None]]:
+        def _first_present(*values: Any) -> Any:
+            for value in values:
+                if value not in (None, ""):
+                    return value
+            return None
+
         result: dict[str, dict[str, float | None]] = {}
         uniq: list[str] = []
         seen: set[str] = set()
@@ -344,30 +360,24 @@ def create_app(
                 continue
             seen.add(s)
             uniq.append(s)
-            result[s] = {"price": None, "avg_vol": None, "mkt_cap": None, "pe": None}
+            result[s] = {"avg_vol": None, "mkt_cap": None, "pe": None}
         if not uniq:
             return result
 
         import time as _time
+
         now = _time.time()
         fundamentals_ttl = 86400.0  # 24h
-        quote_ttl = 60.0            # 1m
-
-        # Fill from caches first.
         missing: list[str] = []
         for sym in uniq:
             cached_f = _fundamentals_cache.get(sym)
-            cached_q = _quote_cache.get(sym)
             has_f = cached_f and (now - cached_f[0]) < fundamentals_ttl
-            has_q = cached_q and (now - cached_q[0]) < quote_ttl
             if has_f:
                 f = cached_f[1]
                 result[sym]["avg_vol"] = _safe_float(f.get("avg_volume"))
                 result[sym]["mkt_cap"] = _safe_float(f.get("market_cap"))
                 result[sym]["pe"] = _safe_float(f.get("pe_ratio"))
-            if has_q:
-                result[sym]["price"] = _safe_float(cached_q[1])
-            if not (has_f and has_q):
+            if not has_f:
                 missing.append(sym)
 
         if not missing:
@@ -384,13 +394,9 @@ def create_app(
                 batch = {}
             for sym in chunk:
                 d = batch.get(sym) or {}
-                price = _safe_float(d.get("last_price"))
                 pe = _safe_float(d.get("pe_ratio"))
                 mkt_cap = _safe_float(d.get("market_cap"))
-                avg_vol = _safe_float(d.get("avg_10d_volume") or d.get("avg_volume"))
-
-                if price is not None:
-                    _quote_cache[sym] = (now, price)
+                avg_vol = _safe_float(_first_present(d.get("avg_10d_volume"), d.get("avg_volume")))
                 if pe is not None or mkt_cap is not None or avg_vol is not None:
                     _fundamentals_cache[sym] = (
                         now,
@@ -400,10 +406,6 @@ def create_app(
                             "avg_volume": avg_vol,
                         },
                     )
-
-                # Keep any cache-provided values if a fresh value is missing.
-                if price is not None:
-                    result[sym]["price"] = price
                 if avg_vol is not None:
                     result[sym]["avg_vol"] = avg_vol
                 if mkt_cap is not None:
@@ -468,19 +470,54 @@ def create_app(
             offset=0,
         )
 
-        symbols = [_primary_symbol(s) for s in base_snaps]
-        market_by_symbol = _fetch_market_metrics(symbols) if include_market_metrics else {}
+        live_fallback_by_symbol: dict[str, dict[str, float | None]] = {}
+        if include_market_metrics:
+            fallback_symbols: list[str] = []
+            for snap in base_snaps:
+                sym = _primary_symbol(snap)
+                if not sym:
+                    continue
+                md = _stored_market_metrics(snap, sym)
+                if any(md.get(key) is None for key in ("avg_vol", "mkt_cap", "pe")):
+                    fallback_symbols.append(sym)
+            live_fallback_by_symbol = _fetch_live_fundamentals(fallback_symbols)
 
         filtered_rows: list[dict[str, Any]] = []
+        fallback_row_count = 0
         for snap in base_snaps:
             row = dict(snap)
             sym = _primary_symbol(row)
-            md = market_by_symbol.get(sym) or {}
+            md = _stored_market_metrics(row, sym) if include_market_metrics else {}
+            live_fallback = live_fallback_by_symbol.get(sym) or {}
             row["_primary_symbol"] = sym
             row["_price"] = _safe_float(md.get("price"))
+            row["_avg_vol_live_fallback"] = False
+            row["_mkt_cap_live_fallback"] = False
+            row["_pe_live_fallback"] = False
             row["_avg_vol"] = _safe_float(md.get("avg_vol"))
             row["_mkt_cap"] = _safe_float(md.get("mkt_cap"))
             row["_pe"] = _safe_float(md.get("pe"))
+            if include_market_metrics and row["_avg_vol"] is None:
+                fallback_val = _safe_float(live_fallback.get("avg_vol"))
+                if fallback_val is not None:
+                    row["_avg_vol"] = fallback_val
+                    row["_avg_vol_live_fallback"] = True
+            if include_market_metrics and row["_mkt_cap"] is None:
+                fallback_val = _safe_float(live_fallback.get("mkt_cap"))
+                if fallback_val is not None:
+                    row["_mkt_cap"] = fallback_val
+                    row["_mkt_cap_live_fallback"] = True
+            if include_market_metrics and row["_pe"] is None:
+                fallback_val = _safe_float(live_fallback.get("pe"))
+                if fallback_val is not None:
+                    row["_pe"] = fallback_val
+                    row["_pe_live_fallback"] = True
+            if (
+                row["_avg_vol_live_fallback"]
+                or row["_mkt_cap_live_fallback"]
+                or row["_pe_live_fallback"]
+            ):
+                fallback_row_count += 1
             row["_price_text"] = _fmt_price(row["_price"])
             row["_avg_vol_text"] = _fmt_volume(row["_avg_vol"])
             row["_mkt_cap_text"] = _fmt_mkt_cap(row["_mkt_cap"])
@@ -517,6 +554,7 @@ def create_app(
             "mkt_cap_max_filter": mkt_cap_max or "",
             "pe_min_filter": pe_min or "",
             "pe_max_filter": pe_max or "",
+            "live_metric_fallback_count": fallback_row_count,
         }
         return sorted_rows, meta
 
@@ -912,6 +950,7 @@ def create_app(
                 "explored_only": meta["explored_only"],
                 "created_after": meta["created_after"],
                 "created_before": meta["created_before"],
+                "live_metric_fallback_count": meta["live_metric_fallback_count"],
             },
         )
 
@@ -983,7 +1022,9 @@ def create_app(
                 entry = {
                     "pe_ratio": d.get("pe_ratio"),
                     "market_cap": d.get("market_cap"),
-                    "avg_volume": d.get("avg_10d_volume"),
+                    "avg_volume": d.get("avg_10d_volume")
+                    if d.get("avg_10d_volume") not in (None, "")
+                    else d.get("avg_volume"),
                 }
                 _fundamentals_cache[sym] = (now, entry)
                 result[sym] = entry

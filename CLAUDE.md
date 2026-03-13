@@ -69,15 +69,18 @@ except Exception as exc:
 
 Key data sources (in priority order):
 1. **`alpaca_transactions` table** — Complete order ledger (buys, sells, fills, failures, reconciliation). Query via SQL. See `docs/skills/DIAGNOSTICS.md`.
-2. **`logs/trader.log`** — WARNING+ only (errors, tracebacks, timeouts). **Does NOT show successful operations** (those log at INFO level). Do not conclude "everything failed" from this log alone.
-3. **Console output** — INFO+ but not persisted across restarts.
+2. **`logs/trader.log`** — INFO+ (all operations, errors, tracebacks). Rotates daily, keeps 14 days.
+3. **`logs/tick_collector.log`** — INFO+ (stream events, inserts, errors). Rotates daily, keeps 14 days.
+4. **Console output** — INFO+ (same content as log files, but not persisted across restarts).
 
 ```bash
-cat logs/trader.log        # view recent errors (WARNING+ only!)
-tail -f logs/trader.log    # tail live
+cat logs/trader.log            # view trader log
+cat logs/tick_collector.log    # view tick collector log
 ```
 
-Configured via env vars: `LOG_FILE` (default: `logs/trader.log`), `LOG_LEVEL` (default: `WARNING`), `LOG_KEEP_DAYS` (default: `14`). Rotates daily at midnight. See `trader/logging_config.py`.
+Trader log configured via env vars: `LOG_FILE` (default: `logs/trader.log`), `LOG_LEVEL` (default: `INFO`), `LOG_KEEP_DAYS` (default: `14`). See `trader/logging_config.py`.
+
+Tick collector log configured via env vars prefixed with `TC_`: `TC_LOG_FILE` (default: `logs/tick_collector.log`), `TC_LOG_LEVEL` (default: `INFO`), `TC_LOG_KEEP_DAYS` (default: `14`). See `tick_collector/__main__.py`.
 
 ## Documentation Lookup
 
