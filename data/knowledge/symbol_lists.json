@@ -1782,7 +1782,18 @@
     "GREH",
     "INMD",
     "NP",
-    "AIFF"
+    "AIFF",
+    "NEN",
+    "APLS",
+    "EAT",
+    "FTZFF",
+    "HP",
+    "PTEN",
+    "NBR",
+    "PDS",
+    "EOG",
+    "XBIT",
+    "BETR"
   ],
   "crypto": [],
   "rejected": [
@@ -1980,7 +1991,8 @@
     "BIOPOL",
     "SEPC",
     "ENGH",
-    "ATRL"
+    "ATRL",
+    "MKA"
   ],
-  "last_updated": "2026-03-13T17:41:39.052586+00:00"
+  "last_updated": "2026-03-13T18:43:01.722707+00:00"
 }

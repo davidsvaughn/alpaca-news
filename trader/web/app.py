@@ -1162,12 +1162,17 @@ def create_app(
                 "chrono": False,
                 "processed": 0,
                 "total": len(entries),
+                "phase_processed": 0,
+                "phase_total": 0,
+                "phase_unit": None,
                 "current_symbol": None,
                 "current_entry_time": None,
                 "timeline_start": timeline_start,
                 "timeline_end": timeline_end,
                 "portfolio_value": None,
                 "note": "Trade evaluation is grouped by symbol, not global time order.",
+                "started_at": time.time(),
+                "elapsed_sec": 0.0,
                 "updated_at": time.time(),
             },
         }
@@ -1214,6 +1219,7 @@ def create_app(
                 prev = job.get("progress") or {}
                 phase = str(update.get("phase") or prev.get("phase") or "engine")
                 label = str(update.get("label") or prev.get("label") or phase.replace("_", " ").title())
+                started_at = _coerce_float(prev.get("started_at")) or _coerce_float(job.get("created_at")) or time.time()
                 phase_progress = _coerce_float(update.get("phase_progress"))
                 if phase_progress is None:
                     phase_progress = _coerce_float(prev.get("phase_percent"))
@@ -1236,6 +1242,13 @@ def create_app(
                     "chrono": bool(update.get("chrono", prev.get("chrono", False))),
                     "processed": _coerce_int(update.get("processed")) or 0,
                     "total": _coerce_int(update.get("total")) or 0,
+                    "phase_processed": _coerce_int(update.get("phase_processed"))
+                    if update.get("phase_processed") is not None
+                    else _coerce_int(prev.get("phase_processed")),
+                    "phase_total": _coerce_int(update.get("phase_total"))
+                    if update.get("phase_total") is not None
+                    else _coerce_int(prev.get("phase_total")),
+                    "phase_unit": update.get("phase_unit") or prev.get("phase_unit"),
                     "current_symbol": update.get("current_symbol") or prev.get("current_symbol"),
                     "current_entry_time": update.get("current_entry_time") or prev.get("current_entry_time"),
                     "timeline_start": update.get("timeline_start") or prev.get("timeline_start") or timeline_start,
@@ -1246,6 +1259,8 @@ def create_app(
                     "alloc_replaced": _coerce_int(update.get("alloc_replaced")),
                     "sim_trades": _coerce_int(update.get("sim_trades")),
                     "sim_active_positions": _coerce_int(update.get("sim_active_positions")),
+                    "started_at": started_at,
+                    "elapsed_sec": round(max(0.0, time.time() - started_at), 3),
                     "updated_at": time.time(),
                 }
                 portfolio_value = _coerce_float(update.get("portfolio_value"))
@@ -1367,6 +1382,9 @@ def create_app(
                     "phase_progress": 1.0,
                     "processed": len(entries),
                     "total": len(entries),
+                    "phase_processed": len(entries),
+                    "phase_total": len(entries),
+                    "phase_unit": "trades",
                     "chrono": True,
                     "current_entry_time": timeline_end,
                     "timeline_start": timeline_start,

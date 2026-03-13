@@ -13,6 +13,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
+import trader.market.backtest as bt
 from trader.market.backtest import (
     BacktestResult,
     _extract_periodic_closes,
@@ -144,6 +145,54 @@ class TestComputeAnnA:
 
 
 class TestBacktestProgress:
+    def test_engine_progress_reports_symbol_phase_counts(self, monkeypatch):
+        events: list[dict[str, object]] = []
+        entries = [
+            {
+                "snapshot_id": "a",
+                "symbol": "AAPL",
+                "entry_price": 100.0,
+                "entry_time": "2026-01-02T10:00:00",
+            },
+            {
+                "snapshot_id": "b",
+                "symbol": "MSFT",
+                "entry_price": 100.0,
+                "entry_time": "2026-01-02T10:05:00",
+            },
+        ]
+        bars = _make_bars("2026-01-01 09:30", _BARS_PER_DAY + 120)
+
+        def fake_get_ohlcv(symbol: str, start: str, end: str | None = None) -> pd.DataFrame:
+            return bars.copy()
+
+        monkeypatch.setattr(bt, "_get_ohlcv_1m", fake_get_ohlcv)
+
+        results = bt.run_backtest(
+            "fixed_stop_loss",
+            {"stop_pct": 5.0},
+            entries,
+            market_close="16:00",
+            min_hold=5,
+            guard_stop_pct=0.0,
+            guard_target_pct=0.0,
+            guard_trail_pct=0.0,
+            stats_resolution_minutes=60,
+            progress_cb=events.append,
+        )
+
+        assert len(results) == 2
+        loading = [e for e in events if e.get("label") == "Loading bars by symbol"]
+        evaluating = [e for e in events if e.get("label") == "Evaluating exits by symbol"]
+        assert loading
+        assert evaluating
+        assert loading[-1]["phase_processed"] == 2
+        assert loading[-1]["phase_total"] == 2
+        assert loading[-1]["phase_unit"] == "symbols"
+        assert evaluating[-1]["phase_processed"] == 2
+        assert evaluating[-1]["phase_total"] == 2
+        assert evaluating[-1]["phase_unit"] == "symbols"
+
     def test_apply_allocation_progress_is_chronological(self):
         events: list[dict[str, object]] = []
         results = [
@@ -262,6 +311,91 @@ class TestBacktestProgress:
         assert sim["sim_ending"] == pytest.approx(1020.0)
         assert sim["sim_span_days"] == pytest.approx(round(60 / _BARS_PER_DAY, 2), rel=1e-6)
         assert sim["sim_daily_pct"] is not None
+
+
+class TestBacktestResultCacheOrdering:
+    def test_closed_cache_hit_skips_full_symbol_load(self, tmp_path, monkeypatch):
+        entry = {
+            "snapshot_id": "cached",
+            "symbol": "TEST",
+            "entry_price": 0.0,
+            "entry_time": "2026-01-02T10:00:00",
+        }
+        params = {"stop_pct": 5.0}
+        entry_dt = bt._parse_entry_time(entry["entry_time"])
+        start_date = (entry_dt - pd.Timedelta(days=1)).strftime("%Y-%m-%d")
+        resolution_end_date = min(pd.Timestamp.now().to_pydatetime(), entry_dt + pd.Timedelta(days=7)).strftime("%Y-%m-%d")
+
+        # Two trading days so the entry lookup resolves from the smaller window.
+        entry_df = _make_bars("2026-01-01 09:30", _BARS_PER_DAY + 120)
+        entry_idx = entry_df.index.searchsorted(pd.Timestamp(entry_dt))
+        entry_price = float(entry_df.iloc[entry_idx]["Close"])
+        cache_key = bt._build_backtest_result_cache_key(
+            symbol="TEST",
+            snapshot_id="cached",
+            entry_time=entry["entry_time"],
+            actual_entry_bar=entry_df.index[entry_idx],
+            effective_entry_price=entry_price,
+            strategy_key="fixed_stop_loss",
+            params=params,
+            market_close="16:00",
+            min_hold=5,
+            guard_stop_pct=0.0,
+            guard_target_pct=0.0,
+            guard_trail_pct=0.0,
+            stats_resolution_minutes=60,
+            data_start=entry_df.index[0],
+        )
+
+        monkeypatch.setattr(bt, "_BACKTEST_RESULT_CACHE_DIR", tmp_path / "backtest_results")
+        bt._write_backtest_result_cache(
+            "TEST",
+            cache_key,
+            BacktestResult(
+                snapshot_id="cached",
+                symbol="TEST",
+                entry_price=entry_price,
+                entry_time=entry["entry_time"],
+                exit_price=entry_price * 1.01,
+                exit_time="2026-01-02T11:00:00",
+                pnl_pct=1.0,
+                exit_reason="signal",
+                bars_held=60,
+                hold_minutes=60,
+            ),
+            data_end="2026-01-02T11:00:00",
+        )
+
+        load_calls: list[tuple[str, str, str | None]] = []
+
+        def fake_get_ohlcv(symbol: str, start: str, end: str | None = None) -> pd.DataFrame:
+            load_calls.append((symbol, start, end))
+            if end == resolution_end_date:
+                return entry_df
+            raise AssertionError(f"unexpected full-load request: {(symbol, start, end)}")
+
+        monkeypatch.setattr(bt, "_get_ohlcv_1m", fake_get_ohlcv)
+
+        trace: dict[str, object] = {}
+        results = bt.run_backtest(
+            "fixed_stop_loss",
+            params,
+            [entry],
+            market_close="16:00",
+            min_hold=5,
+            guard_stop_pct=0.0,
+            guard_target_pct=0.0,
+            guard_trail_pct=0.0,
+            stats_resolution_minutes=60,
+            trace=trace,
+        )
+
+        assert len(results) == 1
+        assert results[0].exit_reason == "signal"
+        assert trace["counts"]["result_cache_hits"] == 1
+        assert "ohlcv_load" not in trace["stages_sec"]
+        assert trace["stages_sec"]["entry_context_load"] > 0
+        assert load_calls == [("TEST", start_date, resolution_end_date)]
 
     def test_finalized_cache_result_stays_valid_when_data_horizon_advances(self):
         result = BacktestResult(

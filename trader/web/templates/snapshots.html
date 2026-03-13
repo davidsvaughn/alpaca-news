@@ -1202,6 +1202,17 @@ function _fmtBtMoney(value) {
   });
 }
 
+function _fmtBtDuration(seconds) {
+  var total = Math.max(0, Math.round(Number(seconds) || 0));
+  var mins = Math.floor(total / 60);
+  var secs = total % 60;
+  if (mins <= 0) return secs + 's';
+  if (mins < 60) return mins + 'm ' + secs + 's';
+  var hours = Math.floor(mins / 60);
+  mins = mins % 60;
+  return hours + 'h ' + mins + 'm ' + secs + 's';
+}
+
 function _renderBacktestProgress(progress) {
   _btProgress = progress || null;
   var panel = document.getElementById('bt-progress-panel');
@@ -1220,8 +1231,11 @@ function _renderBacktestProgress(progress) {
   var noteEl = document.getElementById('bt-progress-note');
 
   var percent = typeof progress.percent_done === 'number' ? progress.percent_done : 0;
+  var phasePercent = typeof progress.phase_percent === 'number' ? progress.phase_percent : percent;
   titleEl.textContent = progress.label || 'Running backtest';
-  percentEl.textContent = percent.toFixed(1) + '%';
+  percentEl.textContent = progress.phase === 'complete'
+    ? percent.toFixed(1) + '%'
+    : percent.toFixed(1) + '% total';
   bar.style.width = Math.max(0, Math.min(100, percent)) + '%';
   bar.setAttribute('aria-valuenow', String(percent));
   bar.classList.remove('bg-success', 'bg-danger', 'bg-warning');
@@ -1239,7 +1253,14 @@ function _renderBacktestProgress(progress) {
   }
 
   var meta = [];
-  if (progress.total > 0) meta.push((progress.processed || 0) + '/' + progress.total);
+  if (progress.phase_total > 0) {
+    meta.push(
+      (progress.phase_processed || 0) + '/' + progress.phase_total +
+      (progress.phase_unit ? ' ' + progress.phase_unit : '')
+    );
+  } else if (progress.total > 0) {
+    meta.push((progress.processed || 0) + '/' + progress.total);
+  }
   if (progress.current_symbol) meta.push(progress.current_symbol);
   if (progress.current_entry_time) {
     meta.push((progress.chrono ? 'timeline ' : 'current signal ') + _fmtBtTime(progress.current_entry_time));
@@ -1261,6 +1282,13 @@ function _renderBacktestProgress(progress) {
     if (progress.alloc_skipped != null) allocBits.push('skipped ' + progress.alloc_skipped);
     if (progress.alloc_replaced != null) allocBits.push('replaced ' + progress.alloc_replaced);
     extra.push(allocBits.join(', '));
+  }
+  if (progress.phase !== 'complete' && progress.phase !== 'error' && progress.phase !== 'aborted') {
+    extra.push('phase ' + phasePercent.toFixed(1) + '%');
+    if (Math.abs(percent - phasePercent) >= 0.1) extra.push('total ' + percent.toFixed(1) + '%');
+  }
+  if (progress.elapsed_sec != null) {
+    extra.push((progress.phase === 'complete' ? 'runtime ' : 'elapsed ') + _fmtBtDuration(progress.elapsed_sec));
   }
   if (extra.length) {
     extraEl.textContent = extra.join(' • ');
@@ -1296,10 +1324,14 @@ function runBacktest() {
   _renderBacktestProgress({
     phase: 'engine',
     label: 'Starting backtest',
+    phase_percent: 0,
     percent_done: 0,
     processed: 0,
     total: 0,
+    phase_processed: 0,
+    phase_total: 0,
     chrono: false,
+    elapsed_sec: 0,
     note: 'Trade evaluation is grouped by symbol, not global time order.',
   });
 
@@ -1852,10 +1884,14 @@ document.body.addEventListener('sse:snapshot_sealed', function() {
           _renderBacktestProgress(data.progress || {
             phase: 'engine',
             label: 'Backtest running',
+            phase_percent: 0,
             percent_done: 0,
             processed: 0,
             total: 0,
+            phase_processed: 0,
+            phase_total: 0,
             chrono: false,
+            elapsed_sec: 0,
           });
         } else {
           // Error or expired
