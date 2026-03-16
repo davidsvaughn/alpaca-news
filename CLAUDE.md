@@ -94,6 +94,16 @@ Specifically:
 - **When writing code that uses an external library**, verify the import paths, method signatures, and parameter names against Context7 docs.
 - If Context7 doesn't have the library, fall back to `WebSearch` or `WebFetch` — but prefer Context7 first since it returns structured, verified documentation.
 
+## Committing and Pushing
+
+**Commit and push at natural breakpoints** — when a logical group of changes is complete and tests pass. Don't wait until the end of a long session; commit as you go in distinct, meaningful units.
+
+- **When to commit**: After completing a coherent set of changes (bug fix, feature, refactor). Each commit should be a self-contained unit that makes sense on its own.
+- **Commit messages**: Detailed — list files changed and what each change does (see recent git log for style).
+- **Always push** after committing — don't leave commits local.
+- **"push" command**: If the user says just "push", commit and push all pending changes with a well-crafted message. This is a reminder that you may have forgotten.
+- **Don't auto-commit** after every small edit — wait for a natural breakpoint.
+
 # Behavioral guidelines to reduce common LLM coding mistakes
 
 **Tradeoff:** These guidelines bias toward caution over speed. For trivial tasks, use judgment.
