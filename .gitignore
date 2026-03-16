@@ -239,3 +239,5 @@ data/news/archive/
 data/snapshots/archive/
 .env.copy
 data/news.db
+data/trader.db-shm
+data/trader.db-wal

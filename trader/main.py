@@ -43,7 +43,7 @@ from trader.online.x_stream_service import XStreamGuards, XStreamService
 from trader.web.app import create_app
 
 
-def _kill_stale_servers(primary_port: int = 8000, legacy_port: int = 8765) -> None:
+def _kill_stale_servers(primary_port: int | None = None, legacy_port: int = 8765) -> None:
     """Kill any orphaned Python server processes listening on our ports.
 
     Prevents stale servers (from previous sessions or standalone launches)
@@ -53,6 +53,8 @@ def _kill_stale_servers(primary_port: int = 8000, legacy_port: int = 8765) -> No
     import re
     import signal
 
+    if primary_port is None:
+        primary_port = int(os.environ.get("APP_PORT", "8000"))
     for port in (primary_port, legacy_port):
         try:
             result = subprocess.run(
@@ -305,7 +307,8 @@ def main() -> None:
         atexit.register(_shutdown_xstream)
 
     app = create_app(settings=settings, bus=bus, db=db, knowledge=knowledge, tracker=tracker, online=online, feed_registry=feed_registry)
-    uvicorn.run(app, host="127.0.0.1", port=8000, log_level="info")
+    port = int(os.environ.get("APP_PORT", "8000"))
+    uvicorn.run(app, host="127.0.0.1", port=port, log_level="info")
 
 
 if __name__ == "__main__":

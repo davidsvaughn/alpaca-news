@@ -21,6 +21,8 @@ Reference papers are in `docs/refs/`. Archived older docs in `docs/archive/`.
 
 - **`docs/skills/`** — **Agent knowledge base**: operational guides for debugging, Alpaca operations, and codebase navigation. **Read [docs/skills/README.md](docs/skills/README.md) first** when investigating issues or working in unfamiliar areas.
 
+**Cascade check on doc changes:** After renaming, moving, or deleting any doc, grep the entire repo for references to the old filename/path and fix all broken links. This includes `CLAUDE.md`, `README.md`, doc index tables, and inline references in other docs. Do this automatically — don't wait to be asked.
+
 ## Market Data Source Priority
 
 **Schwab is the PRIMARY market data source. yfinance is ONLY a fallback.**
