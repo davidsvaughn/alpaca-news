@@ -78,6 +78,7 @@ class Watch:
 
     # Alpaca order tracking (Phase 4+)
     alpaca_buy_order_id: str | None = None
+    alpaca_sell_order_id: str | None = None
     alpaca_stop_order_id: str | None = None
     alpaca_stop_price: float | None = None  # persisted stop price (set at buy time)
 
@@ -145,6 +146,7 @@ class WatchBuilder:
         self.trough_pnl_pct: float | None = None
         # Alpaca order tracking
         self.alpaca_buy_order_id: str | None = None
+        self.alpaca_sell_order_id: str | None = None
         self.alpaca_stop_order_id: str | None = None
         self.alpaca_stop_price: float | None = None
         # Legacy fields (kept for backward compatibility)
@@ -228,6 +230,7 @@ class WatchBuilder:
         builder.trough_pnl_pct = d.get("trough_pnl_pct")
         # Alpaca order tracking
         builder.alpaca_buy_order_id = d.get("alpaca_buy_order_id")
+        builder.alpaca_sell_order_id = d.get("alpaca_sell_order_id")
         builder.alpaca_stop_order_id = d.get("alpaca_stop_order_id")
         builder.alpaca_stop_price = d.get("alpaca_stop_price")
         # Legacy fields
@@ -319,6 +322,7 @@ class WatchBuilder:
             trough_pnl_pct=self.trough_pnl_pct,
             # Alpaca order tracking
             alpaca_buy_order_id=self.alpaca_buy_order_id,
+            alpaca_sell_order_id=self.alpaca_sell_order_id,
             alpaca_stop_order_id=self.alpaca_stop_order_id,
             alpaca_stop_price=self.alpaca_stop_price,
             # Legacy fields

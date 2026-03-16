@@ -31,8 +31,10 @@ log = logging.getLogger(__name__)
 ALPACA_STOP_MODE = os.getenv("ALPACA_STOP_MODE", "fractional_day").lower()
 
 # How long to wait for order fill confirmation (seconds)
-ALPACA_FILL_TIMEOUT = float(os.getenv("ALPACA_FILL_TIMEOUT", "30"))
+ALPACA_FILL_TIMEOUT = float(os.getenv("ALPACA_FILL_TIMEOUT", "60"))
 ALPACA_EXTENDED_FILL_TIMEOUT = float(os.getenv("ALPACA_EXTENDED_FILL_TIMEOUT", "60"))
+# How long to wait for stop cancel to release held shares before selling (seconds)
+ALPACA_STOP_CANCEL_SETTLE_TIMEOUT = float(os.getenv("ALPACA_STOP_CANCEL_SETTLE_TIMEOUT", "5"))
 
 
 # ------------------------------------------------------------------
@@ -827,6 +829,35 @@ class AlpacaBroker:
             return ALPACA_EXTENDED_FILL_TIMEOUT
         return ALPACA_FILL_TIMEOUT
 
+    def _resolve_buy_after_timeout(
+        self,
+        symbol: str,
+        order_id: str,
+    ) -> OrderResult | None:
+        """Recover a buy that partially filled before timeout/cancel completed."""
+        final = self.get_order(order_id)
+        if final:
+            status = (final.status or "").lower()
+            filled_qty = float(final.filled_qty or 0)
+            if status == "filled":
+                return final
+            if filled_qty > 0:
+                return final
+
+        pos = self.get_position(symbol)
+        if pos and pos.qty > 0:
+            return OrderResult(
+                order_id=order_id,
+                symbol=symbol.upper(),
+                side="buy",
+                status=final.status if final else "position_open",
+                qty=pos.qty,
+                filled_qty=pos.qty,
+                filled_avg_price=pos.avg_entry_price,
+                raw=final.raw if final else None,
+            )
+        return None
+
     def buy_and_confirm(
         self,
         symbol: str,
@@ -849,11 +880,21 @@ class AlpacaBroker:
             # Cancel the unfilled order to prevent orphan positions
             log.warning("Buy order %s for %s timed out — cancelling", result.order_id, symbol)
             self.cancel_order(result.order_id)
-            # Check one more time — order may have filled between timeout and cancel
-            final = self.get_order(result.order_id)
-            if final and final.status.lower() == "filled":
-                log.info("Order %s for %s filled just before cancel — proceeding", result.order_id, symbol)
-                confirmed = final
+            recovered = self._resolve_buy_after_timeout(symbol, result.order_id)
+            if recovered:
+                if (recovered.status or "").lower() == "filled":
+                    log.info("Order %s for %s filled just before cancel — proceeding", result.order_id, symbol)
+                else:
+                    log.warning(
+                        "Order %s for %s partially filled before cancel completed "
+                        "(status=%s qty=%s avg_price=%s) — adopting partial position",
+                        result.order_id,
+                        symbol,
+                        recovered.status,
+                        recovered.filled_qty,
+                        recovered.filled_avg_price,
+                    )
+                confirmed = recovered
             else:
                 self._log_tx("buy_failed", symbol.upper(), order_id=result.order_id, status="timeout_cancelled",
                              detail={"notional": notional, "qty": qty})
@@ -862,11 +903,18 @@ class AlpacaBroker:
             self._log_tx("buy_failed", symbol.upper(), order_id=result.order_id, status="timeout_or_error",
                          detail={"error": str(e), "notional": notional, "qty": qty})
             raise
-        log.info(
-            "BUY CONFIRMED: %s order=%s qty=%s avg_price=%s",
-            symbol, confirmed.order_id, confirmed.filled_qty, confirmed.filled_avg_price,
-        )
-        self._log_tx("buy_confirmed", symbol.upper(), order_id=confirmed.order_id, status="filled",
+        final_status = (confirmed.status or "unknown").lower()
+        if final_status == "filled":
+            log.info(
+                "BUY CONFIRMED: %s order=%s qty=%s avg_price=%s",
+                symbol, confirmed.order_id, confirmed.filled_qty, confirmed.filled_avg_price,
+            )
+        else:
+            log.warning(
+                "BUY PARTIAL CONFIRMED: %s order=%s status=%s qty=%s avg_price=%s",
+                symbol, confirmed.order_id, confirmed.status, confirmed.filled_qty, confirmed.filled_avg_price,
+            )
+        self._log_tx("buy_confirmed", symbol.upper(), order_id=confirmed.order_id, status=confirmed.status,
                      detail={"filled_qty": confirmed.filled_qty, "filled_avg_price": confirmed.filled_avg_price,
                              "notional": notional, "qty": qty})
         return confirmed

@@ -363,18 +363,36 @@ class LiveExitMonitor:
             broker = self._get_broker_for_watch(watch_dict)
             if broker and watch_dict.get("alpaca_buy_order_id"):
                 # Cancel the server-side stop order FIRST (prevent race with stop fill)
+                # and wait for it to settle so shares aren't held when the sell submits.
                 stop_id = watch_dict.get("alpaca_stop_order_id")
                 if stop_id:
                     broker.cancel_order(stop_id)
                     builder.alpaca_stop_order_id = None
+                    from trader.market.alpaca_broker import ALPACA_STOP_CANCEL_SETTLE_TIMEOUT
+                    broker._wait_for_sell_orders_clear(symbol, timeout_s=ALPACA_STOP_CANCEL_SETTLE_TIMEOUT)
 
-                # Close position and WAIT for sell confirmation
+                # Submit sell order and store its ID on the watch so the
+                # stream handler can retroactively update the exit price
+                # if the fill arrives after our timeout.
                 try:
-                    sell_confirmed = broker.close_position_and_confirm(symbol)
-                    if sell_confirmed and sell_confirmed.filled_avg_price:
-                        exit_price = sell_confirmed.filled_avg_price
-                        log.info("ALPACA SELL CONFIRMED: %s price=%.2f qty=%s",
-                                 symbol, exit_price, sell_confirmed.filled_qty)
+                    sell_result = broker.close_position(symbol)
+                    if sell_result:
+                        builder.alpaca_sell_order_id = sell_result.order_id
+                        # Persist the sell order ID immediately
+                        from trader.db.database import update_watch
+                        update_watch(self.db, watch_id, builder.to_watch().to_dict())
+
+                        confirmed = broker.wait_for_fill(
+                            sell_result.order_id,
+                            timeout_s=broker._resolve_fill_timeout(None),
+                        )
+                        if confirmed and confirmed.filled_avg_price:
+                            exit_price = confirmed.filled_avg_price
+                            log.info("ALPACA SELL CONFIRMED: %s price=%.2f qty=%s",
+                                     symbol, exit_price, confirmed.filled_qty)
+                except TimeoutError:
+                    log.warning("Alpaca sell timed out for %s — using bar price %.2f (order left open, stream will update)",
+                                symbol, exit_price)
                 except Exception:
                     log.exception("Alpaca sell failed for %s — using bar price %.2f", symbol, exit_price)
 
@@ -1177,19 +1195,36 @@ class LivePortfolioManager:
                   if self.broker_pool and cfg.alpaca_account_id else None)
 
         if broker and victim.get("alpaca_buy_order_id"):
-            # Cancel stop order first
+            # Cancel stop order first and wait for it to settle
+            # so shares aren't held when the sell submits.
             stop_id = victim.get("alpaca_stop_order_id")
             if stop_id:
                 broker.cancel_order(stop_id)
                 builder.alpaca_stop_order_id = None
+                from trader.market.alpaca_broker import ALPACA_STOP_CANCEL_SETTLE_TIMEOUT
+                broker._wait_for_sell_orders_clear(symbol, timeout_s=ALPACA_STOP_CANCEL_SETTLE_TIMEOUT)
 
-            # Close Alpaca position
+            # Submit sell and store its ID so the stream handler can
+            # retroactively update the exit price on late fills.
             try:
-                sell_confirmed = broker.close_position_and_confirm(symbol)
-                if sell_confirmed and sell_confirmed.filled_avg_price:
-                    exit_price = sell_confirmed.filled_avg_price
-                    log.info("REPLACE SELL CONFIRMED: %s price=%.2f qty=%s",
-                             symbol, exit_price, sell_confirmed.filled_qty)
+                sell_result = broker.close_position(symbol)
+                if sell_result:
+                    builder.alpaca_sell_order_id = sell_result.order_id
+                    from trader.db.database import update_watch
+                    update_watch(self.db, watch_id, builder.to_watch().to_dict())
+
+                    confirmed = broker.wait_for_fill(
+                        sell_result.order_id,
+                        timeout_s=broker._resolve_fill_timeout(None),
+                    )
+                    if confirmed and confirmed.filled_avg_price:
+                        exit_price = confirmed.filled_avg_price
+                        log.info("REPLACE SELL CONFIRMED: %s price=%.2f qty=%s",
+                                 symbol, exit_price, confirmed.filled_qty)
+            except TimeoutError:
+                log.warning("REPLACE SELL timed out for %s — aborting replacement (order left open, stream will update)",
+                            symbol)
+                return False
             except Exception:
                 log.exception("REPLACE SELL FAILED for %s — aborting replacement", symbol)
                 return False

@@ -176,7 +176,7 @@ class AlpacaTradeStream:
             log.warning("Failed to log stream transaction: %s %s", event, symbol)
 
     def _handle_sell_fill(self, fill: dict[str, Any]) -> None:
-        """Handle a sell fill — likely a stop-loss triggered by Alpaca."""
+        """Handle a sell fill — stop-loss or regular sell (possibly late after timeout)."""
         from trader.db.database import get_active_watches, update_watch
         from trader.models.watch import WatchBuilder
 
@@ -186,9 +186,11 @@ class AlpacaTradeStream:
 
         watches = get_active_watches(self.db)
         for w in watches:
-            if w.get("status") != "holding" or w.get("symbol") != symbol:
+            if w.get("symbol") != symbol:
                 continue
-            if w.get("alpaca_stop_order_id") == order_id:
+
+            # Case 1: Stop-loss fill on a holding watch
+            if w.get("status") == "holding" and w.get("alpaca_stop_order_id") == order_id:
                 builder = WatchBuilder.from_dict(w)
                 reason = f"alpaca_stop_fill (stop_price={fill.get('stop_price')})"
                 builder.record_exit(price=fill_price, reason=reason)
@@ -197,7 +199,29 @@ class AlpacaTradeStream:
                 update_watch(self.db, w["watch_id"], updated.to_dict())
                 log.info("STOP FILL handled [%s]: %s %s price=%.2f",
                          self._label, symbol, w["watch_id"], fill_price)
-                break
+                return
+
+            # Case 2: Late sell fill — order timed out, watch already exited
+            # with a bar-price estimate. Update with the actual fill price.
+            if w.get("alpaca_sell_order_id") == order_id:
+                builder = WatchBuilder.from_dict(w)
+                old_exit = builder.exit
+                if old_exit:
+                    old_price = old_exit.price
+                    builder.exit.price = fill_price
+                    updated = builder.to_watch()
+                    update_watch(self.db, w["watch_id"], updated.to_dict())
+                    log.info("LATE SELL FILL [%s]: %s %s updated exit price %.2f -> %.2f",
+                             self._label, symbol, w["watch_id"], old_price, fill_price)
+                else:
+                    # Watch hasn't been exited yet (sell submitted but exit not recorded)
+                    builder.record_exit(price=fill_price, reason="sell_fill")
+                    builder.last_checkin_at = datetime.now(tz=timezone.utc).isoformat()
+                    updated = builder.to_watch()
+                    update_watch(self.db, w["watch_id"], updated.to_dict())
+                    log.info("SELL FILL handled [%s]: %s %s price=%.2f",
+                             self._label, symbol, w["watch_id"], fill_price)
+                return
 
     def _handle_buy_fill(self, fill: dict[str, Any]) -> None:
         """Handle a buy fill — update watch with actual fill price."""
