@@ -145,7 +145,7 @@ class TestComputeAnnA:
 
 
 class TestBacktestProgress:
-    def test_engine_progress_reports_symbol_phase_counts(self, monkeypatch):
+    def test_engine_prefetch_progress_reports_worker_label(self, monkeypatch, tmp_path):
         events: list[dict[str, object]] = []
         entries = [
             {
@@ -166,6 +166,50 @@ class TestBacktestProgress:
         def fake_get_ohlcv(symbol: str, start: str, end: str | None = None) -> pd.DataFrame:
             return bars.copy()
 
+        monkeypatch.setenv("BACKTEST_PREFETCH_WORKERS", "2")
+        monkeypatch.setattr(bt, "_BACKTEST_RESULT_CACHE_DIR", tmp_path / "backtest_results")
+        monkeypatch.setattr(bt, "_ENTRY_RESOLUTION_CACHE_DIR", tmp_path / "backtest_entry_resolution")
+        monkeypatch.setattr(bt, "_get_ohlcv_1m", fake_get_ohlcv)
+
+        results = bt.run_backtest(
+            "fixed_stop_loss",
+            {"stop_pct": 5.0},
+            entries,
+            market_close="16:00",
+            min_hold=5,
+            guard_stop_pct=0.0,
+            guard_target_pct=0.0,
+            guard_trail_pct=0.0,
+            stats_resolution_minutes=60,
+            progress_cb=events.append,
+        )
+
+        assert len(results) == 2
+        assert any(e.get("label") == "Loading bars by symbol (2 workers)" for e in events)
+
+    def test_engine_progress_reports_symbol_phase_counts(self, monkeypatch, tmp_path):
+        events: list[dict[str, object]] = []
+        entries = [
+            {
+                "snapshot_id": "a",
+                "symbol": "AAPL",
+                "entry_price": 100.0,
+                "entry_time": "2026-01-02T10:00:00",
+            },
+            {
+                "snapshot_id": "b",
+                "symbol": "MSFT",
+                "entry_price": 100.0,
+                "entry_time": "2026-01-02T10:05:00",
+            },
+        ]
+        bars = _make_bars("2026-01-01 09:30", _BARS_PER_DAY + 120)
+
+        def fake_get_ohlcv(symbol: str, start: str, end: str | None = None) -> pd.DataFrame:
+            return bars.copy()
+
+        monkeypatch.setattr(bt, "_BACKTEST_RESULT_CACHE_DIR", tmp_path / "backtest_results")
+        monkeypatch.setattr(bt, "_ENTRY_RESOLUTION_CACHE_DIR", tmp_path / "backtest_entry_resolution")
         monkeypatch.setattr(bt, "_get_ohlcv_1m", fake_get_ohlcv)
 
         results = bt.run_backtest(
@@ -348,6 +392,7 @@ class TestBacktestResultCacheOrdering:
         )
 
         monkeypatch.setattr(bt, "_BACKTEST_RESULT_CACHE_DIR", tmp_path / "backtest_results")
+        monkeypatch.setattr(bt, "_ENTRY_RESOLUTION_CACHE_DIR", tmp_path / "backtest_entry_resolution")
         bt._write_backtest_result_cache(
             "TEST",
             cache_key,

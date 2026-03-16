@@ -3693,55 +3693,67 @@ def run_backtest(
     total_symbols = len(by_symbol)
     _emit_run_progress()
 
-    prefetched: list[dict[str, Any]] = []
-    for symbol, sym_entries in by_symbol.items():
+    prefetched: list[dict[str, Any] | None] = [None] * len(by_symbol)
+    symbol_items = list(by_symbol.items())
+    for symbol, sym_entries in symbol_items:
         symbol_entries[symbol] = len(sym_entries)
-        t_parse = time.perf_counter()
-        parsed_times = [
-            (e, _parse_entry_time(e.get("entry_time", e.get("entry_date", ""))))
-            for e in sym_entries
-        ]
-        _mark("parse_entry_times", t_parse)
 
-        earliest_dt = min(t for _, t in parsed_times)
-        start_date = (earliest_dt - timedelta(days=1)).strftime("%Y-%m-%d")
-        today_str = datetime.now().strftime("%Y-%m-%d")
-        resolution_end_dt = min(datetime.now(), max(t for _, t in parsed_times) + timedelta(days=7))
-        resolution_end_date = resolution_end_dt.strftime("%Y-%m-%d")
+    def _consume_prefetch_output(output: dict[str, Any]) -> None:
+        nonlocal prefetched_entries, prefetched_symbols
+        _merge_number_dict(stage_sec, output.get("stage_sec", {}))
+        prefetched_entries += int(output.get("symbol_entry_count", 0) or 0)
+        prefetched_symbols += 1
+        prefetch_progress = (prefetched_entries / total_entries) if total_entries > 0 else 1.0
+        _emit_run_progress(
+            label="Loading bars by symbol" if prefetch_worker_count <= 1 else f"Loading bars by symbol ({prefetch_worker_count} workers)",
+            current_symbol=str(output.get("symbol") or "") or None,
+            current_entry_time=output.get("current_entry_time") or None,
+            processed_override=prefetched_entries,
+            phase_processed_override=prefetched_symbols,
+            phase_total_override=total_symbols,
+            phase_unit="symbols",
+            phase_progress=min(prefetch_progress * 0.2, 0.2),
+        )
 
-        resolved_results: list[BacktestResult | None] = [None] * len(sym_entries)
-        pending_with_idx: list[tuple[int, dict[str, Any], datetime]] = [
-            (idx, e, entry_dt)
-            for idx, (e, entry_dt) in enumerate(parsed_times)
-        ]
-        resolved_counts: dict[str, int] = defaultdict(int)
+    prefetch_worker_count = _resolve_backtest_prefetch_workers(len(symbol_items), total_entries)
+    if prefetch_worker_count > 1:
+        _safe_emit_progress(progress_cb, {
+            "phase": "engine",
+            "label": f"Loading bars by symbol ({prefetch_worker_count} workers)",
+            "processed": 0,
+            "total": total_entries,
+            "phase_processed": 0,
+            "phase_total": total_symbols,
+            "phase_unit": "symbols",
+            "phase_progress": 0.0,
+            "chrono": False,
+            "timeline_start": timeline_start,
+            "timeline_end": timeline_end,
+        })
 
-        df: pd.DataFrame | None = None
-        symbol_cache_dir = _BACKTEST_RESULT_CACHE_DIR / symbol.upper()
-        if symbol_cache_dir.exists():
-            unresolved_resolution: list[tuple[int, dict[str, Any], datetime]] = []
-            remaining: list[tuple[int, dict[str, Any], datetime]] = []
-
-            for idx, e, entry_dt in pending_with_idx:
-                entry_time_str = e.get("entry_time", e.get("entry_date", ""))
-                resolution = _read_entry_resolution_cache(
+    if prefetch_worker_count <= 1:
+        for idx, (symbol, sym_entries) in enumerate(symbol_items):
+            output = _prefetch_symbol_backtest_job(
+                symbol=symbol,
+                sym_entries=sym_entries,
+                strategy_key=strategy_key,
+                params=params,
+                market_close=market_close,
+                min_hold=min_hold,
+                guard_stop_pct=guard_stop_pct,
+                guard_target_pct=guard_target_pct,
+                guard_trail_pct=guard_trail_pct,
+                stats_resolution_minutes=stats_resolution_minutes,
+            )
+            prefetched[idx] = output["job"]
+            _consume_prefetch_output(output)
+    else:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=prefetch_worker_count) as executor:
+            future_to_idx = {
+                executor.submit(
+                    _prefetch_symbol_backtest_job,
                     symbol=symbol,
-                    snapshot_id=str(e.get("snapshot_id") or ""),
-                    entry_time=entry_time_str,
-                    input_entry_price=float(e.get("entry_price") or 0.0),
-                    market_close=market_close,
-                    start_date=start_date,
-                )
-                if resolution is None:
-                    unresolved_resolution.append((idx, e, entry_dt))
-                    continue
-
-                cache_key = _build_backtest_result_cache_key(
-                    symbol=symbol,
-                    snapshot_id=str(e.get("snapshot_id") or ""),
-                    entry_time=entry_time_str,
-                    actual_entry_bar=resolution["actual_entry_bar"],
-                    effective_entry_price=resolution["effective_entry_price"],
+                    sym_entries=sym_entries,
                     strategy_key=strategy_key,
                     params=params,
                     market_close=market_close,
@@ -3750,125 +3762,16 @@ def run_backtest(
                     guard_target_pct=guard_target_pct,
                     guard_trail_pct=guard_trail_pct,
                     stats_resolution_minutes=stats_resolution_minutes,
-                    data_start=resolution["data_start"],
-                )
-                peeked = _peek_backtest_result_cache(symbol, cache_key)
-                if peeked is not None:
-                    cached_result, meta = peeked
-                    if _can_short_circuit_backtest_cache(cached_result, meta):
-                        resolved_results[idx] = cached_result
-                        resolved_counts["result_cache_hits"] += 1
-                        _count_result_outcome(resolved_counts, cached_result)
-                        continue
-                remaining.append((idx, e, entry_dt))
+                ): idx
+                for idx, (symbol, sym_entries) in enumerate(symbol_items)
+            }
+            for future in concurrent.futures.as_completed(future_to_idx):
+                idx = future_to_idx[future]
+                output = future.result()
+                prefetched[idx] = output["job"]
+                _consume_prefetch_output(output)
 
-            if unresolved_resolution:
-                t_entry = time.perf_counter()
-                entry_df_raw = _get_ohlcv_1m(symbol, start_date, resolution_end_date)
-                _mark("entry_context_load", t_entry)
-                entry_df = None
-                if entry_df_raw is not None and not entry_df_raw.empty:
-                    t_entry_hours = time.perf_counter()
-                    entry_df = _filter_trading_hours(entry_df_raw, market_close)
-                    _mark("entry_context_filter", t_entry_hours)
-                if entry_df is not None and not entry_df.empty:
-                    data_start = entry_df.index[0]
-                    for idx, e, entry_dt in unresolved_resolution:
-                        entry_price = e["entry_price"]
-                        entry_time_str = e.get("entry_time", e.get("entry_date", ""))
-                        entry_ts = pd.Timestamp(entry_dt, tz=entry_df.index.tz).as_unit(entry_df.index.unit)
-                        entry_idx = entry_df.index.searchsorted(entry_ts)
-                        if entry_idx >= len(entry_df):
-                            result = BacktestResult(
-                                snapshot_id=e["snapshot_id"],
-                                symbol=symbol,
-                                entry_price=entry_price,
-                                entry_time=entry_time_str,
-                                exit_reason="no_data",
-                            )
-                            resolved_results[idx] = result
-                            _count_result_outcome(resolved_counts, result)
-                            continue
-
-                        actual_entry_bar = entry_df.index[entry_idx]
-                        entry_time_of_day = actual_entry_bar.hour * 60 + actual_entry_bar.minute
-                        if entry_price <= 0 or entry_time_of_day <= (9 * 60 + 30):
-                            entry_price = float(entry_df.iloc[entry_idx]["Close"])
-
-                        _write_entry_resolution_cache(
-                            symbol=symbol,
-                            snapshot_id=str(e.get("snapshot_id") or ""),
-                            entry_time=entry_time_str,
-                            input_entry_price=float(e.get("entry_price") or 0.0),
-                            market_close=market_close,
-                            start_date=start_date,
-                            actual_entry_bar=actual_entry_bar,
-                            effective_entry_price=entry_price,
-                            data_start=data_start,
-                        )
-
-                        cache_key = _build_backtest_result_cache_key(
-                            symbol=symbol,
-                            snapshot_id=str(e.get("snapshot_id") or ""),
-                            entry_time=entry_time_str,
-                            actual_entry_bar=actual_entry_bar,
-                            effective_entry_price=entry_price,
-                            strategy_key=strategy_key,
-                            params=params,
-                            market_close=market_close,
-                            min_hold=min_hold,
-                            guard_stop_pct=guard_stop_pct,
-                            guard_target_pct=guard_target_pct,
-                            guard_trail_pct=guard_trail_pct,
-                            stats_resolution_minutes=stats_resolution_minutes,
-                            data_start=data_start,
-                        )
-                        peeked = _peek_backtest_result_cache(symbol, cache_key)
-                        if peeked is not None:
-                            cached_result, meta = peeked
-                            if _can_short_circuit_backtest_cache(cached_result, meta):
-                                resolved_results[idx] = cached_result
-                                resolved_counts["result_cache_hits"] += 1
-                                _count_result_outcome(resolved_counts, cached_result)
-                                continue
-                        remaining.append((idx, e, entry_dt))
-                else:
-                    remaining.extend(unresolved_resolution)
-
-            pending_with_idx = remaining
-
-        if pending_with_idx:
-            t_load = time.perf_counter()
-            df_raw = _get_ohlcv_1m(symbol, start_date, today_str)
-            _mark("ohlcv_load", t_load)
-
-            if df_raw is not None and not df_raw.empty:
-                t_hours = time.perf_counter()
-                df = _filter_trading_hours(df_raw, market_close)
-                _mark("trading_hours_filter", t_hours)
-
-        prefetched.append({
-            "symbol": symbol,
-            "sym_entries": [e for _, e, _ in pending_with_idx],
-            "parsed_times": [(e, entry_dt) for _, e, entry_dt in pending_with_idx],
-            "entry_positions": [idx for idx, _, _ in pending_with_idx],
-            "resolved_results": resolved_results,
-            "resolved_counts": dict(resolved_counts),
-            "df": df,
-        })
-        prefetched_entries += len(sym_entries)
-        prefetched_symbols += 1
-        prefetch_progress = (prefetched_entries / total_entries) if total_entries > 0 else 1.0
-        _emit_run_progress(
-            label="Loading bars by symbol",
-            current_symbol=symbol,
-            current_entry_time=sym_entries[-1].get("entry_time", sym_entries[-1].get("entry_date", "")) or None,
-            processed_override=prefetched_entries,
-            phase_processed_override=prefetched_symbols,
-            phase_total_override=total_symbols,
-            phase_unit="symbols",
-            phase_progress=min(prefetch_progress * 0.2, 0.2),
-        )
+    prefetched_jobs = [job for job in prefetched if job is not None]
 
     def _consume_symbol_output(output: dict[str, Any]) -> None:
         nonlocal processed_entries, processed_symbols
@@ -3893,11 +3796,11 @@ def run_backtest(
             phase_progress=(0.2 + ((processed_entries / total_entries) * 0.8)) if total_entries > 0 else 1.0,
         )
 
-    worker_count = _resolve_backtest_workers(len(prefetched), total_entries)
-    outputs: list[dict[str, Any] | None] = [None] * len(prefetched)
+    worker_count = _resolve_backtest_workers(len(prefetched_jobs), total_entries)
+    outputs: list[dict[str, Any] | None] = [None] * len(prefetched_jobs)
 
     def _run_symbol_jobs_serial() -> None:
-        for idx, job in enumerate(prefetched):
+        for idx, job in enumerate(prefetched_jobs):
             output = _evaluate_symbol_entries(
                 symbol=job["symbol"],
                 sym_entries=job["sym_entries"],
@@ -3960,7 +3863,7 @@ def run_backtest(
                         stats_resolution_minutes=stats_resolution_minutes,
                         capture_trace=trace is not None,
                     ): idx
-                    for idx, job in enumerate(prefetched)
+                    for idx, job in enumerate(prefetched_jobs)
                 }
                 for future in concurrent.futures.as_completed(future_to_idx):
                     idx = future_to_idx[future]

@@ -95,6 +95,7 @@ def reconcile(
         "watch_phantom_miss": [],   # bulk miss but position still exists (transient)
         "alpaca_orphan_closed": [],
         "alpaca_orphan_adopted": [],
+        "alpaca_orphan_pending_buy": [],
         "entry_price_updated": [],
         "qty_updated": [],
     }
@@ -119,6 +120,11 @@ def reconcile(
             watch_by_symbol[w["symbol"]] = w
 
     watch_symbols = set(watch_by_symbol.keys())
+    all_open_orders = broker.get_open_orders()
+    open_buy_symbols = {
+        o.symbol for o in all_open_orders
+        if (o.side or "").lower() == "buy"
+    }
 
     # Rule 1 & 4: Both sides have the position
     for symbol in alpaca_symbols & watch_symbols:
@@ -311,6 +317,14 @@ def reconcile(
     for symbol in alpaca_symbols - watch_symbols:
         pos = alpaca_positions[symbol]
 
+        # A live buy is still working for this symbol. Do not adopt/close yet.
+        if symbol in open_buy_symbols:
+            summary["alpaca_orphan_pending_buy"].append(symbol)
+            log.info("RECONCILE: %s position without watch but open buy order present — waiting", symbol)
+            _log_tx(db, account_id, "reconcile_orphan_pending_buy", symbol,
+                    detail={"qty": pos.qty, "avg_entry_price": pos.avg_entry_price})
+            continue
+
         # Fractional remainder cleanup: < 1 share orphan → liquidate during regular hours
         if float(pos.qty) < 1.0:
             from trader.market.market_hours import in_extended_only, ALPACA_EXTENDED_HOURS
@@ -395,6 +409,7 @@ def reconcile(
         len(summary["watch_force_exited"])
         + len(summary["alpaca_orphan_closed"])
         + len(summary["alpaca_orphan_adopted"])
+        + len(summary["alpaca_orphan_pending_buy"])
         + len(summary["entry_price_updated"])
         + len(summary["qty_updated"])
         + n_fractional
@@ -405,6 +420,7 @@ def reconcile(
                f"{len(summary['watch_force_exited'])} force-exited, "
                f"{len(summary['alpaca_orphan_closed'])} orphans closed, "
                f"{len(summary['alpaca_orphan_adopted'])} adopted, "
+               f"{len(summary['alpaca_orphan_pending_buy'])} pending buys, "
                f"{len(summary['entry_price_updated'])} prices updated, "
                f"{len(summary['qty_updated'])} qty updated")
         if n_fractional:
@@ -458,6 +474,7 @@ def ensure_stops(
     summary: dict[str, Any] = {
         "submitted": [],
         "already_open": [],
+        "skipped_open_buy": [],
         "skipped_open_sell": [],
         "no_stop_price": [],
         "errors": [],
@@ -477,9 +494,13 @@ def ensure_stops(
     all_open_orders = broker.get_open_orders()
     # Build symbol → open stop order mapping
     open_stops_by_symbol: dict[str, Any] = {}
+    open_buys: set[str] = set()
     open_non_stop_sells: set[str] = set()
     for o in all_open_orders:
-        if o.side == "sell":
+        side = (o.side or "").lower()
+        if side == "buy":
+            open_buys.add(o.symbol)
+        elif side == "sell":
             if o.stop_price is not None:
                 open_stops_by_symbol[o.symbol] = o
             else:
@@ -521,6 +542,12 @@ def ensure_stops(
                     expected_status="holding",
                 )
             summary["already_open"].append(symbol)
+            continue
+
+        # Alpaca can reject a stop while the buy order is still working.
+        if symbol in open_buys:
+            summary["skipped_open_buy"].append(symbol)
+            log.info("ENSURE-STOPS: %s skipped (open buy order present)", symbol)
             continue
 
         # Active close/replacement sell order is already holding shares.
@@ -579,12 +606,13 @@ def ensure_stops(
 
     n_submitted = len(summary["submitted"])
     n_open = len(summary["already_open"])
+    n_skipped_buy = len(summary["skipped_open_buy"])
     n_skipped_sell = len(summary["skipped_open_sell"])
     n_errors = len(summary["errors"])
     n_no_price = len(summary["no_stop_price"])
-    if n_submitted or n_errors or n_no_price or n_skipped_sell:
-        log.info("ENSURE-STOPS: %d submitted, %d already open, %d skipped (open sell), %d errors, %d no stop price",
-                 n_submitted, n_open, n_skipped_sell, n_errors, n_no_price)
+    if n_submitted or n_errors or n_no_price or n_skipped_sell or n_skipped_buy:
+        log.info("ENSURE-STOPS: %d submitted, %d already open, %d skipped (open buy), %d skipped (open sell), %d errors, %d no stop price",
+                 n_submitted, n_open, n_skipped_buy, n_skipped_sell, n_errors, n_no_price)
     elif n_open:
         log.info("ENSURE-STOPS: all %d stops active", n_open)
 

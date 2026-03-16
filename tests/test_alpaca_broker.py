@@ -135,3 +135,43 @@ def test_close_position_and_confirm_timeout_leaves_order_open():
     assert tx_events
     assert tx_events[-1]["event"] == "sell_failed"
     assert tx_events[-1]["status"] == "timeout_open"
+
+
+def test_buy_and_confirm_timeout_adopts_partial_fill_after_cancel():
+    broker = AlpacaBroker.__new__(AlpacaBroker)
+    tx_events: list[dict] = []
+    broker._log_tx = lambda event, symbol, **kwargs: tx_events.append(  # type: ignore[assignment]
+        {"event": event, "symbol": symbol, **kwargs},
+    )
+    broker._resolve_fill_timeout = lambda timeout_s: 30.0  # type: ignore[assignment]
+
+    submitted = OrderResult(
+        order_id="buy-open-1",
+        symbol="OLLI",
+        side="buy",
+        status="new",
+        notional=5000.0,
+    )
+    broker.buy = lambda symbol, notional=None, qty=None: submitted  # type: ignore[assignment]
+    broker.wait_for_fill = lambda order_id, timeout_s, poll_interval_s=0.5: (_ for _ in ()).throw(TimeoutError("timeout"))  # type: ignore[assignment]
+    cancel_calls: list[str] = []
+    broker.cancel_order = lambda order_id: cancel_calls.append(order_id) or True  # type: ignore[assignment]
+    broker.get_order = lambda order_id: OrderResult(  # type: ignore[assignment]
+        order_id=order_id,
+        symbol="OLLI",
+        side="buy",
+        status="canceled",
+        filled_qty=42.0,
+        filled_avg_price=109.31,
+    )
+    broker.get_position = lambda symbol: None  # type: ignore[assignment]
+
+    result = broker.buy_and_confirm("OLLI", notional=5000.0)
+
+    assert cancel_calls == ["buy-open-1"]
+    assert result.order_id == "buy-open-1"
+    assert result.status == "canceled"
+    assert result.filled_qty == 42.0
+    assert tx_events
+    assert tx_events[-1]["event"] == "buy_confirmed"
+    assert tx_events[-1]["status"] == "canceled"
