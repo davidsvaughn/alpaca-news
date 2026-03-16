@@ -10,6 +10,7 @@ news file (deterministic snapshot_id) is idempotent.
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -134,7 +135,13 @@ class Database:
 def open_sqlite(path: str) -> Database:
     p = Path(path)
     p.parent.mkdir(parents=True, exist_ok=True)
-    engine = create_engine(f"sqlite+pysqlite:///{p}")
+    engine = create_engine(
+        f"sqlite+pysqlite:///{p}",
+        connect_args={"timeout": int(os.getenv("SQLITE_LOCK_TIMEOUT", "30"))},
+    )
+    # Enable WAL mode for better concurrent read/write performance.
+    with engine.begin() as conn:
+        conn.execute(text("PRAGMA journal_mode=WAL"))
     metadata.create_all(engine)
     # Hot query paths in the dashboard/backtest rely on created_at ordering and
     # symbol filtering. Ensure indexes exist for existing DBs as well.

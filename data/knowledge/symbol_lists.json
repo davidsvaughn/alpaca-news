@@ -1870,7 +1870,16 @@
     "VNTRF",
     "INIS",
     "QNBC",
-    "PTC"
+    "PTC",
+    "ZSPC",
+    "SAIC",
+    "MMYT",
+    "CTMX",
+    "HSY",
+    "MMM",
+    "NPAC",
+    "STEX",
+    "ESTC"
   ],
   "crypto": [],
   "rejected": [
@@ -2076,5 +2085,5 @@
     "PNXPF",
     "SURF.A"
   ],
-  "last_updated": "2026-03-16T14:10:02.336474+00:00"
+  "last_updated": "2026-03-16T14:32:23.190866+00:00"
 }
