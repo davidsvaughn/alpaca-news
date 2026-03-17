@@ -86,13 +86,22 @@ Trader log env vars: `LOG_FILE` (default: `logs/trader.log`), `LOG_LEVEL` (defau
 
 Tick collector log env vars (prefixed `TC_`): `TC_LOG_FILE` (default: `logs/tick_collector.log`), `TC_LOG_LEVEL` (default: `INFO`), `TC_LOG_KEEP_DAYS` (default: `14`). See `tick_collector/__main__.py`.
 
+## Testing and Verification
+
+**Verify your work.** After making non-trivial changes, run relevant tests or do a quick sanity check before moving on. You don't need to test every single edit, but use judgment:
+
+- **Always test**: Bug fixes, new features, refactors that touch multiple files, anything involving error handling or edge cases.
+- **Quick sanity checks**: Run `uv run python -m pytest tests/ -v -s -k "relevant_test"` for targeted tests, or a quick import/syntax check for smaller changes.
+- **Skip testing for**: Typo fixes, doc-only changes, trivial config edits.
+- If no existing test covers your change and the change is significant, consider adding one.
+
 ## Committing and Pushing
 
-**Commit and push at natural breakpoints** — when a logical group of changes is complete and tests pass. Don't wait until the end of a long session; commit as you go in distinct, meaningful units.
+**Commit and push at natural breakpoints** — when a logical group of changes is complete and tests pass. Don't wait until the end of a long session; commit as you go in distinct, meaningful units. **Proactively push to GitHub** — don't wait to be asked.
 
 - **When to commit**: After completing a coherent set of changes (bug fix, feature, refactor). Each commit should be a self-contained unit that makes sense on its own.
 - **Commit messages**: Detailed — list files changed and what each change does (see recent git log for style).
-- **Always push** after committing — don't leave commits local.
+- **Always push** after committing — don't leave commits local. Push immediately after every commit.
 - **"push" command**: If the user says just "push", commit and push all pending changes with a well-crafted message. This is a reminder that you may have forgotten.
 - **Don't auto-commit** after every small edit — wait for a natural breakpoint.
 
