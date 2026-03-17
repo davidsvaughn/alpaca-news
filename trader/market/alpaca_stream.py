@@ -208,7 +208,8 @@ class AlpacaTradeStream:
                 old_exit = builder.exit
                 if old_exit:
                     old_price = old_exit.price
-                    builder.exit.price = fill_price
+                    from dataclasses import replace
+                    builder.exit = replace(old_exit, price=fill_price)
                     updated = builder.to_watch()
                     update_watch(self.db, w["watch_id"], updated.to_dict())
                     log.info("LATE SELL FILL [%s]: %s %s updated exit price %.2f -> %.2f",

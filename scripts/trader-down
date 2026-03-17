@@ -1,0 +1,44 @@
+#!/usr/bin/env bash
+# Stop trader and/or tick_collector.
+#
+# Usage:
+#   trader-down            Stop both (kills entire session)
+#   trader-down trader     Stop trader only (tick_collector keeps running)
+#   trader-down tick       Stop tick_collector only (trader keeps running)
+
+set -euo pipefail
+
+SESSION="trader"
+TARGET="${1:-all}"
+
+if ! tmux has-session -t "$SESSION" 2>/dev/null; then
+    echo "No '$SESSION' session running."
+    exit 0
+fi
+
+kill_window() {
+    local WINDOW="$1"
+    if tmux list-windows -t "$SESSION" -F '#{window_name}' | grep -qx "$WINDOW"; then
+        tmux kill-window -t "$SESSION:$WINDOW"
+        echo "Stopped $WINDOW."
+    else
+        echo "$WINDOW is not running."
+    fi
+    # If no windows remain, session is already gone
+    if ! tmux has-session -t "$SESSION" 2>/dev/null; then
+        echo "Session '$SESSION' ended (no windows left)."
+    fi
+}
+
+case "$TARGET" in
+    all)
+        tmux kill-session -t "$SESSION"
+        echo "Stopped session '$SESSION' (trader + tick_collector)."
+        ;;
+    trader)  kill_window "trader" ;;
+    tick)    kill_window "tick_collector" ;;
+    *)
+        echo "Usage: trader-down [trader|tick]" >&2
+        exit 1
+        ;;
+esac

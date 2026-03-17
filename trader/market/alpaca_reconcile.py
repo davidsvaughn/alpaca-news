@@ -476,6 +476,7 @@ def ensure_stops(
         "already_open": [],
         "skipped_open_buy": [],
         "skipped_open_sell": [],
+        "stop_breached_closed": [],
         "no_stop_price": [],
         "errors": [],
     }
@@ -557,6 +558,54 @@ def ensure_stops(
             log.info("ENSURE-STOPS: %s skipped (open non-stop sell order present)", symbol)
             continue
 
+        # If price has already fallen past the stop level, close immediately
+        current_price = float(pos.current_price) if pos.current_price else None
+        if current_price and stop_price >= current_price:
+            log.warning(
+                "ENSURE-STOPS: %s stop $%.2f >= market $%.2f — stop BREACHED, closing position immediately",
+                symbol, stop_price, current_price,
+            )
+            try:
+                close_result = broker.close_position(symbol)
+                if close_result:
+                    log.warning("ENSURE-STOPS: %s market sell submitted -> order %s",
+                                symbol, close_result.order_id)
+                    builder = WatchBuilder.from_dict(watch)
+                    builder.record_exit(price=current_price, reason="stop_breached_at_startup")
+                    updated = builder.to_watch()
+                    update_watch_if_current_status(
+                        db, watch_id, updated.to_dict(), expected_status="holding",
+                    )
+                    summary["stop_breached_closed"].append({
+                        "symbol": symbol, "stop_price": stop_price,
+                        "market_price": current_price, "order_id": close_result.order_id,
+                    })
+                    _log_tx(db, account_id, "stop_breached_close", symbol,
+                            order_id=close_result.order_id,
+                            detail={"stop_price": stop_price, "market_price": current_price,
+                                    "watch_id": watch_id})
+                    from trader.notifications import notify
+                    notify(
+                        subject=f"Stop breached: {symbol} closed at market",
+                        body=(f"{symbol} stop ${stop_price:.2f} >= market ${current_price:.2f}.\n"
+                              f"Position closed via market sell (order {close_result.order_id}).\n"
+                              f"Account: {account_id}"),
+                    )
+            except Exception as e:
+                log.exception("ENSURE-STOPS: %s stop breached but CLOSE FAILED — POSITION UNPROTECTED!", symbol)
+                summary["errors"].append({"symbol": symbol, "error": f"stop_breached_close_failed: {e}"})
+                _log_tx(db, account_id, "stop_breached_close_failed", symbol,
+                        detail={"error": str(e), "stop_price": stop_price,
+                                "market_price": current_price, "watch_id": watch_id})
+                from trader.notifications import notify
+                notify(
+                    subject=f"CRITICAL: {symbol} stop breached, close FAILED",
+                    body=(f"{symbol} stop ${stop_price:.2f} >= market ${current_price:.2f}.\n"
+                          f"Market sell FAILED: {e}\n"
+                          f"Account: {account_id} — MANUAL INTERVENTION NEEDED"),
+                )
+            continue
+
         # Submit stop order
         try:
             result = broker.set_stop(symbol, qty=qty, stop_price=stop_price)
@@ -608,11 +657,12 @@ def ensure_stops(
     n_open = len(summary["already_open"])
     n_skipped_buy = len(summary["skipped_open_buy"])
     n_skipped_sell = len(summary["skipped_open_sell"])
+    n_breached = len(summary["stop_breached_closed"])
     n_errors = len(summary["errors"])
     n_no_price = len(summary["no_stop_price"])
-    if n_submitted or n_errors or n_no_price or n_skipped_sell or n_skipped_buy:
-        log.info("ENSURE-STOPS: %d submitted, %d already open, %d skipped (open buy), %d skipped (open sell), %d errors, %d no stop price",
-                 n_submitted, n_open, n_skipped_buy, n_skipped_sell, n_errors, n_no_price)
+    if n_submitted or n_errors or n_no_price or n_skipped_sell or n_skipped_buy or n_breached:
+        log.info("ENSURE-STOPS: %d submitted, %d already open, %d skipped (open buy), %d skipped (open sell), %d breached/closed, %d errors, %d no stop price",
+                 n_submitted, n_open, n_skipped_buy, n_skipped_sell, n_breached, n_errors, n_no_price)
     elif n_open:
         log.info("ENSURE-STOPS: all %d stops active", n_open)
 

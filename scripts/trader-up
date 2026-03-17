@@ -1,0 +1,63 @@
+#!/usr/bin/env bash
+# Start trader and/or tick_collector in a tmux session.
+#
+# Usage:
+#   trader-up              Start both (or attach if already running)
+#   trader-up trader       Start trader only
+#   trader-up tick         Start tick_collector only
+
+set -euo pipefail
+cd "$(dirname "$0")/.."
+
+SESSION="trader"
+TARGET="${1:-all}"
+
+start_trader() {
+    if tmux has-session -t "$SESSION" 2>/dev/null && tmux list-windows -t "$SESSION" -F '#{window_name}' | grep -qx "trader"; then
+        echo "trader window already running."
+        return
+    fi
+    local CMD="uv run python -m trader.main; echo '[trader exited — press Enter to close]'; read"
+    if tmux has-session -t "$SESSION" 2>/dev/null; then
+        tmux new-window -t "$SESSION" -n "trader" "$CMD"
+    else
+        tmux new-session -d -s "$SESSION" -n "trader" "$CMD"
+    fi
+    echo "Started trader."
+}
+
+start_tick() {
+    if tmux has-session -t "$SESSION" 2>/dev/null && tmux list-windows -t "$SESSION" -F '#{window_name}' | grep -qx "tick_collector"; then
+        echo "tick_collector window already running."
+        return
+    fi
+    local CMD="uv run python -m tick_collector; echo '[tick_collector exited — press Enter to close]'; read"
+    if tmux has-session -t "$SESSION" 2>/dev/null; then
+        tmux new-window -t "$SESSION" -n "tick_collector" "$CMD"
+    else
+        tmux new-session -d -s "$SESSION" -n "tick_collector" "$CMD"
+    fi
+    echo "Started tick_collector."
+}
+
+case "$TARGET" in
+    all)
+        if tmux has-session -t "$SESSION" 2>/dev/null; then
+            echo "Session '$SESSION' already running. Attaching..."
+            exec tmux attach -t "$SESSION"
+        fi
+        start_trader
+        start_tick
+        ;;
+    trader)  start_trader ;;
+    tick)    start_tick ;;
+    *)
+        echo "Usage: trader-up [trader|tick]" >&2
+        exit 1
+        ;;
+esac
+
+# Select first window and attach
+tmux select-window -t "$SESSION:0" 2>/dev/null || true
+echo "Attaching... (detach with Ctrl-b d)"
+exec tmux attach -t "$SESSION"

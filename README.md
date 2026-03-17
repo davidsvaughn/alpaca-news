@@ -20,9 +20,48 @@ cp .env.example .env
 # Edit .env — set API keys and preferences (see .env.example for all options)
 ```
 
-## Running the System
+## Quick Start
+
+Both services (trader + tick collector) run inside a single **tmux session** with separate windows. Requires tmux (`sudo apt install tmux`).
+
+```bash
+# Start both services (creates tmux session, attaches)
+./scripts/trader-up
+
+# Stop both services
+./scripts/trader-down
+```
+
+**Start/stop individually:**
+
+```bash
+./scripts/trader-up trader       # start trader only
+./scripts/trader-up tick         # start tick_collector only
+./scripts/trader-down trader     # stop trader only (tick_collector keeps running)
+./scripts/trader-down tick       # stop tick_collector only (trader keeps running)
+```
+
+**While attached to tmux:**
+
+| Key | Action |
+|-----|--------|
+| `Ctrl-b n` | Next window (trader ↔ tick_collector) |
+| `Ctrl-b p` | Previous window |
+| `Ctrl-b d` | Detach (processes keep running in background) |
+
+**Reattach later:** `tmux attach -t trader`
+
+**Note:** `trader-down` kills the process(es). `trader-up` always starts fresh — it does not reattach to old processes. If the session is already running, `trader-up` (with no args) just attaches to it.
+
+**Prerequisites:** TimescaleDB must be running first: `docker compose up -d`
+
+---
+
+## Running the System (Manual)
 
 The system has two independent processes: the **trader app** and the **tick collector**. They communicate only through a shared SQLite database (`data/trader.db`).
+
+> **Tip:** The `trader-up` / `trader-down` scripts above handle all of this automatically. The manual commands below are for reference or if you prefer not to use tmux.
 
 ### Trader App
 
@@ -170,11 +209,13 @@ Or use the **Reauthorize Schwab** button on the Config page in the dashboard. Th
 
 **Both the trader app and tick collector use Schwab tokens.** If the token expires, both will need a reauth followed by restart.
 
-### Startup Order (recommended)
+### Startup Order (manual)
 
 1. **TimescaleDB**: `docker compose up -d` (if not already running)
 2. **Trader app**: `uv run python -m trader.main` (populates holdings in `trader.db`)
 3. **Tick collector**: `uv run python -m tick_collector` (reads holdings, starts streaming)
+
+Or just: `docker compose up -d && ./scripts/trader-up`
 
 In practice, `trader.db` persists on disk, so if the trader was previously running the tick collector can start in any order. But on a fresh start, the trader should go first.
 
