@@ -263,3 +263,5 @@ Because replacement buys fail silently (root cause 1), the Alpaca portfolio runs
 ---
 
 *Analysis performed 2026-03-17. Data covers Pair 1 from 2026-03-13 to 2026-03-17 (2 trading days) and Pair 2 from 2026-03-16 to 2026-03-17 (1 trading day).*
+
+*Investigation process and SQL query patterns are documented in [docs/skills/PORTFOLIO-DIVERGENCE.md](../skills/PORTFOLIO-DIVERGENCE.md).*

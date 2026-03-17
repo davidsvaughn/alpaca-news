@@ -327,6 +327,27 @@ When cross-referencing events, convert to the same timezone.
 
 To match the "same trade" across two portfolios, join on `entry_snapshot_id AND symbol`. This works because both portfolios receive the same signal from the same snapshot.
 
+## Writing a report
+
+Every divergence analysis should produce a written report in `docs/reports/`. This creates a permanent record of findings that can be referenced later and compared against future analyses.
+
+**File naming:** `docs/reports/DIVERGENCE-ANALYSIS-YYYY-MM-DD.md`
+
+**Report should include:**
+1. **Objective** — What question prompted the analysis
+2. **Portfolios analyzed** — Config IDs, names, Alpaca accounts, key parameters, any config mismatches
+3. **Methodology** — What data was examined and how
+4. **Trade history overview** — Total trades, exit reason breakdowns, current holdings per portfolio
+5. **Matched trade analysis** — Aggregate and per-trade comparison (entry slippage, exit reason concordance, P&L)
+6. **Unmatched trades** — Trades in only one portfolio, with P&L impact
+7. **Full divergence accounting** — Table quantifying each root cause's contribution in percentage points
+8. **Root causes** — Detailed explanation of each, with code references
+9. **Recommendations** — Prioritized by estimated P&L impact
+10. **Reference back to this skills file** — Include a line like: *"Investigation process and SQL query patterns are documented in [docs/skills/PORTFOLIO-DIVERGENCE.md](../skills/PORTFOLIO-DIVERGENCE.md)."*
+
+**Previous reports:**
+- [DIVERGENCE-ANALYSIS-2026-03-17.md](../reports/DIVERGENCE-ANALYSIS-2026-03-17.md) — First analysis, found sell_fill race condition, stop-market gap risk, entry slippage patterns
+
 ## Cross-references
 
 - [DIAGNOSTICS.md](DIAGNOSTICS.md) — General debugging, log sources, SQL patterns
