@@ -11,18 +11,26 @@ set -euo pipefail
 SESSION="trader"
 TARGET="${1:-all}"
 
-if ! tmux has-session -t "$SESSION" 2>/dev/null; then
-    echo "No '$SESSION' session running."
-    exit 0
-fi
+# Clean up orphaned processes that may survive a crash.
+# pkill returns 1 if no match — || true prevents set -e from aborting.
+cleanup_trader() {
+    pkill -f "trader.main" 2>/dev/null || true
+    pkill -f "insight_sentry_news" 2>/dev/null || true
+    pkill -f "alpaca_news.py" 2>/dev/null || true
+}
+
+cleanup_tick() {
+    pkill -f "python -m tick_collector" 2>/dev/null || true
+}
 
 kill_window() {
     local WINDOW="$1"
-    if tmux list-windows -t "$SESSION" -F '#{window_name}' | grep -qx "$WINDOW"; then
+    if tmux has-session -t "$SESSION" 2>/dev/null && \
+       tmux list-windows -t "$SESSION" -F '#{window_name}' | grep -qx "$WINDOW"; then
         tmux kill-window -t "$SESSION:$WINDOW"
         echo "Stopped $WINDOW."
     else
-        echo "$WINDOW is not running."
+        echo "$WINDOW tmux window not running."
     fi
     # If no windows remain, session is already gone
     if ! tmux has-session -t "$SESSION" 2>/dev/null; then
@@ -32,11 +40,26 @@ kill_window() {
 
 case "$TARGET" in
     all)
-        tmux kill-session -t "$SESSION"
-        echo "Stopped session '$SESSION' (trader + tick_collector)."
+        if tmux has-session -t "$SESSION" 2>/dev/null; then
+            tmux kill-session -t "$SESSION"
+            echo "Stopped session '$SESSION'."
+        else
+            echo "No '$SESSION' session running."
+        fi
+        cleanup_trader
+        cleanup_tick
+        echo "Cleaned up any orphaned processes."
         ;;
-    trader)  kill_window "trader" ;;
-    tick)    kill_window "tick_collector" ;;
+    trader)
+        kill_window "trader"
+        cleanup_trader
+        echo "Cleaned up any orphaned trader/websocket processes."
+        ;;
+    tick)
+        kill_window "tick_collector"
+        cleanup_tick
+        echo "Cleaned up any orphaned tick_collector processes."
+        ;;
     *)
         echo "Usage: trader-down [trader|tick]" >&2
         exit 1

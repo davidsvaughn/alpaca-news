@@ -53,6 +53,8 @@ Both services (trader + tick collector) run inside a single **tmux session** wit
 
 **Note:** `trader-down` kills the process(es). `trader-up` always starts fresh — it does not reattach to old processes. If the session is already running, `trader-up` (with no args) just attaches to it.
 
+**Crash safety:** `trader-down` always does a `pkill` sweep after killing the tmux session, catching any orphaned processes (trader, news websockets, tick_collector) that survived a crash. Safe to run even if the tmux session is already gone.
+
 **Prerequisites:** TimescaleDB must be running first: `docker compose up -d`
 
 ---
