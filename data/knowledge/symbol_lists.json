@@ -1957,7 +1957,12 @@
     "GLBS",
     "DFLI",
     "CHCI",
-    "ADIA"
+    "ADIA",
+    "FRD",
+    "CTEC",
+    "ALST",
+    "STGZ",
+    "STM"
   ],
   "crypto": [],
   "rejected": [
@@ -2166,7 +2171,8 @@
     "AIF",
     "NPCD",
     "PLZL",
-    "AIB"
+    "AIB",
+    "TPFG"
   ],
-  "last_updated": "2026-03-17T13:36:21.397153+00:00"
+  "last_updated": "2026-03-17T16:01:39.797617+00:00"
 }

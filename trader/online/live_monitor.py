@@ -31,9 +31,11 @@ from trader.db.database import (
     count_holding_watches,
     get_active_live_configs,
     get_all_live_configs,
+    get_watch,
     get_live_config,
     get_active_watches,
     insert_watch,
+    update_watch,
     update_watch_if_current_status,
 )
 from trader.market.backtest import (
@@ -124,6 +126,39 @@ class LiveExitMonitor:
         )
         return None
 
+    def _persist_watch_builder(self, watch_id: str, builder: WatchBuilder) -> None:
+        """Write the current builder state unconditionally."""
+        update_watch(self.db, watch_id, builder.to_watch().to_dict())
+
+    def _mark_exit_pending(
+        self,
+        *,
+        watch_id: str,
+        builder: WatchBuilder,
+        reason: str,
+    ) -> None:
+        """Persist the intended exit reason before submitting the sell order."""
+        builder.mark_exit_pending(reason)
+        self._persist_watch_builder(watch_id, builder)
+
+    def _watch_already_exited_for_sell(
+        self,
+        *,
+        watch_id: str,
+        sell_order_id: str | None,
+        expected_reason: str,
+    ) -> bool:
+        """Check whether another path already completed this sell for the same watch."""
+        current = get_watch(self.db, watch_id)
+        if not current:
+            return False
+        if current.get("status") not in {"exited", "cooling_off", "retrospective", "sealed"}:
+            return False
+        if sell_order_id and current.get("alpaca_sell_order_id") != sell_order_id:
+            return False
+        exit_reason = ((current.get("exit") or {}).get("reason") or "")
+        return exit_reason in {expected_reason, "sell_fill"}
+
     def run_cycle(self) -> None:
         """Run one check cycle across all active watches."""
         watches = get_active_watches(self.db)
@@ -144,13 +179,13 @@ class LiveExitMonitor:
 
         for watch_dict in watches:
             try:
+                status = watch_dict.get("status")
                 cfg_id = str(watch_dict.get("live_config_id") or "")
-                if cfg_id:
+                if status == "holding" and cfg_id:
                     if cfg_id not in known_config_ids:
                         continue
                     if cfg_id not in active_config_ids:
                         continue
-                status = watch_dict.get("status")
                 if status == "holding":
                     self._check_holding(watch_dict)
                 elif status == "exited":
@@ -371,6 +406,12 @@ class LiveExitMonitor:
                     from trader.market.alpaca_broker import ALPACA_STOP_CANCEL_SETTLE_TIMEOUT
                     broker._wait_for_sell_orders_clear(symbol, timeout_s=ALPACA_STOP_CANCEL_SETTLE_TIMEOUT)
 
+                self._mark_exit_pending(
+                    watch_id=watch_id,
+                    builder=builder,
+                    reason=result.reason,
+                )
+
                 # Submit sell order and store its ID on the watch so the
                 # stream handler can retroactively update the exit price
                 # if the fill arrives after our timeout.
@@ -378,9 +419,7 @@ class LiveExitMonitor:
                     sell_result = broker.close_position(symbol)
                     if sell_result:
                         builder.alpaca_sell_order_id = sell_result.order_id
-                        # Persist the sell order ID immediately
-                        from trader.db.database import update_watch
-                        update_watch(self.db, watch_id, builder.to_watch().to_dict())
+                        self._persist_watch_builder(watch_id, builder)
 
                         confirmed = broker.wait_for_fill(
                             sell_result.order_id,
@@ -388,12 +427,16 @@ class LiveExitMonitor:
                         )
                         if confirmed and confirmed.filled_avg_price:
                             exit_price = confirmed.filled_avg_price
+                            builder.clear_exit_pending()
                             log.info("ALPACA SELL CONFIRMED: %s price=%.2f qty=%s",
                                      symbol, exit_price, confirmed.filled_qty)
                 except TimeoutError:
                     log.warning("Alpaca sell timed out for %s — using bar price %.2f (order left open, stream will update)",
                                 symbol, exit_price)
                 except Exception:
+                    if not builder.alpaca_sell_order_id:
+                        builder.clear_exit_pending()
+                        self._persist_watch_builder(watch_id, builder)
                     log.exception("Alpaca sell failed for %s — using bar price %.2f", symbol, exit_price)
 
             builder.record_exit(price=exit_price, reason=result.reason)
@@ -428,7 +471,14 @@ class LiveExitMonitor:
             expected_status="holding",
         )
         if not ok:
-            log.info("Skipping stale holding update for %s (%s): status changed concurrently", symbol, watch_id)
+            if self._watch_already_exited_for_sell(
+                watch_id=watch_id,
+                sell_order_id=builder.alpaca_sell_order_id,
+                expected_reason=result.reason if result.should_exit else "",
+            ):
+                log.info("Sell for %s (%s) already recorded by concurrent stream/update path", symbol, watch_id)
+            else:
+                log.info("Skipping stale holding update for %s (%s): status changed concurrently", symbol, watch_id)
 
     # ------------------------------------------------------------------
     # Exited → cooling_off transition
@@ -590,6 +640,39 @@ class LivePortfolioManager:
         self.collector = collector
         self.market = market
         self.broker_pool = broker_pool  # When set, buys execute Alpaca orders
+
+    def _persist_watch_builder(self, watch_id: str, builder: WatchBuilder) -> None:
+        """Write the current builder state unconditionally."""
+        update_watch(self.db, watch_id, builder.to_watch().to_dict())
+
+    def _mark_exit_pending(
+        self,
+        *,
+        watch_id: str,
+        builder: WatchBuilder,
+        reason: str,
+    ) -> None:
+        """Persist the intended exit reason before submitting the sell order."""
+        builder.mark_exit_pending(reason)
+        self._persist_watch_builder(watch_id, builder)
+
+    def _watch_already_exited_for_sell(
+        self,
+        *,
+        watch_id: str,
+        sell_order_id: str | None,
+        expected_reason: str,
+    ) -> bool:
+        """Check whether another path already completed this sell for the same watch."""
+        current = get_watch(self.db, watch_id)
+        if not current:
+            return False
+        if current.get("status") not in {"exited", "cooling_off", "retrospective", "sealed"}:
+            return False
+        if sell_order_id and current.get("alpaca_sell_order_id") != sell_order_id:
+            return False
+        exit_reason = ((current.get("exit") or {}).get("reason") or "")
+        return exit_reason in {expected_reason, "sell_fill"}
 
     def evaluate_snapshot(
         self,
@@ -1204,14 +1287,19 @@ class LivePortfolioManager:
                 from trader.market.alpaca_broker import ALPACA_STOP_CANCEL_SETTLE_TIMEOUT
                 broker._wait_for_sell_orders_clear(symbol, timeout_s=ALPACA_STOP_CANCEL_SETTLE_TIMEOUT)
 
+            self._mark_exit_pending(
+                watch_id=watch_id,
+                builder=builder,
+                reason="replaced",
+            )
+
             # Submit sell and store its ID so the stream handler can
             # retroactively update the exit price on late fills.
             try:
                 sell_result = broker.close_position(symbol)
                 if sell_result:
                     builder.alpaca_sell_order_id = sell_result.order_id
-                    from trader.db.database import update_watch
-                    update_watch(self.db, watch_id, builder.to_watch().to_dict())
+                    self._persist_watch_builder(watch_id, builder)
 
                     confirmed = broker.wait_for_fill(
                         sell_result.order_id,
@@ -1219,6 +1307,7 @@ class LivePortfolioManager:
                     )
                     if confirmed and confirmed.filled_avg_price:
                         exit_price = confirmed.filled_avg_price
+                        builder.clear_exit_pending()
                         log.info("REPLACE SELL CONFIRMED: %s price=%.2f qty=%s",
                                  symbol, exit_price, confirmed.filled_qty)
             except TimeoutError:
@@ -1226,6 +1315,9 @@ class LivePortfolioManager:
                             symbol)
                 return False
             except Exception:
+                if not builder.alpaca_sell_order_id:
+                    builder.clear_exit_pending()
+                    self._persist_watch_builder(watch_id, builder)
                 log.exception("REPLACE SELL FAILED for %s — aborting replacement", symbol)
                 return False
         else:
@@ -1255,6 +1347,13 @@ class LivePortfolioManager:
             expected_status="holding",
         )
         if not ok:
+            if self._watch_already_exited_for_sell(
+                watch_id=watch_id,
+                sell_order_id=builder.alpaca_sell_order_id,
+                expected_reason="replaced",
+            ):
+                log.info("Replacement exit for %s (%s) already recorded by concurrent stream/update path", symbol, watch_id)
+                return True
             log.info("Skipping stale replacement exit for %s (%s): status changed concurrently", symbol, watch_id)
             return False
 

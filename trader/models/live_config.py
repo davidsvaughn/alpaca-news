@@ -64,6 +64,10 @@ class LiveConfig:
     alpaca_account_id: str | None = None  # e.g. "PA31QXNAPB1H"
     alpaca_account_name: str | None = None  # e.g. "AlpacaPaper1"
 
+    # Archive state (preserve portfolio history without operational clutter)
+    archived: bool = False
+    archived_at: str | None = None
+
     # Metadata
     created_at: str = ""
     updated_at: str = ""

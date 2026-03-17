@@ -33,6 +33,7 @@ from trader.db.database import (
     get_active_watches,
     get_all_follow_ups,
     get_active_live_configs,
+    get_archived_live_configs,
     get_all_live_configs,
     get_all_snapshots,
     get_all_watches,
@@ -50,6 +51,7 @@ from trader.db.database import (
     insert_watch,
     update_live_config,
     update_watch,
+    update_watch_if_current_status,
     activate_live_config,
     deactivate_live_config,
     delete_live_config,
@@ -160,6 +162,228 @@ def create_app(
             return dt.strftime("%b %d, %Y %-I:%M:%S %p")
 
     templates.env.filters["fmt_dt"] = _fmt_dt
+
+    def _sync_alpaca_streams(reason: str) -> None:
+        try:
+            from trader.online import orchestrator as _orch
+            _orch.sync_alpaca_trade_streams(db=db, bus=bus, reason=reason)
+        except Exception:
+            pass
+
+    def _resolve_watch_exit_price(watch: dict[str, Any]) -> float:
+        entry_price = float(((watch.get("entry") or {}).get("price")) or 0.0)
+        symbol = str(watch.get("symbol") or "").upper()
+        if not symbol:
+            return entry_price if entry_price > 0 else 0.01
+
+        try:
+            market = getattr(app.state, "market", None)
+            if market and hasattr(market, "get_quote"):
+                quote = market.get_quote(symbol)
+                price = extract_quote_price(quote)
+                if price and price > 0:
+                    return float(price)
+            if market and hasattr(market, "get_latest_minute_closes"):
+                closes = market.get_latest_minute_closes([symbol]) or {}
+                price = closes.get(symbol)
+                if price and price > 0:
+                    return float(price)
+        except Exception:
+            pass
+
+        return entry_price if entry_price > 0 else 0.01
+
+    def _force_exit_holding_watches_for_config(
+        config_id: str,
+        *,
+        reason: str,
+        allowed_symbols: set[str] | None = None,
+    ) -> list[dict[str, Any]]:
+        force_exited: list[dict[str, Any]] = []
+        for watch in get_active_watches(db):
+            if watch.get("status") != "holding":
+                continue
+            if watch.get("live_config_id") != config_id:
+                continue
+            symbol = str(watch.get("symbol") or "").upper()
+            if allowed_symbols is not None and symbol not in allowed_symbols:
+                continue
+
+            builder = WatchBuilder.from_dict(watch)
+            exit_price = _resolve_watch_exit_price(watch)
+            builder.record_exit(price=exit_price, reason=reason)
+            builder.clear_exit_pending()
+            builder.alpaca_stop_order_id = None
+            builder.alpaca_stop_price = None
+            updated = builder.to_watch()
+            ok = update_watch_if_current_status(
+                db,
+                watch["watch_id"],
+                updated.to_dict(),
+                expected_status="holding",
+            )
+            if not ok:
+                continue
+
+            force_exited.append(
+                {
+                    "watch_id": watch["watch_id"],
+                    "symbol": symbol,
+                    "price": exit_price,
+                }
+            )
+            if bus:
+                bus.publish(PipelineEvent(
+                    type="watch_exited",
+                    payload={
+                        "watch_id": watch["watch_id"],
+                        "symbol": symbol,
+                        "reason": reason,
+                        "exit_price": exit_price,
+                        "pnl_pct": updated.exit.realized_pnl_pct if updated.exit else 0,
+                    },
+                ))
+        return force_exited
+
+    def _archive_live_config(config_id: str) -> JSONResponse:
+        cfg_dict = get_live_config(db, config_id)
+        if not cfg_dict:
+            return JSONResponse({"error": "not_found"}, status_code=404)
+        if cfg_dict.get("archived"):
+            return JSONResponse(
+                {
+                    "status": "already_archived",
+                    "config_id": config_id,
+                    "archived_at": cfg_dict.get("archived_at"),
+                },
+            )
+
+        liquidation: dict[str, Any] = {
+            "attempted": 0,
+            "submitted": 0,
+            "closed": [],
+            "failed": [],
+        }
+
+        deactivate_live_config(db, config_id)
+        _sync_alpaca_streams(reason=f"archive-start:{config_id}")
+
+        alpaca_id = cfg_dict.get("alpaca_account_id")
+        if alpaca_id:
+            try:
+                from trader.market.alpaca_broker import AlpacaAccountRegistry, AlpacaBroker
+                from trader.market.alpaca_reconcile import reconcile
+                from trader.models.live_config import LiveConfig
+
+                registry = AlpacaAccountRegistry()
+                creds = registry.get(alpaca_id)
+                if not creds:
+                    liquidation["skipped_reason"] = "alpaca_account_missing"
+                    force_exited = _force_exit_holding_watches_for_config(
+                        config_id,
+                        reason="alpaca_account_missing_on_archive",
+                    )
+                    liquidation["force_exited"] = sorted(x["symbol"] for x in force_exited)
+                else:
+                    broker = AlpacaBroker(
+                        api_key=creds.api_key,
+                        secret_key=creds.secret_key,
+                        paper=creds.paper,
+                        account_id=alpaca_id,
+                        name=creds.name,
+                    )
+                    positions = broker.get_positions()
+                    liquidation["attempted"] = len(positions)
+                    for pos in positions:
+                        try:
+                            sell = broker.close_position_and_confirm(pos.symbol)
+                            if sell is not None:
+                                liquidation["submitted"] += 1
+                                liquidation["closed"].append(
+                                    {
+                                        "symbol": pos.symbol,
+                                        "qty": pos.qty,
+                                        "price": sell.filled_avg_price,
+                                        "order_id": sell.order_id,
+                                    }
+                                )
+                        except Exception as exc:
+                            liquidation["failed"].append(
+                                {"symbol": pos.symbol, "error": str(exc)}
+                            )
+
+                    reconcile(
+                        broker=broker,
+                        db=db,
+                        live_config_id=config_id,
+                        live_config=LiveConfig.from_dict(cfg_dict),
+                    )
+
+                    safe_to_force_exit: set[str] = set()
+                    for watch in get_active_watches(db):
+                        if watch.get("status") != "holding":
+                            continue
+                        if watch.get("live_config_id") != config_id:
+                            continue
+                        symbol = str(watch.get("symbol") or "").upper()
+                        try:
+                            if broker.get_position(symbol) is None:
+                                safe_to_force_exit.add(symbol)
+                        except Exception:
+                            pass
+
+                    if safe_to_force_exit:
+                        force_exited = _force_exit_holding_watches_for_config(
+                            config_id,
+                            reason="archive_force_exit",
+                            allowed_symbols=safe_to_force_exit,
+                        )
+                        liquidation["force_exited"] = sorted(x["symbol"] for x in force_exited)
+            except Exception as exc:
+                return JSONResponse(
+                    {"error": f"archive_liquidation_error: {exc}", "config_id": config_id},
+                    status_code=500,
+                )
+        else:
+            force_exited = _force_exit_holding_watches_for_config(
+                config_id,
+                reason="archived_without_alpaca",
+            )
+            liquidation["force_exited"] = sorted(x["symbol"] for x in force_exited)
+
+        holding_count = count_holding_watches(db, live_config_id=config_id)
+        if holding_count > 0:
+            return JSONResponse(
+                {
+                    "error": (
+                        f"cannot_archive_with_holdings: config {config_id} still has "
+                        f"{holding_count} holding watch(es) after archive cleanup."
+                    ),
+                    "config_id": config_id,
+                    "alpaca_account_id": alpaca_id,
+                    "liquidation": liquidation,
+                },
+                status_code=409,
+            )
+
+        cfg_dict = get_live_config(db, config_id)
+        if not cfg_dict:
+            return JSONResponse({"error": "not_found"}, status_code=404)
+        cfg_dict["active"] = False
+        cfg_dict["archived"] = True
+        cfg_dict["archived_at"] = datetime.now(tz=timezone.utc).isoformat()
+        update_live_config(db, config_id, cfg_dict)
+        _sync_alpaca_streams(reason=f"archive-finish:{config_id}")
+
+        return JSONResponse(
+            {
+                "status": "archived",
+                "config_id": config_id,
+                "alpaca_account_id": alpaca_id,
+                "archived_at": cfg_dict["archived_at"],
+                "liquidation": liquidation,
+            },
+        )
 
     def _parse_conf_min(value: str | None) -> float | None:
         """Parse a signed confidence minimum from a percentage string.
@@ -582,6 +806,18 @@ def create_app(
             context={
                 "active_page": "positions",
                 "live_configs": [_DictObj(c) for c in active_cfgs],
+            },
+        )
+
+    @app.get("/archives", response_class=HTMLResponse)
+    async def archives_page(request: Request):
+        archived_cfgs = get_archived_live_configs(db)
+        return templates.TemplateResponse(
+            request=request,
+            name="archives.html",
+            context={
+                "active_page": "archives",
+                "archived_configs": [_DictObj(c) for c in archived_cfgs],
             },
         )
 
@@ -1455,22 +1691,14 @@ def create_app(
     # Positions page (HTMX endpoints)
     # ------------------------------------------------------------------
 
-    @app.get("/api/positions", response_class=HTMLResponse)
-    async def api_positions(request: Request, section: str | None = None):
-        """Render positions table partial for HTMX.
-
-        Sections: 'holding', 'cooling_off', 'closed', or None (all).
-        """
-        from trader.db.database import get_active_live_configs
-
+    def _render_portfolio_table(request: Request, *, archived_only: bool) -> HTMLResponse:
+        """Render active or archived portfolio cards."""
         watches = get_all_watches(db, limit=500)
-        active_cfgs = get_active_live_configs(db)
+        selected_cfgs = get_archived_live_configs(db) if archived_only else get_active_live_configs(db)
 
-        # Build config lookup
-        cfg_map = {c["config_id"]: c for c in active_cfgs}
+        cfg_map = {c["config_id"]: c for c in selected_cfgs}
 
-        # Group watches by portfolio (live_config_id)
-        def _compute_stats(watch_list):
+        def _compute_stats(watch_list: list[dict[str, Any]]) -> dict[str, Any]:
             holding, cooling, closed = [], [], []
             for w in watch_list:
                 s = w.get("status", "")
@@ -1506,43 +1734,45 @@ def create_app(
                 },
             }
 
-        # Build per-portfolio data
-        portfolios = []
-        by_config: dict[str, list] = {}
-        legacy_watches = []
+        portfolios: list[dict[str, Any]] = []
+        by_config: dict[str, list[dict[str, Any]]] = {}
+        legacy_watches: list[dict[str, Any]] = []
 
         for w in watches:
             cid = w.get("live_config_id")
             if cid:
                 by_config.setdefault(cid, []).append(w)
-            else:
+            elif not archived_only:
                 legacy_watches.append(w)
 
-        # Active portfolios first
-        for cfg_dict in active_cfgs:
+        for cfg_dict in selected_cfgs:
             cid = cfg_dict["config_id"]
             data = _compute_stats(by_config.get(cid, []))
             data["config"] = cfg_dict
             portfolios.append(data)
 
-        # Inactive portfolios with watches
         for cid, ws in by_config.items():
-            if cid not in cfg_map:
-                cfg_dict = get_live_config(db, cid)
-                if cfg_dict:
-                    # Config still exists (just inactive) — show as portfolio
+            if cid in cfg_map:
+                continue
+            cfg_dict = get_live_config(db, cid)
+            if not cfg_dict:
+                if not archived_only:
+                    legacy_watches.extend(ws)
+                continue
+            if archived_only:
+                if cfg_dict.get("archived"):
                     data = _compute_stats(ws)
                     data["config"] = cfg_dict
                     portfolios.append(data)
-                else:
-                    # Config was deleted — treat watches as legacy
-                    legacy_watches.extend(ws)
+            else:
+                if not cfg_dict.get("archived"):
+                    data = _compute_stats(ws)
+                    data["config"] = cfg_dict
+                    portfolios.append(data)
 
-        # Legacy watches (no config)
         legacy_data = _compute_stats(legacy_watches)
 
-        # Fetch current prices for all holding symbols
-        all_holding_symbols = set()
+        all_holding_symbols: set[str] = set()
         for p in portfolios:
             for w in p["holding"]:
                 all_holding_symbols.add(w["symbol"])
@@ -1563,9 +1793,8 @@ def create_app(
                             if p_val is not None:
                                 prices[sym.upper()] = p_val
             except Exception:
-                pass  # prices stay empty — template handles gracefully
+                pass
 
-        # Inject current price + unrealized P&L + backfill qty into holding watches
         def _parse_iso_dt(value: Any) -> datetime | None:
             if not value:
                 return None
@@ -1626,7 +1855,7 @@ def create_app(
 
             return max(total, 0)
 
-        def _hold_minutes(w: dict) -> tuple[int | None, int | None]:
+        def _hold_minutes(w: dict[str, Any]) -> tuple[int | None, int | None]:
             entry = w.get("entry") or {}
             exit_data = w.get("exit") or {}
             entry_time = entry.get("time") or w.get("created_at")
@@ -1639,15 +1868,14 @@ def create_app(
             market_minutes = _market_minutes_between(dt_entry, dt_exit)
             return wall_minutes, market_minutes
 
-        def _backfill_qty(w: dict, cfg: dict | None = None) -> dict:
-            # Backfill qty for older watches that don't have it
+        def _backfill_qty(w: dict[str, Any], cfg: dict[str, Any] | None = None) -> dict[str, Any]:
             if not w.get("qty") and cfg:
                 qty = backfill_watch_qty(w, cfg)
                 if qty and qty > 0:
                     w["qty"] = qty
             return w
 
-        def _enrich_exited(w: dict, cfg: dict | None = None) -> dict:
+        def _enrich_exited(w: dict[str, Any], cfg: dict[str, Any] | None = None) -> dict[str, Any]:
             _backfill_qty(w, cfg)
             wall_mins, market_mins = _hold_minutes(w)
             w["hold_minutes"] = wall_mins
@@ -1661,7 +1889,7 @@ def create_app(
             w["hold_market_hours_text"] = market_text
             return w
 
-        def _enrich_holding(w: dict, cfg: dict | None = None) -> dict:
+        def _enrich_holding(w: dict[str, Any], cfg: dict[str, Any] | None = None) -> dict[str, Any]:
             sym = w.get("symbol", "").upper()
             cur = prices.get(sym)
             w["current_price"] = cur
@@ -1671,10 +1899,7 @@ def create_app(
                 cur,
                 str(entry.get("direction") or "bullish"),
             )
-            if pnl is not None:
-                w["unrealized_pnl"] = round(pnl, 2)
-            else:
-                w["unrealized_pnl"] = None
+            w["unrealized_pnl"] = round(pnl, 2) if pnl is not None else None
             _backfill_qty(w, cfg)
             return w
 
@@ -1686,9 +1911,7 @@ def create_app(
         legacy_data["cooling"] = [_enrich_exited(w) for w in legacy_data["cooling"]]
         legacy_data["closed"] = [_enrich_exited(w) for w in legacy_data["closed"]]
 
-        # Compute portfolio dollar value for each portfolio
-        def _compute_sim(p: dict, *, alpaca_equity: float | None = None) -> dict[str, Any]:
-            """Portfolio dollar value. Uses Alpaca equity when linked, sim otherwise."""
+        def _compute_sim(p: dict[str, Any], *, alpaca_equity: float | None = None) -> dict[str, Any]:
             cfg = p["config"]
             starting = cfg.get("starting_capital", 0) if isinstance(cfg, dict) else getattr(cfg, "starting_capital", 0)
             if not starting or starting <= 0:
@@ -1696,7 +1919,6 @@ def create_app(
 
             trade_count = len(p.get("holding", [])) + len(p.get("closed", [])) + len(p.get("cooling", []))
 
-            # If linked to Alpaca, use real equity (source of truth)
             if alpaca_equity is not None:
                 ending = alpaca_equity
                 return_pct = (ending - starting) / starting * 100 if starting > 0 else 0.0
@@ -1709,7 +1931,6 @@ def create_app(
                 ending = valuation["equity"]
                 return_pct = (ending - starting) / starting * 100 if starting > 0 else 0.0
 
-            # Daily return (CAGR-based) over trading-day span
             sim_daily_pct = None
             sim_span_days = None
             created_at = cfg.get("created_at", "") if isinstance(cfg, dict) else getattr(cfg, "created_at", "")
@@ -1737,44 +1958,46 @@ def create_app(
                 "sim_span_days": sim_span_days,
             }
 
-        # Fetch Alpaca equity for linked accounts (one API call per account)
         alpaca_equity_by_account: dict[str, float] = {}
         alpaca_name_by_account: dict[str, str] = {}
-        try:
-            from trader.market.alpaca_broker import AlpacaAccountRegistry, AlpacaBroker
-            registry = AlpacaAccountRegistry()
-            linked_accounts = {
-                (cfg.get("alpaca_account_id") if isinstance(cfg, dict)
-                 else getattr(cfg, "alpaca_account_id", None))
-                for cfg in (p["config"] for p in portfolios)
-            } - {None}
-            for acct_id in linked_accounts:
-                creds = registry.get(acct_id)
-                if creds:
-                    alpaca_name_by_account[acct_id] = str(getattr(creds, "name", "") or "")
-                    try:
-                        broker = AlpacaBroker(
-                            api_key=creds.api_key, secret_key=creds.secret_key,
-                            paper=creds.paper, account_id=acct_id, name=creds.name,
-                        )
-                        acct = broker.get_account()
-                        alpaca_equity_by_account[acct_id] = acct.equity
-                    except Exception:
-                        pass  # fallback to sim calculation
-        except Exception:
-            pass  # no Alpaca configured — use sim for all
+        if not archived_only:
+            try:
+                from trader.market.alpaca_broker import AlpacaAccountRegistry, AlpacaBroker
+                registry = AlpacaAccountRegistry()
+                linked_accounts = {
+                    cfg.get("alpaca_account_id")
+                    for cfg in (p["config"] for p in portfolios)
+                    if cfg.get("active") and cfg.get("alpaca_account_id")
+                }
+                for acct_id in linked_accounts:
+                    creds = registry.get(acct_id)
+                    if creds:
+                        alpaca_name_by_account[acct_id] = str(getattr(creds, "name", "") or "")
+                        try:
+                            broker = AlpacaBroker(
+                                api_key=creds.api_key,
+                                secret_key=creds.secret_key,
+                                paper=creds.paper,
+                                account_id=acct_id,
+                                name=creds.name,
+                            )
+                            acct = broker.get_account()
+                            alpaca_equity_by_account[acct_id] = acct.equity
+                        except Exception:
+                            pass
+            except Exception:
+                pass
 
         for p in portfolios:
             cfg = p["config"]
             acct_id = cfg.get("alpaca_account_id") if isinstance(cfg, dict) else getattr(cfg, "alpaca_account_id", None)
-            alpaca_equity = alpaca_equity_by_account.get(acct_id) if acct_id else None
-            if acct_id and isinstance(cfg, dict):
+            alpaca_equity = alpaca_equity_by_account.get(acct_id) if acct_id and cfg.get("active") else None
+            if acct_id and isinstance(cfg, dict) and acct_id in alpaca_name_by_account:
                 cfg["alpaca_account_name"] = alpaca_name_by_account.get(acct_id, "")
             p["sim"] = _compute_sim(p, alpaca_equity=alpaca_equity)
             cfg_id = cfg.get("config_id") if isinstance(cfg, dict) else getattr(cfg, "config_id", None)
             p["equity_history"] = get_equity_history(db, cfg_id, limit=2000) if cfg_id else []
 
-        # Wrap for Jinja
         for p in portfolios:
             p["config"] = _DictObj(p["config"])
             p["holding"] = [_DictObj(w) for w in p["holding"]]
@@ -1785,6 +2008,12 @@ def create_app(
 
         context = {
             "portfolios": portfolios,
+            "portfolio_mode": "archived" if archived_only else "active",
+            "empty_message": (
+                "No archived portfolios yet."
+                if archived_only
+                else "No positions. Activate a portfolio and wait for matching snapshots."
+            ),
             "legacy": {
                 "holding": [_DictObj(w) for w in legacy_data["holding"]],
                 "cooling": [_DictObj(w) for w in legacy_data["cooling"]],
@@ -1797,6 +2026,16 @@ def create_app(
             name="partials/_positions_table.html",
             context=context,
         )
+
+    @app.get("/api/positions", response_class=HTMLResponse)
+    async def api_positions(request: Request, section: str | None = None):
+        """Render non-archived portfolio cards for HTMX."""
+        return _render_portfolio_table(request, archived_only=False)
+
+    @app.get("/api/archives", response_class=HTMLResponse)
+    async def api_archives(request: Request):
+        """Render archived portfolio cards for HTMX."""
+        return _render_portfolio_table(request, archived_only=True)
 
     # ------------------------------------------------------------------
     # Live config endpoints
@@ -1990,6 +2229,14 @@ def create_app(
     @app.post("/api/live/config/{config_id}/activate")
     async def api_live_config_activate(config_id: str):
         """Activate a live config."""
+        cfg_dict = get_live_config(db, config_id)
+        if not cfg_dict:
+            return JSONResponse({"error": "not_found"}, status_code=404)
+        if cfg_dict.get("archived"):
+            return JSONResponse(
+                {"error": "cannot_activate_archived_config", "config_id": config_id},
+                status_code=409,
+            )
         ok = activate_live_config(db, config_id)
         if not ok:
             return JSONResponse({"error": "not_found"}, status_code=404)
@@ -2012,6 +2259,11 @@ def create_app(
         except Exception:
             pass
         return {"status": "deactivated", "config_id": config_id}
+
+    @app.post("/api/live/config/{config_id}/archive")
+    async def api_live_config_archive(config_id: str):
+        """Archive a live config after liquidating Alpaca and ending holding watches."""
+        return _archive_live_config(config_id)
 
     @app.post("/api/live/config/{config_id}/pause")
     async def api_live_config_pause(config_id: str):

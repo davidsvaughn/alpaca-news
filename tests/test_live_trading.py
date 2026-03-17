@@ -19,7 +19,9 @@ from trader.db.database import (
     deactivate_live_config,
     delete_live_config,
     get_active_live_config,
+    get_active_live_configs,
     get_all_live_configs,
+    get_archived_live_configs,
     get_live_config,
     insert_live_config,
     insert_watch,
@@ -119,6 +121,8 @@ class TestLiveConfig:
         assert restored.exit_strategy == "volume_delta_divergence"
         assert restored.guard_stop_pct == 5.0
         assert restored.config_id.startswith("lc_")
+        assert restored.archived is False
+        assert restored.archived_at is None
 
     def test_db_crud(self, db, sample_config):
         # Insert
@@ -139,6 +143,9 @@ class TestLiveConfig:
         # Deactivate
         assert deactivate_live_config(db, sample_config.config_id)
         assert get_active_live_config(db) is None
+        fetched = get_live_config(db, sample_config.config_id)
+        assert fetched["archived"] is False
+        assert fetched["archived_at"] is None
         # Delete
         assert delete_live_config(db, sample_config.config_id)
         assert get_all_live_configs(db) == []
@@ -186,6 +193,23 @@ class TestLiveConfig:
         active = get_active_live_configs(db)
         assert len(active) == 1
         assert active[0]["config_id"] == cfg2.config_id
+
+    def test_archived_configs_excluded_from_active_queries(self, db, sample_config):
+        cfg = sample_config.to_dict()
+        cfg["archived"] = True
+        cfg["archived_at"] = "2026-03-17T12:00:00+00:00"
+        cfg["active"] = False
+        assert insert_live_config(db, config=cfg)
+
+        fetched = get_live_config(db, cfg["config_id"])
+        assert fetched is not None
+        assert fetched["archived"] is True
+        assert fetched["archived_at"] == "2026-03-17T12:00:00+00:00"
+        assert get_active_live_config(db) is None
+        assert get_active_live_configs(db) == []
+        archived = get_archived_live_configs(db)
+        assert len(archived) == 1
+        assert archived[0]["config_id"] == cfg["config_id"]
 
 
 # ---------------------------------------------------------------------------
@@ -561,6 +585,104 @@ class TestLivePortfolioManager:
 
 
 class TestLiveExitMonitor:
+    def test_alpaca_stream_sell_fill_uses_pending_exit_reason(self, db):
+        from trader.market.alpaca_stream import AlpacaTradeStream
+
+        wb = WatchBuilder.create_from_live_config(
+            snapshot_id="snap_1", symbol="AAPL", entry_price=150.0,
+            confidence=0.9, direction="bullish",
+            live_config_id="lc_1", exit_strategy="vdd", exit_params={},
+        )
+        wb.alpaca_buy_order_id = "buy_1"
+        wb.alpaca_sell_order_id = "sell_1"
+        wb.mark_exit_pending("replaced")
+        insert_watch(db, watch=wb.to_watch().to_dict())
+
+        stream = AlpacaTradeStream(
+            db=db,
+            api_key="key",
+            secret_key="secret",
+        )
+        stream._handle_sell_fill({
+            "order_id": "sell_1",
+            "symbol": "AAPL",
+            "filled_avg_price": 151.0,
+            "stop_price": None,
+        })
+
+        watches = get_active_watches(db)
+        assert len(watches) == 1
+        assert watches[0]["status"] == "exited"
+        assert watches[0]["exit"]["reason"] == "replaced"
+        assert watches[0]["pending_exit_reason"] is None
+        assert watches[0]["exit_in_flight"] is False
+
+    def test_exit_victim_returns_true_when_stream_records_exit_first(self, db):
+        from trader.market.alpaca_broker import OrderResult
+        from trader.online.live_monitor import LivePortfolioManager
+
+        cfg = LiveConfig.create(
+            name="Cfg 1", filters={}, allocation="none", allocation_params={},
+            starting_capital=100000.0, exit_strategy="volume_delta_divergence",
+            exit_params={"lookback": 80}, alpaca_account_id="PA_ACCOUNT_1",
+        )
+
+        wb = WatchBuilder.create_from_live_config(
+            snapshot_id="snap_1", symbol="AAPL", entry_price=150.0,
+            confidence=0.9, direction="bullish",
+            live_config_id=cfg.config_id, exit_strategy="vdd", exit_params={},
+        )
+        wb.alpaca_buy_order_id = "buy_1"
+        insert_watch(db, watch=wb.to_watch().to_dict())
+        victim = get_active_watches(db)[0]
+
+        class _Broker:
+            def cancel_order(self, order_id: str):
+                return None
+
+            def _wait_for_sell_orders_clear(self, symbol: str, timeout_s: float):
+                return None
+
+            def close_position(self, symbol: str):
+                return OrderResult(
+                    order_id="sell_1",
+                    symbol=symbol,
+                    side="sell",
+                    status="new",
+                )
+
+            def _resolve_fill_timeout(self, _timeout_s):
+                return 0.1
+
+            def wait_for_fill(self, order_id: str, timeout_s: float):
+                current = get_active_watches(db)[0]
+                builder = WatchBuilder.from_dict(current)
+                builder.record_exit(price=151.0, reason="replaced")
+                builder.clear_exit_pending()
+                update_watch(db, current["watch_id"], builder.to_watch().to_dict())
+                return OrderResult(
+                    order_id=order_id,
+                    symbol=current["symbol"],
+                    side="sell",
+                    status="filled",
+                    filled_qty=1.0,
+                    filled_avg_price=151.0,
+                )
+
+        class _Pool:
+            def get(self, _account_id: str):
+                return _Broker()
+
+        monitor = LivePortfolioManager(db=db, broker_pool=_Pool())
+
+        assert monitor._exit_victim(victim, cfg) is True
+
+        current = get_active_watches(db)[0]
+        assert current["status"] == "exited"
+        assert current["exit"]["reason"] == "replaced"
+        assert current["pending_exit_reason"] is None
+        assert current["exit_in_flight"] is False
+
     def test_seal_expired_cooling_off(self, db):
         from trader.online.live_monitor import LiveExitMonitor
 

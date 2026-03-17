@@ -1,0 +1,151 @@
+{% extends "base.html" %}
+
+{% block title %}alpaca-news | Archived Portfolios{% endblock %}
+
+{% block extra_css %}
+.config-badge { font-size: 0.75rem; }
+._section-toggle {
+  display: inline-flex;
+  align-items: center;
+  font-size: 0.9rem;
+  font-weight: 600;
+  line-height: 1.2;
+}
+._toggle-arrow {
+  display: inline-block;
+  margin-right: 5px;
+  color: #fd7e14;
+  font-size: 0.95em;
+  transition: transform 0.2s ease;
+  transform: rotate(0deg);
+  vertical-align: middle;
+}
+._toggle-link._is-open ._toggle-arrow {
+  transform: rotate(90deg);
+}
+{% endblock %}
+
+{% block content %}
+<div class="d-flex align-items-center mb-3">
+  <h2 class="mb-0 me-3">Archived Portfolios</h2>
+  {% if archived_configs %}
+    <span class="badge bg-secondary config-badge">{{ archived_configs|length }} archived</span>
+  {% else %}
+    <span class="badge bg-light text-dark border config-badge">No archived portfolios</span>
+  {% endif %}
+</div>
+
+{% if not archived_configs %}
+<div class="alert alert-secondary small mb-3">
+  Archive a portfolio from the <a href="/positions">Portfolios</a> page to preserve its history without leaving it in the operational view.
+</div>
+{% endif %}
+
+<div id="positions-content"
+     hx-get="/api/archives"
+     hx-trigger="load, every 60s"
+     hx-swap="innerHTML">
+  <div class="text-center text-muted py-3">Loading archived portfolios...</div>
+</div>
+
+<script>
+(function() {
+  var KEY = 'archives_collapse_state';
+  var CONTAINER_ID = 'positions-content';
+
+  function getContainer() {
+    return document.getElementById(CONTAINER_ID);
+  }
+
+  function getState() {
+    try {
+      var raw = localStorage.getItem(KEY);
+      if (!raw) return {};
+      var parsed = JSON.parse(raw);
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
+      return parsed;
+    } catch (err) {
+      try { localStorage.removeItem(KEY); } catch (e) {}
+      return {};
+    }
+  }
+
+  function saveState(state) {
+    try { localStorage.setItem(KEY, JSON.stringify(state || {})); } catch (e) {}
+  }
+
+  function captureCurrentState() {
+    var container = getContainer();
+    if (!container) return;
+    var state = getState();
+    container.querySelectorAll('._toggle-section').forEach(function(el) {
+      if (!el.id) return;
+      state[el.id] = (el.style.display !== 'none');
+    });
+    saveState(state);
+  }
+
+  function restoreState() {
+    var container = getContainer();
+    if (!container) return;
+    var state = getState();
+    container.querySelectorAll('._toggle-section').forEach(function(el) {
+      if (!el.id) return;
+      el.style.display = state[el.id] ? '' : 'none';
+    });
+    syncToggleArrows(container);
+  }
+
+  function syncToggleArrows(scope) {
+    var root = scope || getContainer();
+    if (!root) return;
+    root.querySelectorAll('._toggle-link').forEach(function(link) {
+      var targetId = link.dataset.target;
+      if (!targetId || !link.querySelector('._toggle-arrow')) return;
+      var target = document.getElementById(targetId);
+      var isOpen = !!target && target.style.display !== 'none';
+      link.classList.toggle('_is-open', isOpen);
+    });
+  }
+
+  function scheduleRestore() {
+    requestAnimationFrame(restoreState);
+  }
+
+  var container = getContainer();
+  if (!container) return;
+
+  container.addEventListener('click', function(e) {
+    var link = e.target.closest('._toggle-link');
+    if (!link) return;
+    e.preventDefault();
+    var target = document.getElementById(link.dataset.target);
+    if (!target) return;
+    var open = target.style.display !== 'none';
+    target.style.display = open ? 'none' : '';
+    link.classList.toggle('_is-open', !open);
+    var state = getState();
+    state[target.id] = !open;
+    saveState(state);
+  });
+
+  document.body.addEventListener('htmx:beforeRequest', function(e) {
+    var detail = e.detail || {};
+    var requestTarget = detail.target || null;
+    var source = detail.elt || null;
+    if (requestTarget === container || source === container) {
+      captureCurrentState();
+    }
+  });
+
+  document.body.addEventListener('htmx:afterSwap', function(e) {
+    var detail = e.detail || {};
+    if (detail.target === container) scheduleRestore();
+  });
+  document.body.addEventListener('htmx:afterSettle', function(e) {
+    var detail = e.detail || {};
+    if (detail.target === container) scheduleRestore();
+  });
+})();
+</script>
+{% endblock %}

@@ -194,6 +194,7 @@ class AlpacaTradeStream:
                 builder = WatchBuilder.from_dict(w)
                 reason = f"alpaca_stop_fill (stop_price={fill.get('stop_price')})"
                 builder.record_exit(price=fill_price, reason=reason)
+                builder.clear_exit_pending()
                 builder.last_checkin_at = datetime.now(tz=timezone.utc).isoformat()
                 updated = builder.to_watch()
                 update_watch(self.db, w["watch_id"], updated.to_dict())
@@ -210,13 +211,16 @@ class AlpacaTradeStream:
                     old_price = old_exit.price
                     from dataclasses import replace
                     builder.exit = replace(old_exit, price=fill_price)
+                    builder.clear_exit_pending()
                     updated = builder.to_watch()
                     update_watch(self.db, w["watch_id"], updated.to_dict())
                     log.info("LATE SELL FILL [%s]: %s %s updated exit price %.2f -> %.2f",
                              self._label, symbol, w["watch_id"], old_price, fill_price)
                 else:
                     # Watch hasn't been exited yet (sell submitted but exit not recorded)
-                    builder.record_exit(price=fill_price, reason="sell_fill")
+                    reason = builder.pending_exit_reason or "sell_fill"
+                    builder.record_exit(price=fill_price, reason=reason)
+                    builder.clear_exit_pending()
                     builder.last_checkin_at = datetime.now(tz=timezone.utc).isoformat()
                     updated = builder.to_watch()
                     update_watch(self.db, w["watch_id"], updated.to_dict())

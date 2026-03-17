@@ -81,6 +81,8 @@ class Watch:
     alpaca_sell_order_id: str | None = None
     alpaca_stop_order_id: str | None = None
     alpaca_stop_price: float | None = None  # persisted stop price (set at buy time)
+    pending_exit_reason: str | None = None
+    exit_in_flight: bool = False
 
     # Legacy fields — kept for backward compatibility with existing DB records.
     # New watches created by the live system will have empty lists/None here.
@@ -149,6 +151,8 @@ class WatchBuilder:
         self.alpaca_sell_order_id: str | None = None
         self.alpaca_stop_order_id: str | None = None
         self.alpaca_stop_price: float | None = None
+        self.pending_exit_reason: str | None = None
+        self.exit_in_flight: bool = False
         # Legacy fields (kept for backward compatibility)
         self.monitoring_snapshot_ids: list[str] = []
         self.retrospective_snapshot_ids: list[str] = []
@@ -233,6 +237,8 @@ class WatchBuilder:
         builder.alpaca_sell_order_id = d.get("alpaca_sell_order_id")
         builder.alpaca_stop_order_id = d.get("alpaca_stop_order_id")
         builder.alpaca_stop_price = d.get("alpaca_stop_price")
+        builder.pending_exit_reason = d.get("pending_exit_reason")
+        builder.exit_in_flight = bool(d.get("exit_in_flight", False))
         # Legacy fields
         builder.monitoring_snapshot_ids = list(d.get("monitoring_snapshot_ids", []))
         builder.retrospective_snapshot_ids = list(d.get("retrospective_snapshot_ids", []))
@@ -267,6 +273,16 @@ class WatchBuilder:
             realized_pnl_pct=round(pnl_pct, 4),
         )
         self.status = "exited"
+
+    def mark_exit_pending(self, reason: str) -> None:
+        """Persist the intended sell reason before Alpaca confirms the fill."""
+        self.pending_exit_reason = reason
+        self.exit_in_flight = True
+
+    def clear_exit_pending(self) -> None:
+        """Clear transient sell-state markers after the exit workflow settles."""
+        self.pending_exit_reason = None
+        self.exit_in_flight = False
 
     def start_cooling_off(self, cooling_off_until: str) -> None:
         """Transition from exited to cooling_off phase.
@@ -325,6 +341,8 @@ class WatchBuilder:
             alpaca_sell_order_id=self.alpaca_sell_order_id,
             alpaca_stop_order_id=self.alpaca_stop_order_id,
             alpaca_stop_price=self.alpaca_stop_price,
+            pending_exit_reason=self.pending_exit_reason,
+            exit_in_flight=self.exit_in_flight,
             # Legacy fields
             monitoring_snapshot_ids=list(self.monitoring_snapshot_ids),
             retrospective_snapshot_ids=list(self.retrospective_snapshot_ids),

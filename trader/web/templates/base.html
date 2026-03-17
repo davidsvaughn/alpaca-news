@@ -42,6 +42,10 @@
     .badge-sealed { background-color: #6c757d; }
     .pnl-positive { color: #198754; font-weight: 600; }
     .pnl-negative { color: #dc3545; font-weight: 600; }
+    .app-footer {
+      color: #6c757d;
+      font-size: 0.82rem;
+    }
     .htmx-indicator { display: none; }
     .htmx-request .htmx-indicator,
     .htmx-request.htmx-indicator { display: inline-block; }
@@ -63,6 +67,7 @@
       <ul class="nav flex-column flex-grow-1">
         <li class="nav-item"><a href="/" class="nav-link{% if active_page == 'dashboard' %} active{% endif %}">Dashboard</a></li>
         <li class="nav-item"><a href="/positions" class="nav-link{% if active_page == 'positions' %} active{% endif %}">Portfolios</a></li>
+        <li class="nav-item"><a href="/archives" class="nav-link{% if active_page == 'archives' %} active{% endif %}">Archived</a></li>
         <li class="nav-item"><a href="/watches" class="nav-link{% if active_page == 'watches' %} active{% endif %}">Watches</a></li>
         <li class="nav-item"><a href="/snapshots" class="nav-link{% if active_page == 'snapshots' %} active{% endif %}">Snapshots</a></li>
         <li class="nav-item"><a href="/strategies" class="nav-link{% if active_page == 'strategies' %} active{% endif %}">Strategies</a></li>
@@ -90,6 +95,15 @@
 
       <div class="p-4">
         {% block content %}{% endblock %}
+      </div>
+
+      <div class="app-footer border-top px-4 py-2 bg-white">
+        <span class="fw-semibold">Terminal shortcuts:</span>
+        <span class="ms-2"><code>C-b o</code> switch pane</span>
+        <span class="ms-3"><code>C-b z</code> zoom</span>
+        <span class="ms-3"><code>C-b [</code> scroll</span>
+        <span class="ms-3"><code>q</code> exit scroll</span>
+        <span class="ms-3"><code>C-b d</code> detach</span>
       </div>
     </div>
   </div>

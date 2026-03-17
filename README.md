@@ -22,7 +22,7 @@ cp .env.example .env
 
 ## Quick Start
 
-Both services (trader + tick collector) run inside a single **tmux session** with separate windows. Requires tmux (`sudo apt install tmux`).
+Both services (trader + tick collector) run inside a single **tmux session** with a split-pane view so you can see both outputs at once. Requires tmux (`sudo apt install tmux`).
 
 ```bash
 # Start both services (creates tmux session, attaches)
@@ -45,13 +45,24 @@ Both services (trader + tick collector) run inside a single **tmux session** wit
 
 | Key | Action |
 |-----|--------|
-| `Ctrl-b n` | Next window (trader ↔ tick_collector) |
-| `Ctrl-b p` | Previous window |
+| `Ctrl-b o` | Move to the other pane |
+| `Ctrl-b Up` / `Down` | Move focus to the pane above or below |
+| `Ctrl-b z` | Zoom/unzoom the active pane |
+| `Ctrl-b [` | Enter scrollback mode |
+| `q` | Exit scrollback mode |
 | `Ctrl-b d` | Detach (processes keep running in background) |
 
-**Reattach later:** `tmux attach -t trader`
+**Common workflow:**
 
-**Note:** `trader-down` kills the process(es). `trader-up` always starts fresh — it does not reattach to old processes. If the session is already running, `trader-up` (with no args) just attaches to it.
+1. Run `./scripts/trader-up`
+2. Watch both panes live in the same terminal
+3. Use `Ctrl-b o` to change which pane is active
+4. Use `Ctrl-b z` if you want one pane full-screen temporarily
+5. Use `Ctrl-b d` when you want your shell back
+6. Later, run `tmux attach -t trader` to reconnect
+7. From a normal shell, run `./scripts/trader-down` to stop everything
+
+**Note:** `trader-down` kills the process(es). If the session is already running, `trader-up` ensures any missing pane is started, then attaches to the shared view.
 
 **Crash safety:** `trader-down` always does a `pkill` sweep after killing the tmux session, catching any orphaned processes (trader, news websockets, tick_collector) that survived a crash. Safe to run even if the tmux session is already gone.
 

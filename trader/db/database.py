@@ -415,6 +415,8 @@ def get_active_watches(db: Database) -> list[dict[str, Any]]:
 def _normalize_live_config(config: dict[str, Any]) -> dict[str, Any]:
     """Normalize live config payload fields for backward compatibility."""
     out = dict(config)
+    out["archived"] = bool(out.get("archived", False))
+    out.setdefault("archived_at", None)
     alloc = out.get("allocation_params")
     if isinstance(alloc, dict):
         alloc_out = dict(alloc)
@@ -493,7 +495,9 @@ def get_active_live_configs(db: Database) -> list[dict[str, Any]]:
     out: list[dict[str, Any]] = []
     for row in rows:
         cfg = json.loads(row[0]) if isinstance(row[0], str) else row[0]
-        out.append(_normalize_live_config(cfg))
+        cfg = _normalize_live_config(cfg)
+        if not cfg.get("archived"):
+            out.append(cfg)
     return out
 
 
@@ -508,6 +512,19 @@ def get_all_live_configs(db: Database) -> list[dict[str, Any]]:
         cfg = json.loads(row[0]) if isinstance(row[0], str) else row[0]
         out.append(_normalize_live_config(cfg))
     return out
+
+
+def get_archived_live_configs(db: Database) -> list[dict[str, Any]]:
+    """Fetch archived live configs ordered by archived_at DESC, then created_at DESC."""
+    archived = [cfg for cfg in get_all_live_configs(db) if cfg.get("archived")]
+    return sorted(
+        archived,
+        key=lambda cfg: (
+            str(cfg.get("archived_at") or ""),
+            str(cfg.get("created_at") or ""),
+        ),
+        reverse=True,
+    )
 
 
 def activate_live_config(db: Database, config_id: str) -> bool:

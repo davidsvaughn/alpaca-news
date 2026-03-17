@@ -92,9 +92,11 @@ def reconcile(
     summary: dict[str, Any] = {
         "ok": [],
         "watch_force_exited": [],
+        "watch_exit_in_flight": [],
         "watch_phantom_miss": [],   # bulk miss but position still exists (transient)
         "alpaca_orphan_closed": [],
         "alpaca_orphan_adopted": [],
+        "alpaca_orphan_exit_in_flight": [],
         "alpaca_orphan_pending_buy": [],
         "entry_price_updated": [],
         "qty_updated": [],
@@ -120,6 +122,10 @@ def reconcile(
             watch_by_symbol[w["symbol"]] = w
 
     watch_symbols = set(watch_by_symbol.keys())
+    exit_in_flight_symbols = {
+        w["symbol"] for w in all_watches
+        if w.get("exit_in_flight")
+    }
     all_open_orders = broker.get_open_orders()
     open_buy_symbols = {
         o.symbol for o in all_open_orders
@@ -242,6 +248,14 @@ def reconcile(
     for symbol in watch_symbols - alpaca_symbols:
         watch = watch_by_symbol[symbol]
 
+        if watch.get("exit_in_flight"):
+            summary["watch_exit_in_flight"].append(symbol)
+            log.info("RECONCILE: %s missing from positions but watch %s has exit_in_flight — skipping force-exit",
+                     symbol, watch["watch_id"])
+            _log_tx(db, account_id, "reconcile_exit_in_flight_skip", symbol,
+                    detail={"watch_id": watch["watch_id"]})
+            continue
+
         # Step 1: Double-check with per-symbol lookup (bulk list may be stale)
         per_symbol_pos = broker.get_position(symbol)
         if per_symbol_pos is not None:
@@ -316,6 +330,14 @@ def reconcile(
     # are liquidated during regular hours instead of being adopted.
     for symbol in alpaca_symbols - watch_symbols:
         pos = alpaca_positions[symbol]
+
+        if symbol in exit_in_flight_symbols:
+            summary["alpaca_orphan_exit_in_flight"].append(symbol)
+            log.info("RECONCILE: %s position without holding watch but an active watch has exit_in_flight — skipping adoption",
+                     symbol)
+            _log_tx(db, account_id, "reconcile_orphan_exit_in_flight", symbol,
+                    detail={"qty": pos.qty, "avg_entry_price": pos.avg_entry_price})
+            continue
 
         # A live buy is still working for this symbol. Do not adopt/close yet.
         if symbol in open_buy_symbols:

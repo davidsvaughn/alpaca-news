@@ -9,6 +9,7 @@
 set -euo pipefail
 
 SESSION="trader"
+WINDOW="services"
 TARGET="${1:-all}"
 
 # Clean up orphaned processes that may survive a crash.
@@ -23,18 +24,39 @@ cleanup_tick() {
     pkill -f "python -m tick_collector" 2>/dev/null || true
 }
 
-kill_window() {
-    local WINDOW="$1"
-    if tmux has-session -t "$SESSION" 2>/dev/null && \
-       tmux list-windows -t "$SESSION" -F '#{window_name}' | grep -qx "$WINDOW"; then
-        tmux kill-window -t "$SESSION:$WINDOW"
-        echo "Stopped $WINDOW."
+has_window() {
+    local WINDOW_NAME="$1"
+    tmux has-session -t "$SESSION" 2>/dev/null && \
+        tmux list-windows -t "$SESSION" -F '#{window_name}' | grep -qx "$WINDOW_NAME"
+}
+
+pane_id_for_title() {
+    local TITLE="$1"
+    tmux list-panes -a -F '#{session_name}\t#{pane_title}\t#{pane_id}' 2>/dev/null | \
+        awk -F '\t' -v session="$SESSION" -v title="$TITLE" '$1 == session && $2 == title { print $3; exit }'
+}
+
+kill_service() {
+    local SERVICE="$1"
+    local PANE_ID
+    PANE_ID="$(pane_id_for_title "$SERVICE")"
+
+    if [[ -n "$PANE_ID" ]]; then
+        tmux kill-pane -t "$PANE_ID"
+        if has_window "$WINDOW"; then
+            tmux select-layout -t "$SESSION:$WINDOW" even-vertical >/dev/null 2>&1 || true
+        fi
+        echo "Stopped $SERVICE."
+    elif has_window "$SERVICE"; then
+        tmux kill-window -t "$SESSION:$SERVICE"
+        echo "Stopped $SERVICE."
     else
-        echo "$WINDOW tmux window not running."
+        echo "$SERVICE tmux pane/window not running."
     fi
+
     # If no windows remain, session is already gone
     if ! tmux has-session -t "$SESSION" 2>/dev/null; then
-        echo "Session '$SESSION' ended (no windows left)."
+        echo "Session '$SESSION' ended (no panes/windows left)."
     fi
 }
 
@@ -51,12 +73,12 @@ case "$TARGET" in
         echo "Cleaned up any orphaned processes."
         ;;
     trader)
-        kill_window "trader"
+        kill_service "trader"
         cleanup_trader
         echo "Cleaned up any orphaned trader/websocket processes."
         ;;
     tick)
-        kill_window "tick_collector"
+        kill_service "tick_collector"
         cleanup_tick
         echo "Cleaned up any orphaned tick_collector processes."
         ;;

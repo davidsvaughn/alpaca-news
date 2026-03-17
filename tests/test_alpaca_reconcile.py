@@ -177,3 +177,99 @@ def test_reconcile_skips_orphan_adoption_while_buy_is_open(monkeypatch):
     assert summary["alpaca_orphan_adopted"] == []
     assert summary["alpaca_orphan_closed"] == []
     assert summary["alpaca_orphan_pending_buy"] == ["OLLI"]
+
+
+def test_reconcile_skips_force_exit_while_exit_is_in_flight(monkeypatch):
+    watch = {
+        "watch_id": "watch_1",
+        "symbol": "CAPR",
+        "status": "holding",
+        "alpaca_buy_order_id": "buy_1",
+        "exit_in_flight": True,
+        "pending_exit_reason": "replaced",
+        "live_config_id": "cfg_1",
+        "entry": {"price": 32.0},
+    }
+
+    monkeypatch.setattr(
+        "trader.db.database.get_active_watches",
+        lambda _db: [watch],
+    )
+
+    class _Broker:
+        account_id = "paper-1"
+
+        def get_positions(self):
+            return []
+
+        def get_open_orders(self):
+            return []
+
+        def get_position(self, symbol: str):
+            return None
+
+        def get_recent_sells(self, symbol: str, limit: int = 5):
+            raise AssertionError("get_recent_sells should not be called while exit is in flight")
+
+    summary = reconcile(
+        broker=_Broker(),
+        db=object(),
+        live_config_id="cfg_1",
+        live_config=object(),
+    )
+
+    assert summary["watch_force_exited"] == []
+    assert summary["watch_exit_in_flight"] == ["CAPR"]
+
+
+def test_reconcile_skips_orphan_adoption_when_exit_in_flight_watch_exists(monkeypatch):
+    exited_watch = {
+        "watch_id": "watch_1",
+        "symbol": "OLLI",
+        "status": "exited",
+        "alpaca_buy_order_id": "buy_1",
+        "alpaca_sell_order_id": "sell_1",
+        "exit_in_flight": True,
+        "pending_exit_reason": "replaced",
+        "live_config_id": "cfg_1",
+        "entry": {"price": 109.31},
+        "exit": {"price": 108.0, "reason": "replaced", "time": "2026-03-17T00:00:00+00:00", "snapshot_id": None, "realized_pnl_pct": -1.2},
+    }
+
+    monkeypatch.setattr(
+        "trader.db.database.get_active_watches",
+        lambda _db: [exited_watch],
+    )
+    monkeypatch.setattr(
+        "trader.db.database.insert_watch",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("insert_watch should not be called")),
+    )
+
+    class _Broker:
+        account_id = "paper-1"
+
+        def get_positions(self):
+            return [
+                PositionInfo(
+                    symbol="OLLI",
+                    qty=42.0,
+                    avg_entry_price=109.31,
+                    market_value=4591.02,
+                    unrealized_pl=0.0,
+                    current_price=109.31,
+                ),
+            ]
+
+        def get_open_orders(self):
+            return []
+
+    summary = reconcile(
+        broker=_Broker(),
+        db=object(),
+        live_config_id="cfg_1",
+        live_config=object(),
+    )
+
+    assert summary["alpaca_orphan_adopted"] == []
+    assert summary["alpaca_orphan_closed"] == []
+    assert summary["alpaca_orphan_exit_in_flight"] == ["OLLI"]

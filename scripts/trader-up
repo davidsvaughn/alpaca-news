@@ -10,42 +10,131 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 SESSION="trader"
+WINDOW="services"
 TARGET="${1:-all}"
 
-start_trader() {
-    if tmux has-session -t "$SESSION" 2>/dev/null && tmux list-windows -t "$SESSION" -F '#{window_name}' | grep -qx "trader"; then
-        echo "trader window already running."
+has_session() {
+    tmux has-session -t "$SESSION" 2>/dev/null
+}
+
+has_window() {
+    local WINDOW="$1"
+    has_session && tmux list-windows -t "$SESSION" -F '#{window_name}' | grep -qx "$WINDOW"
+}
+
+pane_id_for_title() {
+    local TITLE="$1"
+    tmux list-panes -a -F '#{session_name}\t#{pane_title}\t#{pane_id}' 2>/dev/null | \
+        awk -F '\t' -v session="$SESSION" -v title="$TITLE" '$1 == session && $2 == title { print $3; exit }'
+}
+
+has_pane() {
+    local TITLE="$1"
+    [[ -n "$(pane_id_for_title "$TITLE")" ]]
+}
+
+configure_status_bar() {
+    if has_session; then
+        tmux set-option -t "$SESSION" status on >/dev/null
+        tmux set-option -t "$SESSION" status-left '[#S:#W] ' >/dev/null
+        tmux set-option -t "$SESSION" status-left-length 20 >/dev/null
+        tmux set-option -t "$SESSION" status-right 'C-b o switch | C-b z zoom | C-b [ scroll | q exit scroll | C-b d detach' >/dev/null
+        tmux set-option -t "$SESSION" status-right-length 100 >/dev/null
+    fi
+}
+
+style_services_window() {
+    if has_window "$WINDOW"; then
+        tmux set-window-option -t "$SESSION:$WINDOW" pane-border-status top >/dev/null
+        tmux set-window-option -t "$SESSION:$WINDOW" pane-border-format ' #{pane_title} ' >/dev/null
+        configure_status_bar
+    fi
+}
+
+normalize_layout() {
+    if has_window "$WINDOW"; then
+        tmux select-layout -t "$SESSION:$WINDOW" even-vertical >/dev/null 2>&1 || true
+        style_services_window
+    fi
+}
+
+move_legacy_window_into_services() {
+    local SERVICE="$1"
+    if ! has_window "$SERVICE" || has_pane "$SERVICE"; then
         return
     fi
-    local CMD="uv run python -m trader.main; echo '[trader exited — press Enter to close]'; read"
-    if tmux has-session -t "$SESSION" 2>/dev/null; then
-        tmux new-window -t "$SESSION" -n "trader" "$CMD"
+
+    tmux select-pane -t "$SESSION:$SERVICE.0" -T "$SERVICE"
+    if has_window "$WINDOW"; then
+        tmux join-pane -v -s "$SESSION:$SERVICE.0" -t "$SESSION:$WINDOW"
     else
-        tmux new-session -d -s "$SESSION" -n "trader" "$CMD"
+        tmux rename-window -t "$SESSION:$SERVICE" "$WINDOW"
     fi
-    echo "Started trader."
+    normalize_layout
+}
+
+migrate_legacy_layout() {
+    if ! has_session; then
+        return
+    fi
+    move_legacy_window_into_services "trader"
+    move_legacy_window_into_services "tick_collector"
+}
+
+start_service() {
+    local SERVICE="$1"
+    local CMD="$2"
+    local NEW_PANE
+
+    migrate_legacy_layout
+
+    if has_pane "$SERVICE"; then
+        echo "$SERVICE already running."
+        return
+    fi
+
+    if has_window "$WINDOW"; then
+        NEW_PANE="$(tmux split-window -v -P -F '#{pane_id}' -t "$SESSION:$WINDOW" "$CMD")"
+        tmux select-pane -t "$NEW_PANE" -T "$SERVICE"
+    elif has_session; then
+        tmux new-window -t "${SESSION}:" -n "$WINDOW" "$CMD"
+        tmux select-pane -t "$SESSION:$WINDOW.0" -T "$SERVICE"
+    else
+        tmux new-session -d -s "$SESSION" -n "$WINDOW" "$CMD"
+        tmux select-pane -t "$SESSION:$WINDOW.0" -T "$SERVICE"
+    fi
+
+    normalize_layout
+    echo "Started $SERVICE."
+}
+
+start_trader() {
+    start_service "trader" "uv run python -m trader.main; echo '[trader exited — press Enter to close]'; read"
 }
 
 start_tick() {
-    if tmux has-session -t "$SESSION" 2>/dev/null && tmux list-windows -t "$SESSION" -F '#{window_name}' | grep -qx "tick_collector"; then
-        echo "tick_collector window already running."
-        return
-    fi
-    local CMD="uv run python -m tick_collector; echo '[tick_collector exited — press Enter to close]'; read"
-    if tmux has-session -t "$SESSION" 2>/dev/null; then
-        tmux new-window -t "$SESSION" -n "tick_collector" "$CMD"
+    start_service "tick_collector" "uv run python -m tick_collector; echo '[tick_collector exited — press Enter to close]'; read"
+}
+
+select_attach_view() {
+    local PANE_ID
+
+    migrate_legacy_layout
+    if has_window "$WINDOW"; then
+        tmux select-window -t "$SESSION:$WINDOW" 2>/dev/null || true
+        PANE_ID="$(pane_id_for_title "trader")"
+        if [[ -n "$PANE_ID" ]]; then
+            tmux select-pane -t "$PANE_ID" 2>/dev/null || true
+        fi
+    elif has_window "trader"; then
+        tmux select-window -t "$SESSION:trader" 2>/dev/null || true
     else
-        tmux new-session -d -s "$SESSION" -n "tick_collector" "$CMD"
+        tmux select-window -t "$SESSION:0" 2>/dev/null || true
     fi
-    echo "Started tick_collector."
 }
 
 case "$TARGET" in
     all)
-        if tmux has-session -t "$SESSION" 2>/dev/null; then
-            echo "Session '$SESSION' already running. Attaching..."
-            exec tmux attach -t "$SESSION"
-        fi
         start_trader
         start_tick
         ;;
@@ -57,7 +146,6 @@ case "$TARGET" in
         ;;
 esac
 
-# Select first window and attach
-tmux select-window -t "$SESSION:0" 2>/dev/null || true
+select_attach_view
 echo "Attaching... (detach with Ctrl-b d)"
 exec tmux attach -t "$SESSION"
