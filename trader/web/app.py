@@ -245,18 +245,38 @@ def create_app(
                 ))
         return force_exited
 
-    def _archive_live_config(config_id: str) -> JSONResponse:
+    def _update_archive_state(
+        config_id: str,
+        *,
+        archive_status: str,
+        active: bool | None = None,
+        archived: bool | None = None,
+        archived_at: str | None = None,
+        archive_requested_at: str | None = None,
+        archive_error: str | None = None,
+    ) -> dict[str, Any] | None:
         cfg_dict = get_live_config(db, config_id)
         if not cfg_dict:
-            return JSONResponse({"error": "not_found"}, status_code=404)
-        if cfg_dict.get("archived"):
-            return JSONResponse(
-                {
-                    "status": "already_archived",
-                    "config_id": config_id,
-                    "archived_at": cfg_dict.get("archived_at"),
-                },
-            )
+            return None
+        cfg_dict["archive_status"] = archive_status
+        if active is not None:
+            cfg_dict["active"] = active
+        if archived is not None:
+            cfg_dict["archived"] = archived
+        if archived_at is not None or archive_status != "archived":
+            cfg_dict["archived_at"] = archived_at
+        if archive_requested_at is not None:
+            cfg_dict["archive_requested_at"] = archive_requested_at
+        cfg_dict["archive_error"] = archive_error
+        update_live_config(db, config_id, cfg_dict)
+        return cfg_dict
+
+    def _run_archive_live_config(config_id: str) -> None:
+        cfg_dict = get_live_config(db, config_id)
+        if not cfg_dict:
+            return
+        if cfg_dict.get("archive_status") != "archiving":
+            return
 
         liquidation: dict[str, Any] = {
             "attempted": 0,
@@ -264,13 +284,10 @@ def create_app(
             "closed": [],
             "failed": [],
         }
-
-        deactivate_live_config(db, config_id)
-        _sync_alpaca_streams(reason=f"archive-start:{config_id}")
-
         alpaca_id = cfg_dict.get("alpaca_account_id")
-        if alpaca_id:
-            try:
+
+        try:
+            if alpaca_id:
                 from trader.market.alpaca_broker import AlpacaAccountRegistry, AlpacaBroker
                 from trader.market.alpaca_reconcile import reconcile
                 from trader.models.live_config import LiveConfig
@@ -339,51 +356,111 @@ def create_app(
                             allowed_symbols=safe_to_force_exit,
                         )
                         liquidation["force_exited"] = sorted(x["symbol"] for x in force_exited)
-            except Exception as exc:
-                return JSONResponse(
-                    {"error": f"archive_liquidation_error: {exc}", "config_id": config_id},
-                    status_code=500,
+            else:
+                force_exited = _force_exit_holding_watches_for_config(
+                    config_id,
+                    reason="archived_without_alpaca",
                 )
-        else:
-            force_exited = _force_exit_holding_watches_for_config(
+                liquidation["force_exited"] = sorted(x["symbol"] for x in force_exited)
+
+            holding_count = count_holding_watches(db, live_config_id=config_id)
+            if holding_count > 0:
+                raise RuntimeError(
+                    f"cannot_archive_with_holdings: config {config_id} still has "
+                    f"{holding_count} holding watch(es) after archive cleanup."
+                )
+
+            cfg_dict = _update_archive_state(
                 config_id,
-                reason="archived_without_alpaca",
+                archive_status="archived",
+                active=False,
+                archived=True,
+                archived_at=datetime.now(tz=timezone.utc).isoformat(),
+                archive_error=None,
             )
-            liquidation["force_exited"] = sorted(x["symbol"] for x in force_exited)
-
-        holding_count = count_holding_watches(db, live_config_id=config_id)
-        if holding_count > 0:
-            return JSONResponse(
-                {
-                    "error": (
-                        f"cannot_archive_with_holdings: config {config_id} still has "
-                        f"{holding_count} holding watch(es) after archive cleanup."
-                    ),
-                    "config_id": config_id,
-                    "alpaca_account_id": alpaca_id,
-                    "liquidation": liquidation,
-                },
-                status_code=409,
+            _sync_alpaca_streams(reason=f"archive-finish:{config_id}")
+            if cfg_dict and bus:
+                bus.publish(PipelineEvent(
+                    type="portfolio_archived",
+                    payload={
+                        "config_id": config_id,
+                        "alpaca_account_id": alpaca_id,
+                        "archived_at": cfg_dict.get("archived_at"),
+                    },
+                ))
+        except Exception as exc:
+            _update_archive_state(
+                config_id,
+                archive_status="archive_failed",
+                active=False,
+                archived=False,
+                archived_at=None,
+                archive_error=str(exc),
             )
+            _sync_alpaca_streams(reason=f"archive-failed:{config_id}")
+            log.exception("Archive failed for %s", config_id)
+            if bus:
+                bus.publish(PipelineEvent(
+                    type="portfolio_archive_failed",
+                    payload={
+                        "config_id": config_id,
+                        "alpaca_account_id": alpaca_id,
+                        "error": str(exc),
+                    },
+                ))
 
+    def _begin_archive_live_config(config_id: str) -> tuple[JSONResponse, int]:
         cfg_dict = get_live_config(db, config_id)
         if not cfg_dict:
-            return JSONResponse({"error": "not_found"}, status_code=404)
-        cfg_dict["active"] = False
-        cfg_dict["archived"] = True
-        cfg_dict["archived_at"] = datetime.now(tz=timezone.utc).isoformat()
-        update_live_config(db, config_id, cfg_dict)
-        _sync_alpaca_streams(reason=f"archive-finish:{config_id}")
+            return JSONResponse({"error": "not_found", "config_id": config_id}, status_code=404), 404
+
+        archive_status = str(cfg_dict.get("archive_status") or "none")
+        if archive_status == "archived" or cfg_dict.get("archived"):
+            return JSONResponse(
+                {
+                    "status": "already_archived",
+                    "config_id": config_id,
+                    "archived_at": cfg_dict.get("archived_at"),
+                },
+            ), 200
+        if archive_status == "archiving":
+            return JSONResponse(
+                {
+                    "status": "already_archiving",
+                    "config_id": config_id,
+                    "archive_requested_at": cfg_dict.get("archive_requested_at"),
+                },
+                status_code=202,
+            ), 202
+
+        requested_at = datetime.now(tz=timezone.utc).isoformat()
+        _update_archive_state(
+            config_id,
+            archive_status="archiving",
+            active=False,
+            archived=False,
+            archived_at=None,
+            archive_requested_at=requested_at,
+            archive_error=None,
+        )
+        _sync_alpaca_streams(reason=f"archive-start:{config_id}")
+        thread = threading.Thread(
+            target=_run_archive_live_config,
+            args=(config_id,),
+            daemon=True,
+            name=f"archive-{config_id[:8]}",
+        )
+        thread.start()
 
         return JSONResponse(
             {
-                "status": "archived",
+                "status": "archiving",
                 "config_id": config_id,
-                "alpaca_account_id": alpaca_id,
-                "archived_at": cfg_dict["archived_at"],
-                "liquidation": liquidation,
+                "alpaca_account_id": cfg_dict.get("alpaca_account_id"),
+                "archive_requested_at": requested_at,
             },
-        )
+            status_code=202,
+        ), 202
 
     def _parse_conf_min(value: str | None) -> float | None:
         """Parse a signed confidence minimum from a percentage string.
@@ -1760,12 +1837,12 @@ def create_app(
                     legacy_watches.extend(ws)
                 continue
             if archived_only:
-                if cfg_dict.get("archived"):
+                if str(cfg_dict.get("archive_status") or "none") != "none":
                     data = _compute_stats(ws)
                     data["config"] = cfg_dict
                     portfolios.append(data)
             else:
-                if not cfg_dict.get("archived"):
+                if str(cfg_dict.get("archive_status") or "none") == "none":
                     data = _compute_stats(ws)
                     data["config"] = cfg_dict
                     portfolios.append(data)
@@ -2232,9 +2309,13 @@ def create_app(
         cfg_dict = get_live_config(db, config_id)
         if not cfg_dict:
             return JSONResponse({"error": "not_found"}, status_code=404)
-        if cfg_dict.get("archived"):
+        if str(cfg_dict.get("archive_status") or "none") != "none":
             return JSONResponse(
-                {"error": "cannot_activate_archived_config", "config_id": config_id},
+                {
+                    "error": "cannot_activate_nonlive_config",
+                    "config_id": config_id,
+                    "archive_status": cfg_dict.get("archive_status"),
+                },
                 status_code=409,
             )
         ok = activate_live_config(db, config_id)
@@ -2262,8 +2343,46 @@ def create_app(
 
     @app.post("/api/live/config/{config_id}/archive")
     async def api_live_config_archive(config_id: str):
-        """Archive a live config after liquidating Alpaca and ending holding watches."""
-        return _archive_live_config(config_id)
+        """Begin archiving a live config in the background."""
+        response, _ = _begin_archive_live_config(config_id)
+        return response
+
+    @app.post("/api/live/config/archive-bulk")
+    async def api_live_config_archive_bulk(request: Request):
+        """Begin archiving multiple live configs in the background."""
+        body = await request.json()
+        raw_ids = body.get("config_ids", [])
+        if not isinstance(raw_ids, list) or not raw_ids:
+            return JSONResponse({"error": "no config_ids provided"}, status_code=400)
+
+        seen: set[str] = set()
+        config_ids: list[str] = []
+        for item in raw_ids:
+            cid = str(item or "").strip()
+            if not cid or cid in seen:
+                continue
+            seen.add(cid)
+            config_ids.append(cid)
+        if not config_ids:
+            return JSONResponse({"error": "no valid config_ids provided"}, status_code=400)
+
+        results: list[dict[str, Any]] = []
+        status_code = 202
+        for cid in config_ids:
+            response, code = _begin_archive_live_config(cid)
+            payload = json.loads(response.body)
+            results.append(payload)
+            if code >= 400:
+                status_code = 207 if status_code == 202 else status_code
+
+        return JSONResponse(
+            {
+                "status": "archive_bulk_started",
+                "requested": len(config_ids),
+                "results": results,
+            },
+            status_code=status_code,
+        )
 
     @app.post("/api/live/config/{config_id}/pause")
     async def api_live_config_pause(config_id: str):

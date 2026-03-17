@@ -180,7 +180,7 @@
 
 <!-- Render portfolios -->
 {% for p in portfolios %}
-<div class="card mb-3 _portfolio-card" data-portfolio-id="{{ p.config.config_id }}" style="border-left: 4px solid {% if p.config.active %}#198754{% else %}#6c757d{% endif %};">
+<div class="card mb-3 _portfolio-card" data-portfolio-id="{{ p.config.config_id }}" data-archive-status="{{ p.config.archive_status|default('none') }}" style="border-left: 4px solid {% if p.config.active %}#198754{% else %}#6c757d{% endif %};">
   <div class="card-body py-3 px-3">
   <!-- Two-column layout: info left, chart right -->
   <div class="d-flex align-items-start flex-wrap">
@@ -189,16 +189,33 @@
   <!-- Header: config ID + actions -->
   <div class="d-flex align-items-center mb-1">
     {% if not _is_archive_view %}
+    <input type="checkbox" class="form-check-input me-2 _select-portfolio" value="{{ p.config.config_id }}" title="Select portfolio">
     <span class="_drag-handle" title="Drag to reorder" style="cursor:grab; margin-right:6px; color:#aaa; font-size:1rem; user-select:none;">&#9776;</span>
     {% endif %}
     <h5 class="mb-0 me-2">{{ p.config.config_id }}</h5>
     {% if _is_archive_view %}
+    {% if p.config.archive_status == 'archiving' %}
+    <button class="btn btn-sm btn-outline-secondary py-0 px-1" disabled style="font-size: 0.7rem;">Archiving...</button>
+    {% elif p.config.archive_status == 'archive_failed' %}
+    <button class="btn btn-sm btn-outline-secondary py-0 px-1 _archive-btn"
+            data-config-id="{{ p.config.config_id }}"
+            data-config-name="{{ p.config.name|default(p.config.config_id) }}"
+            data-has-alpaca="{{ '1' if p.config.alpaca_account_id else '0' }}"
+            style="font-size: 0.7rem;">Retry Archive</button>
     <button class="btn btn-sm btn-outline-danger py-0 px-1"
             hx-delete="/api/live/config/{{ p.config.config_id }}"
             hx-swap="none"
             hx-confirm="{% if p.config.alpaca_account_id %}Delete archived portfolio '{{ p.config.config_id }}'? This will permanently remove the preserved portfolio record. Alpaca account {{ p.config.alpaca_account_id }} should already be flat. This cannot be undone.{% else %}Delete archived portfolio '{{ p.config.config_id }}'? This cannot be undone.{% endif %}"
             onclick="setTimeout(() => location.reload(), 500)"
             style="font-size: 0.7rem;">Delete Permanently</button>
+    {% else %}
+    <button class="btn btn-sm btn-outline-danger py-0 px-1"
+            hx-delete="/api/live/config/{{ p.config.config_id }}"
+            hx-swap="none"
+            hx-confirm="{% if p.config.alpaca_account_id %}Delete archived portfolio '{{ p.config.config_id }}'? This will permanently remove the preserved portfolio record. Alpaca account {{ p.config.alpaca_account_id }} should already be flat. This cannot be undone.{% else %}Delete archived portfolio '{{ p.config.config_id }}'? This cannot be undone.{% endif %}"
+            onclick="setTimeout(() => location.reload(), 500)"
+            style="font-size: 0.7rem;">Delete Permanently</button>
+    {% endif %}
     {% elif p.config.active %}
     <button class="btn btn-sm py-0 px-1 {% if p.config.paused is defined and p.config.paused %}btn-outline-success{% else %}btn-outline-warning{% endif %}"
             hx-post="/api/live/config/{{ p.config.config_id }}/pause"
@@ -226,7 +243,17 @@
   </div>
   <div class="mb-1">
     {% if p.config.paused is defined and p.config.paused %}<span class="badge bg-warning text-dark me-1" style="font-size:.65rem">PAUSED</span>{% endif %}
-    {% if p.config.archived %}
+    {% if p.config.archive_status == 'archiving' %}
+      <span class="badge bg-info text-dark me-1" style="font-size:.65rem">ARCHIVING</span>
+      {% if p.config.archive_requested_at %}
+      <span class="small text-muted">requested <span class="_local-time" data-utc="{{ p.config.archive_requested_at }}">{{ p.config.archive_requested_at[:16] }}</span></span>
+      {% endif %}
+    {% elif p.config.archive_status == 'archive_failed' %}
+      <span class="badge bg-danger me-1" style="font-size:.65rem">ARCHIVE FAILED</span>
+      {% if p.config.archive_error %}
+      <span class="small text-danger">{{ p.config.archive_error }}</span>
+      {% endif %}
+    {% elif p.config.archived %}
       <span class="badge bg-secondary me-1" style="font-size:.65rem">ARCHIVED</span>
       {% if p.config.archived_at %}
       <span class="small text-muted">archived <span class="_local-time" data-utc="{{ p.config.archived_at }}">{{ p.config.archived_at[:16] }}</span></span>
@@ -382,7 +409,7 @@
     {% if p.holding %}
     <div class="d-flex align-items-center mt-2 mb-1">
       <h6 class="text-muted small mb-0 me-2">Open</h6>
-      {% if p.config.alpaca_account_id and not p.config.archived %}
+      {% if p.config.alpaca_account_id and not _is_archive_view and not p.config.archived %}
       <button class="btn btn-sm btn-outline-primary py-0 px-2 me-1 _sync-btn"
               data-config-id="{{ p.config.config_id }}"
               style="font-size:.7rem">Sync</button>
@@ -871,9 +898,9 @@
       var configName = btn.dataset.configName || configId;
       var hasAlpaca = btn.dataset.hasAlpaca === '1';
       var msg = 'Archive "' + configName + '"?\n\n'
-        + 'This will deactivate the portfolio, end any holding watches, and preserve its full history on the Archived page.';
+        + 'This will move the portfolio into the archive workflow immediately and preserve its full history on the Archived page.';
       if (hasAlpaca) {
-        msg += '\n\nIf this portfolio is linked to Alpaca, open positions will be liquidated first.';
+        msg += '\n\nIf this portfolio is linked to Alpaca, open positions will be liquidated in the background after the page refreshes.';
       }
       if (!confirm(msg)) return;
 

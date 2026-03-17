@@ -415,8 +415,16 @@ def get_active_watches(db: Database) -> list[dict[str, Any]]:
 def _normalize_live_config(config: dict[str, Any]) -> dict[str, Any]:
     """Normalize live config payload fields for backward compatibility."""
     out = dict(config)
-    out["archived"] = bool(out.get("archived", False))
+    archive_status = str(out.get("archive_status") or "").strip().lower()
+    if not archive_status:
+        archive_status = "archived" if out.get("archived") else "none"
+    if archive_status not in {"none", "archiving", "archived", "archive_failed"}:
+        archive_status = "none"
+    out["archive_status"] = archive_status
+    out["archived"] = bool(out.get("archived", False) or archive_status == "archived")
     out.setdefault("archived_at", None)
+    out.setdefault("archive_requested_at", None)
+    out.setdefault("archive_error", None)
     alloc = out.get("allocation_params")
     if isinstance(alloc, dict):
         alloc_out = dict(alloc)
@@ -496,7 +504,7 @@ def get_active_live_configs(db: Database) -> list[dict[str, Any]]:
     for row in rows:
         cfg = json.loads(row[0]) if isinstance(row[0], str) else row[0]
         cfg = _normalize_live_config(cfg)
-        if not cfg.get("archived"):
+        if cfg.get("archive_status") == "none":
             out.append(cfg)
     return out
 
@@ -515,11 +523,17 @@ def get_all_live_configs(db: Database) -> list[dict[str, Any]]:
 
 
 def get_archived_live_configs(db: Database) -> list[dict[str, Any]]:
-    """Fetch archived live configs ordered by archived_at DESC, then created_at DESC."""
-    archived = [cfg for cfg in get_all_live_configs(db) if cfg.get("archived")]
+    """Fetch archive-view configs ordered by status and time."""
+    archived = [
+        cfg for cfg in get_all_live_configs(db)
+        if cfg.get("archive_status") in {"archiving", "archived", "archive_failed"}
+    ]
+    state_rank = {"archiving": 3, "archive_failed": 2, "archived": 1}
     return sorted(
         archived,
         key=lambda cfg: (
+            state_rank.get(str(cfg.get("archive_status") or "archived"), 0),
+            str(cfg.get("archive_requested_at") or ""),
             str(cfg.get("archived_at") or ""),
             str(cfg.get("created_at") or ""),
         ),

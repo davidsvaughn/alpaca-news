@@ -41,6 +41,12 @@
 </div>
 {% endif %}
 
+<div id="portfolio-bulk-bar" class="alert alert-light border d-none py-2" style="display:flex; align-items:center; gap:.75rem;">
+  <span class="small text-muted"><span id="portfolio-bulk-count">0</span> selected</span>
+  <button id="archive-selected-btn" class="btn btn-sm btn-outline-secondary">Archive Selected</button>
+  <button id="clear-selected-btn" class="btn btn-sm btn-outline-secondary">Clear</button>
+</div>
+
 <!-- All portfolio content (loaded via HTMX) -->
 <div id="positions-content"
      hx-get="/api/positions"
@@ -241,6 +247,153 @@
   container.addEventListener('htmx:afterSwap', function() {
     applyOrder();
   });
+})();
+
+// Portfolio bulk selection + archive actions.
+(function() {
+  var KEY = 'portfolio_selection_state';
+  var CONTAINER_ID = 'positions-content';
+  var BAR_ID = 'portfolio-bulk-bar';
+  var COUNT_ID = 'portfolio-bulk-count';
+  var ARCHIVE_BTN_ID = 'archive-selected-btn';
+  var CLEAR_BTN_ID = 'clear-selected-btn';
+
+  function getContainer() { return document.getElementById(CONTAINER_ID); }
+  function getBar() { return document.getElementById(BAR_ID); }
+  function getCount() { return document.getElementById(COUNT_ID); }
+  function getArchiveBtn() { return document.getElementById(ARCHIVE_BTN_ID); }
+  function getClearBtn() { return document.getElementById(CLEAR_BTN_ID); }
+
+  function getState() {
+    try {
+      var raw = localStorage.getItem(KEY);
+      if (!raw) return [];
+      var parsed = JSON.parse(raw);
+      return Array.isArray(parsed) ? parsed : [];
+    } catch (e) {
+      return [];
+    }
+  }
+
+  function saveState(ids) {
+    try { localStorage.setItem(KEY, JSON.stringify(ids || [])); } catch (e) {}
+  }
+
+  function selectedIds() {
+    var ids = [];
+    var seen = {};
+    getState().forEach(function(id) {
+      var v = String(id || '').trim();
+      if (!v || seen[v]) return;
+      seen[v] = true;
+      ids.push(v);
+    });
+    return ids;
+  }
+
+  function renderState() {
+    var ids = selectedIds();
+    var container = getContainer();
+    if (container) {
+      var available = {};
+      container.querySelectorAll('._portfolio-card').forEach(function(card) {
+        var id = String(card.dataset.portfolioId || '').trim();
+        if (id) available[id] = true;
+      });
+      ids = ids.filter(function(id) { return !!available[id]; });
+    }
+    saveState(ids);
+
+    var bar = getBar();
+    var count = getCount();
+    var archiveBtn = getArchiveBtn();
+    var clearBtn = getClearBtn();
+    if (!bar || !count || !archiveBtn || !clearBtn) return;
+
+    count.textContent = String(ids.length);
+    bar.classList.toggle('d-none', ids.length === 0);
+    archiveBtn.disabled = (ids.length === 0);
+    clearBtn.disabled = (ids.length === 0);
+
+    if (!container) return;
+    var want = {};
+    ids.forEach(function(id) { want[id] = true; });
+    container.querySelectorAll('._select-portfolio').forEach(function(cb) {
+      cb.checked = !!want[String(cb.value || '')];
+    });
+  }
+
+  function setSelected(id, checked) {
+    var ids = selectedIds();
+    var next = ids.filter(function(x) { return x !== id; });
+    if (checked) next.push(id);
+    saveState(next);
+    renderState();
+  }
+
+  function clearSelected() {
+    saveState([]);
+    renderState();
+  }
+
+  var container = getContainer();
+  if (!container) return;
+
+  container.addEventListener('change', function(e) {
+    var cb = e.target.closest('._select-portfolio');
+    if (!cb) return;
+    setSelected(String(cb.value || ''), !!cb.checked);
+  });
+
+  document.body.addEventListener('htmx:afterSwap', function(e) {
+    var detail = e.detail || {};
+    if (detail.target === container) renderState();
+  });
+  document.body.addEventListener('htmx:afterSettle', function(e) {
+    var detail = e.detail || {};
+    if (detail.target === container) renderState();
+  });
+
+  var clearBtn = getClearBtn();
+  if (clearBtn) {
+    clearBtn.addEventListener('click', function() {
+      clearSelected();
+    });
+  }
+
+  var archiveBtn = getArchiveBtn();
+  if (archiveBtn) {
+    archiveBtn.addEventListener('click', function() {
+      var ids = selectedIds();
+      if (!ids.length) return;
+      if (!confirm('Archive ' + ids.length + ' selected portfolio(s)?\n\nThis will move them into the archive workflow immediately and continue liquidation/cleanup in the background.')) {
+        return;
+      }
+      archiveBtn.disabled = true;
+      archiveBtn.textContent = 'Starting...';
+      fetch('/api/live/config/archive-bulk', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ config_ids: ids }),
+      })
+        .then(function(r) { return r.json().then(function(data) { return { ok: r.ok, data: data }; }); })
+        .then(function(result) {
+          if (!result.ok) {
+            var detail = result.data && (result.data.error || JSON.stringify(result.data));
+            throw new Error(detail || 'bulk archive failed');
+          }
+          clearSelected();
+          location.reload();
+        })
+        .catch(function(err) {
+          alert('Bulk archive failed: ' + err.message);
+          archiveBtn.disabled = false;
+          archiveBtn.textContent = 'Archive Selected';
+        });
+    });
+  }
+
+  renderState();
 })();
 </script>
 {% endblock %}

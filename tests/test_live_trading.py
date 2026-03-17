@@ -123,6 +123,9 @@ class TestLiveConfig:
         assert restored.config_id.startswith("lc_")
         assert restored.archived is False
         assert restored.archived_at is None
+        assert restored.archive_status == "none"
+        assert restored.archive_requested_at is None
+        assert restored.archive_error is None
 
     def test_db_crud(self, db, sample_config):
         # Insert
@@ -146,6 +149,7 @@ class TestLiveConfig:
         fetched = get_live_config(db, sample_config.config_id)
         assert fetched["archived"] is False
         assert fetched["archived_at"] is None
+        assert fetched["archive_status"] == "none"
         # Delete
         assert delete_live_config(db, sample_config.config_id)
         assert get_all_live_configs(db) == []
@@ -198,6 +202,7 @@ class TestLiveConfig:
         cfg = sample_config.to_dict()
         cfg["archived"] = True
         cfg["archived_at"] = "2026-03-17T12:00:00+00:00"
+        cfg["archive_status"] = "archived"
         cfg["active"] = False
         assert insert_live_config(db, config=cfg)
 
@@ -210,6 +215,19 @@ class TestLiveConfig:
         archived = get_archived_live_configs(db)
         assert len(archived) == 1
         assert archived[0]["config_id"] == cfg["config_id"]
+
+    def test_archiving_configs_excluded_from_active_queries(self, db, sample_config):
+        cfg = sample_config.to_dict()
+        cfg["archive_status"] = "archiving"
+        cfg["archive_requested_at"] = "2026-03-17T12:05:00+00:00"
+        cfg["active"] = False
+        assert insert_live_config(db, config=cfg)
+
+        assert get_active_live_configs(db) == []
+        archive_view = get_archived_live_configs(db)
+        assert len(archive_view) == 1
+        assert archive_view[0]["config_id"] == cfg["config_id"]
+        assert archive_view[0]["archive_status"] == "archiving"
 
 
 # ---------------------------------------------------------------------------

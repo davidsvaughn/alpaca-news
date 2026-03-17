@@ -128,6 +128,18 @@ def test_archive_live_config_preserves_config_and_force_exits_missing_alpaca(mon
     orchestrator_stub.sync_alpaca_trade_streams = lambda **kwargs: None
     monkeypatch.setitem(sys.modules, "trader.online.orchestrator", orchestrator_stub)
 
+    class _ImmediateThread:
+        def __init__(self, *, target=None, args=(), kwargs=None, **_other):
+            self._target = target
+            self._args = args
+            self._kwargs = kwargs or {}
+
+        def start(self):
+            if self._target:
+                self._target(*self._args, **self._kwargs)
+
+    monkeypatch.setattr("trader.web.app.threading.Thread", _ImmediateThread)
+
     app = create_app(
         settings=settings,
         bus=EventBus(),
@@ -172,18 +184,19 @@ def test_archive_live_config_preserves_config_and_force_exits_missing_alpaca(mon
     )
     response = asyncio.run(route.endpoint(cfg.config_id))
 
-    assert response.status_code == 200
+    assert response.status_code == 202
     payload = json.loads(response.body)
-    assert payload["status"] == "archived"
+    assert payload["status"] == "archiving"
     assert payload["alpaca_account_id"] == "PA_OLD_DELETED_ACCOUNT"
-    assert payload["liquidation"]["skipped_reason"] == "alpaca_account_missing"
-    assert payload["liquidation"]["force_exited"] == ["MSFT"]
+    assert payload["archive_requested_at"]
 
     archived_cfg = get_live_config(db, cfg.config_id)
     assert archived_cfg is not None
     assert archived_cfg["active"] is False
     assert archived_cfg["archived"] is True
     assert archived_cfg["archived_at"]
+    assert archived_cfg["archive_status"] == "archived"
+    assert archived_cfg["archive_error"] is None
 
     updated_watch = get_watch(db, watch.watch_id)
     assert updated_watch is not None

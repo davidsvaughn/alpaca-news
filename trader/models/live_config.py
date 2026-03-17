@@ -67,6 +67,9 @@ class LiveConfig:
     # Archive state (preserve portfolio history without operational clutter)
     archived: bool = False
     archived_at: str | None = None
+    archive_status: str = "none"  # "none" | "archiving" | "archived" | "archive_failed"
+    archive_requested_at: str | None = None
+    archive_error: str | None = None
 
     # Metadata
     created_at: str = ""
