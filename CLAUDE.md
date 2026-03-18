@@ -86,6 +86,28 @@ Trader log env vars: `LOG_FILE` (default: `logs/trader.log`), `LOG_LEVEL` (defau
 
 Tick collector log env vars (prefixed `TC_`): `TC_LOG_FILE` (default: `logs/tick_collector.log`), `TC_LOG_LEVEL` (default: `INFO`), `TC_LOG_KEEP_DAYS` (default: `14`). See `tick_collector/__main__.py`.
 
+## Websocket Health Checks
+
+**Periodically verify the news websockets are running and receiving data** — they can silently disconnect.
+
+Quick checks:
+```bash
+# Is the process alive?
+ps aux | grep "insight_sentry_news\|alpaca_news" | grep -v grep
+
+# Recent articles saved? (should see files from the last few minutes during market hours)
+ls -lt data/news/incoming/insight_sentry/ | head -5
+ls -lt data/news/incoming/alpaca/ | head -5
+
+# Recent log entries?
+grep "insight_sentry\|alpaca_news" logs/trader.log | tail -5
+```
+
+- **InsightSentry**: `websocket/insight_sentry_news.py` → saves to `data/news/incoming/insight_sentry/`
+- **Alpaca news**: `websocket/alpaca_news.py` → saves to `data/news/incoming/alpaca/`
+- Both log to `logs/trader.log` with logger names `websocket.insight_sentry` / `websocket.alpaca_news`
+- If no articles in 10+ minutes during market hours, the connection is likely stale — restart the process
+
 ## Testing and Verification
 
 **Verify your work.** After making non-trivial changes, run relevant tests or do a quick sanity check before moving on. You don't need to test every single edit, but use judgment:

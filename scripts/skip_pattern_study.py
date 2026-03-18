@@ -28,6 +28,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import pandas as pd
 import numpy as np
+from trader.market.alpaca_env import get_alpaca_account_env
 
 # ── Config ──────────────────────────────────────────────────────────────────
 
@@ -133,8 +134,8 @@ def load_alpaca_tradeable_symbols() -> set[str] | None:
         from alpaca.trading.requests import GetAssetsRequest
         from alpaca.trading.enums import AssetClass, AssetStatus
 
-        api_key = os.environ.get("ALPACA_API_KEY")
-        secret_key = os.environ.get("ALPACA_SECRET_KEY")
+        api_key = get_alpaca_account_env("ALPACA_API_KEY", 1)
+        secret_key = get_alpaca_account_env("ALPACA_SECRET_KEY", 1)
         if not api_key or not secret_key:
             return None
 

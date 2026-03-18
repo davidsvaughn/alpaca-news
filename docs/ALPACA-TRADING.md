@@ -69,7 +69,7 @@ Alpaca allows up to 3 paper trading accounts per user. Each has independent cred
          (alpaca-py)    (alpaca-py)    (alpaca-py)
 ```
 
-**AlpacaAccountRegistry** discovers accounts from environment variables at startup. Reads suffixes `""`, `"_2"`, `"_3"`, `"_4"`, `"_5"`.
+**AlpacaAccountRegistry** discovers accounts from environment variables at startup. Reads suffixes `"_1"`, `"_2"`, `"_3"`, `"_4"`, `"_5"`. Legacy unsuffixed account-1 vars are still accepted as a fallback during migration.
 
 **AlpacaBrokerPool** holds one `AlpacaBroker` per account, created lazily on first use. The pool is a module-level singleton (`_broker_pool`) in the orchestrator.
 
@@ -84,10 +84,10 @@ Alpaca allows up to 3 paper trading accounts per user. Each has independent cred
 ALPACA_PAPER=true
 
 # Account 1 (primary)
-ALPACA_PAPER_NAME=AlpacaPaper1
-ALPACA_PAPER_ACCOUNT=PA31QXNAPB1H
-ALPACA_API_KEY=PK...
-ALPACA_SECRET_KEY=p6...
+ALPACA_PAPER_NAME_1=AlpacaPaper1
+ALPACA_PAPER_ACCOUNT_1=PA31QXNAPB1H
+ALPACA_API_KEY_1=PK...
+ALPACA_SECRET_KEY_1=p6...
 
 # Account 2
 ALPACA_PAPER_NAME_2=AlpacaPaper2

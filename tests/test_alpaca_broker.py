@@ -2,7 +2,38 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from trader.market.alpaca_broker import AlpacaBroker, OrderResult
+from trader.market.alpaca_broker import AlpacaAccountRegistry, AlpacaBroker, OrderResult
+from trader.market.alpaca_env import get_alpaca_account_env
+
+
+def _clear_alpaca_env(monkeypatch) -> None:
+    for base_name in ("ALPACA_API_KEY", "ALPACA_SECRET_KEY", "ALPACA_PAPER_ACCOUNT", "ALPACA_PAPER_NAME"):
+        monkeypatch.delenv(base_name, raising=False)
+        for account_number in range(1, 6):
+            monkeypatch.delenv(f"{base_name}_{account_number}", raising=False)
+
+
+def test_get_alpaca_account_env_prefers_suffix_1(monkeypatch):
+    _clear_alpaca_env(monkeypatch)
+    monkeypatch.setenv("ALPACA_API_KEY", "legacy-key")
+    monkeypatch.setenv("ALPACA_API_KEY_1", "suffix-key")
+
+    assert get_alpaca_account_env("ALPACA_API_KEY", 1) == "suffix-key"
+
+
+def test_account_registry_falls_back_to_legacy_unsuffixed_first_account(monkeypatch):
+    _clear_alpaca_env(monkeypatch)
+    monkeypatch.setenv("ALPACA_API_KEY", "legacy-key")
+    monkeypatch.setenv("ALPACA_SECRET_KEY", "legacy-secret")
+    monkeypatch.setenv("ALPACA_PAPER_ACCOUNT", "legacy-account")
+    monkeypatch.setenv("ALPACA_PAPER_NAME", "LegacyPaper1")
+
+    registry = AlpacaAccountRegistry()
+
+    account = registry.get("legacy-account")
+    assert account is not None
+    assert account.api_key == "legacy-key"
+    assert account.name == "LegacyPaper1"
 
 
 def test_cancel_order_pending_cancel_treated_as_in_progress_success():

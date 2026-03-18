@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import io
 import logging
+import os
 import subprocess
 import sys
 import threading
@@ -126,10 +127,18 @@ class FeedManager:
             stdout, stderr = sys.stdout, sys.stderr
         except (io.UnsupportedOperation, AttributeError):
             stdout, stderr = None, None
+        repo_root = str(Path(__file__).resolve().parents[2])
+        env = os.environ.copy()
+        existing_pythonpath = env.get("PYTHONPATH", "")
+        env["PYTHONPATH"] = (
+            repo_root if not existing_pythonpath else f"{repo_root}:{existing_pythonpath}"
+        )
         self._proc = subprocess.Popen(
             [sys.executable, "-u", self._script],
             stdout=stdout,
             stderr=stderr,
+            cwd=repo_root,
+            env=env,
         )
         log.info("%s websocket started (pid %s)", self.label, self._proc.pid)
 

@@ -2,9 +2,11 @@
 
 Supports multiple paper trading accounts via env vars:
 
-    ALPACA_API_KEY / ALPACA_SECRET_KEY / ALPACA_PAPER_ACCOUNT / ALPACA_PAPER_NAME
+    ALPACA_API_KEY_1 / ALPACA_SECRET_KEY_1 / ALPACA_PAPER_ACCOUNT_1 / ALPACA_PAPER_NAME_1
     ALPACA_API_KEY_2 / ALPACA_SECRET_KEY_2 / ALPACA_PAPER_ACCOUNT_2 / ALPACA_PAPER_NAME_2
     ALPACA_API_KEY_3 / ALPACA_SECRET_KEY_3 / ALPACA_PAPER_ACCOUNT_3 / ALPACA_PAPER_NAME_3
+
+Legacy unsuffixed account-1 vars are still accepted as a fallback.
 
 AlpacaAccountRegistry discovers all configured accounts.
 AlpacaBrokerPool manages one broker per account (lazy-initialized).
@@ -22,6 +24,8 @@ import logging
 import os
 from dataclasses import dataclass
 from typing import Any
+
+from trader.market.alpaca_env import ALPACA_ACCOUNT_NUMBERS, get_alpaca_account_env
 
 log = logging.getLogger(__name__)
 
@@ -103,12 +107,15 @@ class AlpacaAccountRegistry:
 
     def _discover(self) -> None:
         paper = os.getenv("ALPACA_PAPER", "true").lower() in ("true", "1", "yes")
-        suffixes = ["", "_2", "_3", "_4", "_5"]
-        for suffix in suffixes:
-            api_key = os.getenv(f"ALPACA_API_KEY{suffix}")
-            secret_key = os.getenv(f"ALPACA_SECRET_KEY{suffix}")
-            account_id = os.getenv(f"ALPACA_PAPER_ACCOUNT{suffix}")
-            name = os.getenv(f"ALPACA_PAPER_NAME{suffix}", f"Paper{suffix or '1'}")
+        for account_number in ALPACA_ACCOUNT_NUMBERS:
+            api_key = get_alpaca_account_env("ALPACA_API_KEY", account_number)
+            secret_key = get_alpaca_account_env("ALPACA_SECRET_KEY", account_number)
+            account_id = get_alpaca_account_env("ALPACA_PAPER_ACCOUNT", account_number)
+            name = get_alpaca_account_env(
+                "ALPACA_PAPER_NAME",
+                account_number,
+                default=f"Paper{account_number}",
+            )
             if api_key and secret_key and account_id:
                 self._accounts[account_id] = AlpacaAccount(
                     account_id=account_id,
@@ -193,8 +200,12 @@ class AlpacaBroker:
     ) -> None:
         from alpaca.trading.client import TradingClient
 
-        self._api_key = api_key or os.environ["ALPACA_API_KEY"]
-        self._secret_key = secret_key or os.environ["ALPACA_SECRET_KEY"]
+        self._api_key = api_key or get_alpaca_account_env("ALPACA_API_KEY", 1)
+        self._secret_key = secret_key or get_alpaca_account_env("ALPACA_SECRET_KEY", 1)
+        if not self._api_key:
+            raise KeyError("ALPACA_API_KEY_1")
+        if not self._secret_key:
+            raise KeyError("ALPACA_SECRET_KEY_1")
         if paper is None:
             paper = os.getenv("ALPACA_PAPER", "true").lower() in ("true", "1", "yes")
         self._paper = paper

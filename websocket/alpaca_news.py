@@ -5,8 +5,8 @@ It will save incoming news articles to `data/news/incoming/alpaca` by default.
 uv run python -u websocket/alpaca_news.py
 
 Make sure to set your Alpaca API keys in a `.env` file with the following content:
-    ALPACA_API_KEY=your_api_key
-    ALPACA_SECRET_KEY=your_secret_key
+    ALPACA_API_KEY_1=your_api_key
+    ALPACA_SECRET_KEY_1=your_secret_key
 Optional:
     ALPACA_NEWS_DIR=data/news/incoming/alpaca
 
@@ -23,6 +23,7 @@ import datetime as dt
 from dotenv import load_dotenv
 from alpaca.data.live import NewsDataStream
 from alpaca.data.models.news import News
+from trader.market.alpaca_env import get_alpaca_account_env
 
 # Basic logging — writes to same trader log file as parent process
 _log_file = os.getenv("LOG_FILE", "logs/trader.log")
@@ -33,12 +34,12 @@ _fh.setFormatter(logging.Formatter("%(asctime)s [%(name)s] %(levelname)s: %(mess
 log.addHandler(_fh)
 
 # create .env file (if it doesn't exist) with following params:
-#     ALPACA_API_KEY=your_api_key
-#     ALPACA_SECRET_KEY=your_secret_key
+#     ALPACA_API_KEY_1=your_api_key
+#     ALPACA_SECRET_KEY_1=your_secret_key
 
 load_dotenv()
-ALPACA_API_KEY = os.getenv("ALPACA_API_KEY")
-ALPACA_SECRET_KEY = os.getenv("ALPACA_SECRET_KEY")
+ALPACA_API_KEY = get_alpaca_account_env("ALPACA_API_KEY", 1)
+ALPACA_SECRET_KEY = get_alpaca_account_env("ALPACA_SECRET_KEY", 1)
 
 BASE_DIR = pathlib.Path(
     os.getenv("ALPACA_NEWS_DIR")

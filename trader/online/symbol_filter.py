@@ -26,6 +26,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from trader.market.alpaca_env import get_alpaca_account_env
+
 _file_lock = threading.Lock()
 
 # ---------------------------------------------------------------------------
@@ -46,8 +48,8 @@ def _load_alpaca_tradeable() -> set[str] | None:
         from alpaca.trading.enums import AssetClass, AssetStatus
         from alpaca.trading.requests import GetAssetsRequest
 
-        api_key = os.environ.get("ALPACA_API_KEY")
-        secret_key = os.environ.get("ALPACA_SECRET_KEY")
+        api_key = get_alpaca_account_env("ALPACA_API_KEY", 1)
+        secret_key = get_alpaca_account_env("ALPACA_SECRET_KEY", 1)
         if not api_key or not secret_key:
             return None
 

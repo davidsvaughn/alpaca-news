@@ -19,6 +19,7 @@ This folder contains **operational knowledge for AI agents** working on this cod
 | [PORTFOLIO-DIVERGENCE.md](PORTFOLIO-DIVERGENCE.md) | Portfolio comparison | How to diagnose why two parallel portfolios diverged, find root cause bugs |
 | [ALPACA-LIQUIDATE.md](ALPACA-LIQUIDATE.md) | Account liquidation | Cancel all orders, close all positions, handle stuck `pending_cancel` orders |
 | [LOGGING.md](LOGGING.md) | Log files | File locations, config, retention, grep patterns, what each logger captures |
+| [LIVE-CONFIG-PATCHING.md](LIVE-CONFIG-PATCHING.md) | Live config ops | Patch filters, allocation, exit params on active portfolios without restart |
 
 ### Planned files
 

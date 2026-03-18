@@ -261,7 +261,7 @@ Set in `.env` (at least one LLM key required for real mode):
 | `XAI_API_KEY` | Grok/xAI pipeline agent + x_search |
 | `GEMINI_API_KEY` / `GOOGLE_API_KEY` | Gemini synthesis agent |
 | `INSIGHT_SENTRY_API_KEY` | Insight Sentry news websocket |
-| `ALPACA_API_KEY` + `ALPACA_SECRET_KEY` | Alpaca news websocket |
+| `ALPACA_API_KEY_1` + `ALPACA_SECRET_KEY_1` | Alpaca news websocket |
 | `FINNHUB_API_KEY` | FinnHub company news (optional) |
 
 ## Documentation

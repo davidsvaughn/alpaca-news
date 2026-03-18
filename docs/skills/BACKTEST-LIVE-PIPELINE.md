@@ -319,3 +319,4 @@ No enum or registry — just use a descriptive lowercase string. Prefix guard re
 - [BACKTEST-*.md](../BACKTEST-ARCHITECTURE.md) — Backtest architecture docs
 - [LIVE-TRADING.md](../LIVE-TRADING.md) — Live trading plan and implementation details
 - [ALPACA-TRADING.md](../ALPACA-TRADING.md) — Alpaca order execution, extended hours
+- [LIVE-CONFIG-PATCHING.md](LIVE-CONFIG-PATCHING.md) — Patch filters/params on active portfolios without restart

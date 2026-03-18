@@ -15,7 +15,7 @@
 
 | Account | Key var | Secret var |
 |---------|---------|------------|
-| AlpacaPaper1 | `ALPACA_API_KEY` | `ALPACA_SECRET_KEY` |
+| AlpacaPaper1 | `ALPACA_API_KEY_1` | `ALPACA_SECRET_KEY_1` |
 | AlpacaPaper2 | `ALPACA_API_KEY_2` | `ALPACA_SECRET_KEY_2` |
 | AlpacaPaper3 | `ALPACA_API_KEY_3` | `ALPACA_SECRET_KEY_3` |
 
@@ -74,7 +74,7 @@ If orders are stuck in `pending_cancel`, positions tied to them will show `avail
 1. **Delete and recreate the paper account** in the Alpaca dashboard. This is the fastest nuclear option:
    - Dashboard → click paper account number (upper left) → "Account Settings" → "Delete Account"
    - Then: "Open New Paper Account" → generate new API keys
-   - Update `.env` with new `ALPACA_PAPER_ACCOUNT`, `ALPACA_API_KEY`, `ALPACA_SECRET_KEY`
+   - Update `.env` with new `ALPACA_PAPER_ACCOUNT_1`, `ALPACA_API_KEY_1`, `ALPACA_SECRET_KEY_1`
    - New account starts with $100k balance
 2. **Contact Alpaca support** (support@alpaca.markets) with the stuck order IDs and ask them to force-cancel server-side.
 3. **Wait for market session boundary** — stuck orders sometimes resolve on their own at market open/close. No guarantee.

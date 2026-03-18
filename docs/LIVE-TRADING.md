@@ -439,7 +439,7 @@ from alpaca.trading.stream import TradingStream
 client = TradingClient(api_key, secret_key, paper=True)
 ```
 
-Env vars: `ALPACA_API_KEY`, `ALPACA_SECRET_KEY`, `ALPACA_PAPER=true`
+Env vars: `ALPACA_API_KEY_1`, `ALPACA_SECRET_KEY_1`, `ALPACA_PAPER=true`
 
 ### Order Types
 

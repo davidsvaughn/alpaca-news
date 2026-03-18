@@ -2418,6 +2418,32 @@ def create_app(
             "failed": [],
         }
 
+        archive_status = str(cfg_dict.get("archive_status") or "none")
+        holding_count = count_holding_watches(db, live_config_id=config_id)
+
+        # Archived configs with no remaining holdings are just preserved records.
+        # Delete them directly without touching the linked Alpaca account.
+        if archive_status == "archived" and not cfg_dict.get("active") and holding_count == 0:
+            ok = delete_live_config(db, config_id)
+            if not ok:
+                return JSONResponse({"error": "not_found"}, status_code=404)
+            try:
+                from trader.online import orchestrator as _orch
+                _orch.sync_alpaca_trade_streams(db=db, bus=bus, reason=f"delete-archived:{config_id}")
+            except Exception:
+                pass
+            return JSONResponse(
+                {
+                    "status": "deleted",
+                    "config_id": config_id,
+                    "alpaca_account_id": cfg_dict.get("alpaca_account_id"),
+                    "liquidation": {
+                        **liquidation,
+                        "skipped_reason": "archived_record_only",
+                    },
+                },
+            )
+
         def _delete_stale_alpaca_config(*, watch_exit_reason: str) -> JSONResponse:
             """Force-exit local holdings when the linked Alpaca account is gone."""
             from trader.db.database import update_watch_if_current_status

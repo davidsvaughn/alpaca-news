@@ -12,6 +12,7 @@ import sys
 import time
 
 from dotenv import load_dotenv
+from trader.market.alpaca_env import ALPACA_ACCOUNT_NUMBERS, get_alpaca_account_env
 
 load_dotenv(override=True)
 
@@ -19,18 +20,18 @@ from alpaca.trading.client import TradingClient
 
 
 def get_accounts():
-    """Return list of (name, key, secret) for all configured paper accounts."""
+    """Return list of (account_number, name, key, secret) for configured paper accounts."""
     accounts = []
-    # Account 1 (no suffix)
-    k, s = os.environ.get("ALPACA_API_KEY"), os.environ.get("ALPACA_SECRET_KEY")
-    if k and s:
-        accounts.append(("AlpacaPaper1", k, s))
-    # Accounts 2+
-    for i in range(2, 10):
-        k = os.environ.get(f"ALPACA_API_KEY_{i}")
-        s = os.environ.get(f"ALPACA_SECRET_KEY_{i}")
-        if k and s:
-            accounts.append((f"AlpacaPaper{i}", k, s))
+    for account_number in ALPACA_ACCOUNT_NUMBERS:
+        key = get_alpaca_account_env("ALPACA_API_KEY", account_number)
+        secret = get_alpaca_account_env("ALPACA_SECRET_KEY", account_number)
+        if key and secret:
+            name = get_alpaca_account_env(
+                "ALPACA_PAPER_NAME",
+                account_number,
+                default=f"AlpacaPaper{account_number}",
+            )
+            accounts.append((account_number, name, key, secret))
     return accounts
 
 
@@ -110,16 +111,16 @@ def main():
     # Filter by account numbers if specified
     if len(sys.argv) > 1:
         selected = {int(x) for x in sys.argv[1:]}
-        accounts = [a for i, a in enumerate(accounts, 1) if i in selected]
+        accounts = [account for account in accounts if account[0] in selected]
 
     if not accounts:
         print("No matching accounts found.")
         sys.exit(1)
 
-    print(f"Liquidating {len(accounts)} account(s): {', '.join(a[0] for a in accounts)}")
+    print(f"Liquidating {len(accounts)} account(s): {', '.join(a[1] for a in accounts)}")
 
     all_clean = True
-    for name, key, secret in accounts:
+    for _account_number, name, key, secret in accounts:
         if not liquidate_account(name, key, secret):
             all_clean = False
 

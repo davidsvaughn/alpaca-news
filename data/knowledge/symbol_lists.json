@@ -1962,7 +1962,31 @@
     "CTEC",
     "ALST",
     "STGZ",
-    "STM"
+    "STM",
+    "UCAR",
+    "NFE",
+    "TNDM",
+    "GDS",
+    "UL",
+    "LOGI",
+    "CODA",
+    "FFMR",
+    "ICCM",
+    "ONFO",
+    "WKEY",
+    "KEX",
+    "UCO",
+    "MPTI",
+    "STRT",
+    "FCHL",
+    "HQY",
+    "ANDG",
+    "WSM",
+    "TRVI",
+    "BOBS",
+    "MBAK",
+    "GXAI",
+    "CARM"
   ],
   "crypto": [],
   "rejected": [
@@ -2172,7 +2196,13 @@
     "NPCD",
     "PLZL",
     "AIB",
-    "TPFG"
+    "TPFG",
+    "CKN",
+    "MAFL",
+    "KLD",
+    "DNM",
+    "COSMIC",
+    "BEWLTD"
   ],
-  "last_updated": "2026-03-17T16:01:39.797617+00:00"
+  "last_updated": "2026-03-18T19:17:06.082520+00:00"
 }

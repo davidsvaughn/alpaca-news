@@ -3,7 +3,7 @@
 > **Status**: Active (free tier)
 > **Package**: `alpaca-py`
 > **Client**: [`alpaca/news_websocket.py`](alpaca/news_websocket.py)
-> **Env vars**: `ALPACA_API_KEY`, `ALPACA_SECRET_KEY`
+> **Env vars**: `ALPACA_API_KEY_1`, `ALPACA_SECRET_KEY_1`
 > **Demo**: [`demo/alpaca_demo.py`](demo/alpaca_demo.py) — `uv run python demo/alpaca_demo.py [SYMBOL]` or `--stream`
 
 ---
@@ -23,7 +23,7 @@ Alpaca is our **primary trigger source** — the entry point for the entire pipe
 ```python
 from alpaca.data.live import NewsDataStream
 
-stream = NewsDataStream(ALPACA_API_KEY, ALPACA_SECRET_KEY)
+stream = NewsDataStream(ALPACA_API_KEY_1, ALPACA_SECRET_KEY_1)
 stream.subscribe_news(news_data_handler, "*")  # All symbols
 stream.run()
 ```
@@ -195,8 +195,8 @@ We currently only use the WebSocket stream, not the REST API. The REST API provi
 
 ```bash
 # .env
-ALPACA_API_KEY=<your-key-here>
-ALPACA_SECRET_KEY=<your-secret-here>
+ALPACA_API_KEY_1=<your-key-here>
+ALPACA_SECRET_KEY_1=<your-secret-here>
 ALPACA_NEWS_DIR=data/news/incoming/alpaca  # Where news JSON files are saved
 ```
 

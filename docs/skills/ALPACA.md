@@ -132,7 +132,7 @@ Notional orders fail for non-fractionable assets. `buy()` auto-detects via `is_f
 Three paper accounts configured via env vars:
 
 ```
-ALPACA_API_KEY / ALPACA_SECRET_KEY / ALPACA_PAPER_ACCOUNT / ALPACA_PAPER_NAME
+ALPACA_API_KEY_1 / ALPACA_SECRET_KEY_1 / ALPACA_PAPER_ACCOUNT_1 / ALPACA_PAPER_NAME_1
 ALPACA_API_KEY_2 / ALPACA_SECRET_KEY_2 / ALPACA_PAPER_ACCOUNT_2 / ALPACA_PAPER_NAME_2
 ALPACA_API_KEY_3 / ALPACA_SECRET_KEY_3 / ALPACA_PAPER_ACCOUNT_3 / ALPACA_PAPER_NAME_3
 ```
@@ -154,3 +154,4 @@ See [DIAGNOSTICS.md > Alpaca transaction log](DIAGNOSTICS.md#1-alpaca-transactio
 - [ALPACA-TRADING.md](../ALPACA-TRADING.md) — Full Alpaca trading documentation (order execution, multi-account, fills)
 - [LIVE-TRADING.md](../LIVE-TRADING.md) — Live trading plan and implementation
 - [RECONCILE-TEST-PLAN.md](../RECONCILE-TEST-PLAN.md) — Stress test plan for reconciliation
+- [LIVE-CONFIG-PATCHING.md](LIVE-CONFIG-PATCHING.md) — Patch filters/params on active portfolios without restart
