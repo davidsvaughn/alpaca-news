@@ -176,6 +176,13 @@ class LiveExitMonitor:
             for c in cfg_rows
             if c.get("config_id")
         }
+        # Tracking-mode configs mirror external holdings read-only: their
+        # watches must never be evaluated for exit (no auto-sell).
+        tracking_config_ids = {
+            str(c.get("config_id"))
+            for c in cfg_rows
+            if str(c.get("mode") or "live") == "tracking"
+        }
 
         for watch_dict in watches:
             try:
@@ -185,6 +192,8 @@ class LiveExitMonitor:
                     if cfg_id not in known_config_ids:
                         continue
                     if cfg_id not in active_config_ids:
+                        continue
+                    if cfg_id in tracking_config_ids:
                         continue
                 if status == "holding":
                     self._check_holding(watch_dict)
@@ -695,6 +704,9 @@ class LivePortfolioManager:
         for config_dict in active_configs:
             try:
                 cfg = LiveConfig.from_dict(config_dict)
+                if cfg.mode == "tracking":
+                    log.debug("LIVE-PM: %s config=%s TRACKING — read-only, skipping", symbol, _cfg_tag(cfg))
+                    continue
                 if cfg.paused:
                     log.debug("LIVE-PM: %s config=%s PAUSED — skipping new buys", symbol, _cfg_tag(cfg))
                     continue

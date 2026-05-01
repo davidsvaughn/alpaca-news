@@ -43,6 +43,11 @@ class LiveConfig:
 
     paused: bool = False             # paused = no new buys, but exits still run
 
+    # Portfolio mode: "live" (default) trades via the news pipeline + exit
+    # monitor; "tracking" mirrors externally-held positions read-only — the
+    # news pipeline never adds new holdings, the exit monitor never sells.
+    mode: str = "live"               # "live" | "tracking"
+
     # Guards
     guard_stop_pct: float = 0.0      # hard stop loss % (0 = disabled)
     guard_target_pct: float = 0.0    # hard take profit % (0 = disabled)

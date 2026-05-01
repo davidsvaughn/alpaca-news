@@ -214,6 +214,36 @@ class WatchBuilder:
         return builder
 
     @classmethod
+    def create_from_manual_holding(
+        cls,
+        *,
+        symbol: str,
+        qty: float,
+        entry_price: float,
+        live_config_id: str,
+        name: str | None = None,
+    ) -> WatchBuilder:
+        """Create a WatchBuilder for a manually-imported (read-only) holding.
+
+        Used by tracking-mode portfolios that mirror externally-held positions
+        (e.g. Vanguard IRA). No exit strategy is attached — the live exit
+        monitor skips watches whose config is in tracking mode.
+        """
+        entry = WatchEntry(
+            snapshot_id=f"manual_import_{live_config_id}",
+            price=entry_price,
+            time=_utc_now(),
+            confidence=0.0,
+            direction="bullish",
+            horizon="1d",
+            thesis=f"manual_import: {name}" if name else "manual_import",
+        )
+        builder = cls(symbol=symbol, entry=entry)
+        builder.live_config_id = live_config_id
+        builder.qty = qty
+        return builder
+
+    @classmethod
     def from_dict(cls, d: dict[str, Any]) -> WatchBuilder:
         """Reconstitute a WatchBuilder from a stored watch dict."""
         entry = WatchEntry(**d["entry"])
